@@ -43,6 +43,7 @@ import { spawnCommandCode } from "./commandCodeProcess.ts";
 import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const encodeMcpServers = Schema.encodeEffect(
   Schema.fromJsonString(
@@ -360,7 +361,10 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
                 Stream.runForEach((line) =>
                   Effect.gen(function* () {
                     if (!line.trim()) return;
-                    const frame = yield* Effect.try(() => decodeCommandCodeFrame(line));
+                    const frame = yield* Effect.try({
+                      try: () => decodeCommandCodeFrame(line),
+                      catch: (cause) => new Cause.UnknownError(cause),
+                    });
                     if (frame.type === "result") {
                       result = frame;
                       if (frame.sessionId) yield* captureSession(frame.sessionId);
@@ -392,7 +396,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
                     if (event.type === "t3_mcp_ready") mcpReady = true;
                     if (event.type === "t3_mcp_error" || (event.type === "run_start" && !mcpReady))
                       return yield* unsupported(
-                        "Command Code did not load the authorized T3 MCP tools",
+                        `Command Code did not load the authorized ${APP_NAME} MCP tools`,
                       );
                     if (event.type === "run_start" && typeof event.sessionId === "string")
                       yield* captureSession(event.sessionId);

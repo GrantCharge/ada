@@ -32,6 +32,7 @@ function makePort(input?: {
   readonly staleApprovalPlan?: boolean;
   readonly threadActivities?: ReadonlyArray<Record<string, unknown>>;
   readonly projectOwner?: string;
+  readonly projectName?: string;
 }): GatewayRuntimePort {
   const environments = ["local", "remote"] as const;
   const threads = new Map<string, Array<Record<string, unknown>>>(
@@ -68,7 +69,10 @@ function makePort(input?: {
           id: `${environmentId}-project`,
           title: "Project",
           workspaceRoot: "/repo",
-          repositoryIdentity: { owner: input?.projectOwner ?? "jayleaton", name: "t3code" },
+          repositoryIdentity: {
+            owner: input?.projectOwner ?? "jayleaton",
+            name: input?.projectName ?? "ada",
+          },
         },
       ],
     }),
@@ -449,6 +453,17 @@ describe("gateway chat tools", () => {
       taskId: "t1",
       patch: { enabled: false },
     });
+    // A retry with the same key must reuse the task instead of creating a second one.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await callGatewayTool(context, "t3_create_scheduled_task", {
+        ...base,
+        cron: "0 7 * * *",
+        idempotencyKey: "nightly-pull",
+      });
+    }
+    const [first, second] = requests.splice(3) as Array<{ input: { commandId?: string } }>;
+    expect(first?.input.commandId).toMatch(/^mcp-scheduled-task-v2-[0-9a-f]{64}$/);
+    expect(second?.input.commandId).toBe(first?.input.commandId);
     expect(requests).toEqual([
       {
         action: "create",
@@ -1980,7 +1995,10 @@ describe("gateway v3 event delivery tools", () => {
     const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
     await expect(
       callGatewayTool(
-        { port: makePort({ operations, projectOwner: "pingdotgg" }), grants },
+        {
+          port: makePort({ operations, projectOwner: "pingdotgg", projectName: "t3code" }),
+          grants,
+        },
         "t3_create_pr",
         {
           environmentId: "local",
@@ -2019,7 +2037,7 @@ describe("gateway v3 event delivery tools", () => {
     const input = {
       environmentId: "local",
       projectId: "local-project",
-      repository: "jayleaton/t3code",
+      repository: "jayleaton/ada",
       number: 12,
       title: "Updated",
       idempotencyKey: "update-pr-1",
@@ -2030,6 +2048,27 @@ describe("gateway v3 event delivery tools", () => {
 
     expect(first).toEqual(second);
     expect(first).toMatchObject({ requestId: expect.stringMatching(/^mcp-operation-v2-/u) });
+    expect(operations).toEqual([{ operation: "pr.update", payload: input }]);
+  });
+  it("still allows the repository's pre-rename name that existing clones use", async () => {
+    const operations: Array<{ operation: string; payload: Readonly<Record<string, unknown>> }> = [];
+    const input = {
+      environmentId: "local",
+      projectId: "local-project",
+      repository: "jayleaton/t3code",
+      number: 12,
+      title: "Updated",
+      idempotencyKey: "update-pr-old-name",
+    };
+    await callGatewayTool(
+      {
+        port: makePort({ operations, projectName: "t3code" }),
+        grants,
+        events: createGatewayEventStore(),
+      },
+      "t3_update_pr",
+      input,
+    );
     expect(operations).toEqual([{ operation: "pr.update", payload: input }]);
   });
 });
@@ -2287,6 +2326,32 @@ describe("agent profile tools", () => {
     });
     expect(port.replicateProfiles).toHaveBeenLastCalledWith("remote", []);
     expect(createThread).not.toHaveBeenCalled();
+  });
+
+  it("sets and clears an agent's icon and role tags", async () => {
+    const port = profilesPort();
+    const context = { port, grants: { local: ["create"] } as const };
+    await callGatewayTool(context, "t3_create_agent", {
+      ...input,
+      iconId: "rocket",
+      tags: ["Dev", "Ops"],
+    });
+    expect(await port.listProfiles!("local")).toMatchObject([
+      { iconId: "rocket", tags: ["Dev", "Ops"] },
+    ]);
+    await callGatewayTool(context, "t3_update_agent", {
+      environmentId: "local",
+      profileId: "write",
+      patch: { tags: [] },
+    });
+    expect(await port.listProfiles!("local")).toMatchObject([{ iconId: "rocket", tags: [] }]);
+    await expect(
+      callGatewayTool(context, "t3_update_agent", {
+        environmentId: "local",
+        profileId: "write",
+        patch: { iconId: "not-an-icon" },
+      }),
+    ).rejects.toMatchObject({ code: "invalid_input" });
   });
 
   it("rejects unauthorized or malformed edits before writing", async () => {

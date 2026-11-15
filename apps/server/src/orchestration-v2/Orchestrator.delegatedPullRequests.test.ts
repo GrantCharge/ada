@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
@@ -189,13 +190,22 @@ it.effect(
         [captain],
       );
 
+      // Watching baselines checks already on the pull request, so the failure lands after it.
+      let lint: "pending" | "failure" = "pending";
       let hostReads = 0;
       const reactor = yield* PullRequestWatchReactor.make.pipe(
         Effect.provide(
           Layer.mergeAll(
             NodeServices.layer,
+            NodeCrypto.layer,
             Layer.mock(PullRequestService.PullRequestService)({
-              detail: () => Effect.sync(() => (hostReads += 1)).pipe(Effect.as(detail)),
+              watchFingerprint: () => Effect.sync(() => ({ status: lint, remarks: "" })),
+              invalidate: () => Effect.void,
+              detail: () =>
+                Effect.sync(() => {
+                  hostReads += 1;
+                  return { ...detail, checks: [{ ...detail.checks[0]!, status: lint }] };
+                }),
               activity: () =>
                 Effect.succeed({
                   comments: [],
@@ -221,6 +231,11 @@ it.effect(
             ),
           );
       assert.equal(hostReads, 1);
+      assert.deepEqual(yield* wakes(captain), []);
+
+      lint = "failure";
+      yield* reactor.sweep;
+      assert.equal(hostReads, 2);
       assert.deepEqual(yield* wakes(captain), ["#7: checks failed"]);
       assert.deepEqual(yield* wakes(worker), []);
       assert.deepEqual(yield* wakes(helper), []);
@@ -237,6 +252,6 @@ it.effect(
       );
       assert.deepEqual(watched, []);
       yield* reactor.sweep;
-      assert.equal(hostReads, 1);
+      assert.equal(hostReads, 2);
     }).pipe(Effect.provide(testLayer)),
 );

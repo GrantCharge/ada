@@ -14,6 +14,7 @@ import {
   resolveDesktopProductName,
   verifyWindowsPackagedRuntime,
 } from "./build-desktop-artifact.ts";
+import { resolveWindowsExecutableName } from "./lib/windows-package-names.ts";
 
 const verifyWindowsDesktopArtifactCli = Command.make("verify-windows-desktop-artifact", {
   appDir: Flag.String("app-dir").pipe(
@@ -27,14 +28,21 @@ const verifyWindowsDesktopArtifactCli = Command.make("verify-windows-desktop-art
     Flag.withDescription("The packaged product name; empty uses the version's default."),
     Flag.withDefault(""),
   ),
+  brand: Flag.String("brand").pipe(
+    Flag.withDescription("The desktop brand the artifact was built with."),
+    Flag.withDefault("t3"),
+  ),
   verbose: Flag.Boolean("verbose").pipe(Flag.withDefault(false)),
 }).pipe(
   Command.withDescription("Verify a Windows desktop artifact's packaged natives load."),
-  Command.withHandler(({ appDir, arch, buildVersion, productName, verbose }) =>
+  Command.withHandler(({ appDir, arch, brand, buildVersion, productName, verbose }) =>
     Effect.gen(function* () {
       yield* verifyWindowsPackagedRuntime({
         packagedAppDir: appDir,
-        appExecutableName: `${productName || resolveDesktopProductName(buildVersion)}.exe`,
+        appExecutableName: `${resolveWindowsExecutableName(
+          productName || resolveDesktopProductName(buildVersion),
+          brand,
+        )}.exe`,
         targetArch: arch,
         verbose,
       });

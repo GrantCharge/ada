@@ -32,6 +32,7 @@ import { resolveGatewayProfileModelSelection } from "@t3tools/client-runtime/gat
 import { useProjects, useServerConfigs } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { retargetSavedNewTaskDraft } from "../../state/use-composer-drafts";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import { useWorkspaceState } from "../../state/workspace";
@@ -43,12 +44,14 @@ import {
   getProjectScopeSelectionTarget,
   resolveNewTaskScratchOption,
 } from "./new-task-project-selection";
-import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 
 type NewTaskRouteParams = {
   readonly incomingShareId?: string | string[];
   readonly profileId?: string;
   readonly environmentId?: string;
+  /** An existing draft whose project is gone; the chosen project takes it over. */
+  readonly draftId?: string | string[];
   readonly prompt?: string | string[];
   readonly repo?: string | string[];
   readonly pr?: string | string[];
@@ -132,8 +135,6 @@ function NewTaskHeader(props: {
       <AppBar
         title={props.title}
         subtitle={props.subtitle ?? undefined}
-        sidebar={false}
-        options={{ headerBackVisible: true }}
         hideBottomBorder
         onBack={goBack}
         actions={
@@ -171,6 +172,9 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
     ? route.params.incomingShareId[0]
     : route.params?.incomingShareId;
   const incomingShare = routeShareId ? getShare(routeShareId) : null;
+  const routeDraftId = Array.isArray(route.params?.draftId)
+    ? route.params.draftId[0]
+    : route.params?.draftId;
   const incomingShareSubtitle = incomingShare
     ? incomingShare.attachments.length === 0
       ? "Choose a project for what you shared"
@@ -262,17 +266,34 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
       : navigation.getParent();
     const rootState = root?.getState();
     const threadRoute = rootState?.routes[rootState.index - 1];
-    if (isDraftThreadRoute(threadRoute)) {
+    if (routeDraftId === undefined && isDraftThreadRoute(threadRoute)) {
       setProject(project);
       root?.goBack();
       return;
     }
+    // Restamp only on choice, so backing out leaves the draft as it was.
+    const retargeted =
+      routeDraftId === undefined
+        ? false
+        : await retargetSavedNewTaskDraft(routeDraftId, {
+            environmentId: project.environmentId,
+            projectId: project.id,
+          }).then(
+            (found) => found,
+            () => null,
+          );
+    if (retargeted === null) {
+      Dialog.alert("Could not change project", "Saved drafts could not be loaded. Try again.");
+      return;
+    }
+    const draftId = retargeted ? routeDraftId : undefined;
     selectDetail({
       name: "Thread",
       params: {
         draft: {
           environmentId: String(project.environmentId),
           projectId: String(project.id),
+          draftId,
           incomingShareId: incomingShare?.id,
           profileId: route.params?.profileId,
         },
@@ -456,21 +477,27 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
               </Text>
               {Platform.OS === "android" ? (
                 <>
-                  <Button
-                    label={catalogState.hasReadyEnvironment ? "Add new project" : "Add environment"}
-                    tone="primary"
-                    onPress={() =>
-                      catalogState.hasReadyEnvironment
-                        ? navigation.dispatch(StackActions.push("AddProject"))
-                        : navigation.navigate("ConnectionsNew")
-                    }
-                  />
-                  {canStartScratch ? (
+                  <View>
                     <Button
-                      label="Start without a project"
-                      tone="secondary"
-                      onPress={() => void startScratch()}
+                      label={
+                        catalogState.hasReadyEnvironment ? "Add new project" : "Add environment"
+                      }
+                      tone="primary"
+                      onPress={() =>
+                        catalogState.hasReadyEnvironment
+                          ? navigation.dispatch(StackActions.push("AddProject"))
+                          : navigation.navigate("ConnectionsNew")
+                      }
                     />
+                  </View>
+                  {canStartScratch ? (
+                    <View>
+                      <Button
+                        label="Start without a project"
+                        tone="secondary"
+                        onPress={() => void startScratch()}
+                      />
+                    </View>
                   ) : null}
                 </>
               ) : !catalogState.hasReadyEnvironment ? (
@@ -491,11 +518,13 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
                     />
                   </View>
                   {canStartScratch ? (
-                    <Button
-                      label="Start without a project"
-                      tone="secondary"
-                      onPress={() => void startScratch()}
-                    />
+                    <View>
+                      <Button
+                        label="Start without a project"
+                        tone="secondary"
+                        onPress={() => void startScratch()}
+                      />
+                    </View>
                   ) : null}
                 </>
               )}

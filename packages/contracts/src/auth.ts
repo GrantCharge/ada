@@ -9,6 +9,7 @@ import {
   EnvironmentId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { RuntimeMode } from "./providerPolicy.ts";
 
 export const ServerAuthPolicy = Schema.Literals([
   "desktop-managed-local",
@@ -44,6 +45,7 @@ export const AuthFilesystemWriteScope = "filesystem:write" as const;
 const AuthReviewWriteScope = "review:write" as const;
 export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
+/** T3 Connect scopes. Kept decodable for existing credentials and older clients; never granted. */
 export const AuthRelayReadScope = "relay:read" as const;
 export const AuthRelayWriteScope = "relay:write" as const;
 export const AuthEnvironmentScope = Schema.Literals([
@@ -146,7 +148,14 @@ export function sessionHasLegacyPermissions(session: SessionGrantInput): boolean
   );
 }
 
-// Shell and full-access agent scopes already confer access and relay authority.
+const retiredScopes = new Set<AuthEnvironmentScope>([AuthRelayReadScope, AuthRelayWriteScope]);
+
+/** Drops scopes that may still arrive from old clients or stored records but are never granted. */
+export const withoutRetiredScopes = <S extends AuthEnvironmentScope>(
+  scopes: ReadonlyArray<S>,
+): ReadonlyArray<S> => scopes.filter((scope) => !retiredScopes.has(scope));
+
+// Shell and full-access agent scopes already confer access authority.
 export const AuthStandardClientScopes = [
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
@@ -160,10 +169,8 @@ export const AuthStandardClientScopes = [
   AuthSourceControlWriteScope,
   AuthFilesystemReadScope,
   AuthFilesystemWriteScope,
-  AuthRelayReadScope,
   AuthAccessReadScope,
   AuthAccessWriteScope,
-  AuthRelayWriteScope,
 ] as const;
 
 export const AuthTokenExchangeGrantType =
@@ -255,11 +262,69 @@ export type AuthWebSocketTicketUse = typeof AuthWebSocketTicketUse.Type;
 
 export const AuthWebSocketTicketParams = Schema.Struct({ use: AuthWebSocketTicketUse });
 
+export const AuthMcpClientAccess = Schema.Literals([
+  "read-only",
+  "approval-required",
+  "auto-accept-edits",
+  "auto",
+  "full-access",
+]);
+export type AuthMcpClientAccess = typeof AuthMcpClientAccess.Type;
+
+/** The scopes an agent session gets for an access level, and a pairing code must carry. */
+export const mcpClientScopes = (access: AuthMcpClientAccess): ReadonlyArray<AuthGrantScope> =>
+  access === "read-only"
+    ? [AuthOrchestrationReadScope]
+    : access === "full-access"
+      ? [
+          AuthOrchestrationReadScope,
+          AuthOrchestrationOperateScope,
+          AuthSettingsWriteScope,
+          AuthSourceControlWriteScope,
+        ]
+      : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope];
+
+/** The random part of a one-time pairing code: this many characters from this alphabet. */
+export const PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+export const PAIRING_CODE_LENGTH = 12;
+
+const MCP_APPROVAL_CODE_PREFIXES = {
+  "read-only": "READ",
+  "approval-required": "SUPERVISED",
+  "auto-accept-edits": "EDITS",
+  auto: "AUTO",
+  "full-access": "FULL",
+} as const satisfies Record<AuthMcpClientAccess, string>;
+
+const MCP_APPROVAL_CODE_PATTERN = new RegExp(
+  `^(${Object.values(MCP_APPROVAL_CODE_PREFIXES).join("|")})-([${PAIRING_CODE_ALPHABET}]{${PAIRING_CODE_LENGTH}})$`,
+  "i",
+);
+
+/** A pairing code that approves one agent sign-in at `access`, such as `AUTO-Q8RZ3NWD5KTC`. */
+export const mcpApprovalCode = (access: AuthMcpClientAccess, token: string): string =>
+  `${MCP_APPROVAL_CODE_PREFIXES[access]}-${token}`;
+
+/** The level a code approves and the code as issued, or undefined for any other code. */
+export function parseMcpApprovalCode(
+  code: string,
+): { readonly access: AuthMcpClientAccess; readonly code: string } | undefined {
+  const match = MCP_APPROVAL_CODE_PATTERN.exec(code.trim());
+  if (match === null) return undefined;
+  const prefix = match[1]!.toUpperCase();
+  const access = AuthMcpClientAccess.literals.find(
+    (level) => MCP_APPROVAL_CODE_PREFIXES[level] === prefix,
+  );
+  return access && { access, code: mcpApprovalCode(access, match[2]!.toUpperCase()) };
+}
+
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
   credential: TrimmedNonEmptyString,
   label: Schema.optionalKey(TrimmedNonEmptyString),
   expiresAt: Schema.DateTimeUtc,
+  /** Set when the code approves one agent sign-in at this level. Older servers omit it. */
+  access: Schema.optionalKey(AuthMcpClientAccess),
 });
 export type AuthPairingCredentialResult = typeof AuthPairingCredentialResult.Type;
 
@@ -389,6 +454,12 @@ export type AuthRevokeClientSessionInput = typeof AuthRevokeClientSessionInput.T
 export const AuthCreatePairingCredentialInput = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
   scopes: Schema.optionalKey(AuthGrantScopes),
+  /** Binds the code to one agent sign-in at this level. The server derives the scopes from it. */
+  access: Schema.optionalKey(AuthMcpClientAccess),
+  /** The app joins the whole network, so every member lets it in without another code. */
+  network: Schema.optionalKey(Schema.Boolean),
+  /** With `network`: the app this pairs again for, removed everywhere once the code is redeemed. */
+  replacesAppId: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthCreatePairingCredentialInput = typeof AuthCreatePairingCredentialInput.Type;
 
@@ -401,28 +472,6 @@ export const AuthSessionState = Schema.Struct({
   expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
 });
 export type AuthSessionState = typeof AuthSessionState.Type;
-
-export const AuthMcpClientAccess = Schema.Literals([
-  "read-only",
-  "approval-required",
-  "auto-accept-edits",
-  "auto",
-  "full-access",
-]);
-export type AuthMcpClientAccess = typeof AuthMcpClientAccess.Type;
-
-/** The scopes an agent session gets for an access level, and a pairing code must carry. */
-export const mcpClientScopes = (access: AuthMcpClientAccess): ReadonlyArray<AuthGrantScope> =>
-  access === "read-only"
-    ? [AuthOrchestrationReadScope]
-    : access === "full-access"
-      ? [
-          AuthOrchestrationReadScope,
-          AuthOrchestrationOperateScope,
-          AuthSettingsWriteScope,
-          AuthSourceControlWriteScope,
-        ]
-      : [AuthOrchestrationReadScope, AuthOrchestrationOperateScope];
 
 export const AuthMcpProtectedResourceMetadata = Schema.Struct({
   resource: Schema.String,
@@ -509,6 +558,10 @@ export const AuthMcpApprovalDetails = Schema.Struct({
   csrfToken: Schema.optionalKey(Schema.String),
   /** Only scopes held by this session qualify; others need a pairing code. Absent with `csrfToken`. */
   oneClickAccess: Schema.optionalKey(Schema.Array(AuthMcpClientAccess)),
+  /** A managed policy's runtime-mode ceiling; the page loads without the server's config. */
+  runtimeModeCeiling: Schema.optionalKey(
+    Schema.Struct({ organization: Schema.String, maxRuntimeMode: RuntimeMode }),
+  ),
 });
 export type AuthMcpApprovalDetails = typeof AuthMcpApprovalDetails.Type;
 

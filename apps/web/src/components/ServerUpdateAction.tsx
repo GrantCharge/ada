@@ -2,6 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import {
   AuthEnvironmentMaintainScope,
   type AuthSessionState,
+  managedUpdatesDenial,
   sessionGrantsScope,
 } from "@t3tools/contracts";
 import type { AsyncResult } from "effect/reactivity";
@@ -26,12 +27,16 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { serverEnvironment, updateOutdatedServer } from "~/state/server";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { manualServerUpdateCommand } from "~/versionSkew";
 import { useServerConfigs } from "~/state/entities";
+import { useManagedPolicy } from "~/state/managedPolicy";
+import { environmentPresentations } from "~/state/presentation";
+import { ManagedControl } from "./ManagedPolicy";
+import { manualServerUpdateCommand } from "@t3tools/shared/cliRelease";
 import { crossesReleaseTrack } from "@t3tools/shared/cliRelease";
 import { Button } from "./ui/button";
 import { toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const UPDATE_STAGE_LABELS: Record<ServerUpdateStage, string> = {
   downloading: "Downloading…",
@@ -42,6 +47,14 @@ const pendingUpdateEnvironmentIds = new Set<EnvironmentId>();
 
 export function serverUpdateStageLabel(stage: ServerUpdateStage): string {
   return UPDATE_STAGE_LABELS[stage];
+}
+
+/** Why the environment's policy refuses server updates, read outside render. */
+function readUpdatesDenial(environmentId: EnvironmentId): string | undefined {
+  return managedUpdatesDenial(
+    appAtomRegistry.get(environmentPresentations.serverConfigsAtom).get(environmentId)
+      ?.managedPolicy,
+  );
 }
 
 const CROSS_TRACK_NOTE = "Switch tracks in About → Update track";
@@ -103,6 +116,17 @@ export function useServerUpdate() {
     { quiet = false }: { readonly quiet?: boolean } = {},
   ): Promise<ServerUpdateOutcome> => {
     const { environmentId, serverLabel, selfUpdate, targetVersion } = target;
+    const denial = readUpdatesDenial(environmentId);
+    if (denial !== undefined) {
+      if (!quiet) {
+        toastManager.add({
+          type: "error",
+          title: `${serverLabel} not updated`,
+          description: denial,
+        });
+      }
+      return { status: "failed", message: denial };
+    }
     if (
       !canUpdateServer(appAtomRegistry.get(environmentSession.sessionStateAtom(environmentId))) ||
       pendingUpdateEnvironmentIds.has(environmentId)
@@ -163,6 +187,7 @@ export function ServerUpdatesAction({
     (target) =>
       target.selfUpdate !== null &&
       (target.selfUpdate !== "desktop-managed" || target.desktopAppUpdate) &&
+      managedUpdatesDenial(serverConfigs.get(target.environmentId)?.managedPolicy) === undefined &&
       !refusedCrossing(target, serverConfigs.get(target.environmentId)?.environment.serverVersion),
   );
   const handleUpdate = async () => {
@@ -177,7 +202,8 @@ export function ServerUpdatesAction({
       if (desktopTargets.length > 0) {
         const confirmed =
           (await requestConfirmDialog(
-            `Update the T3 Agents desktop apps on ${desktopTargets.map((target) => target.serverLabel).join(", ")}? They will close and relaunch on those machines.`,
+            `Update the ${APP_NAME} desktop apps on ${desktopTargets.map((target) => target.serverLabel).join(", ")}? They will close and relaunch on those machines.`,
+            { initialFocus: "confirm" },
           )) ?? true;
         if (!confirmed) return;
       }
@@ -248,19 +274,16 @@ export function ServerUpdateAction({
   const isDesktopAppUpdate = selfUpdate === "desktop-managed";
   const serverVersion = useServerConfigs().get(environmentId)?.environment.serverVersion;
   const sessionStateAtom = environmentSession.sessionStateAtom(environmentId);
-  const canUpdate = canUpdateServer(useAtomValue(sessionStateAtom));
+  const canUpdate = useAtomValue(sessionStateAtom, canUpdateServer);
+  const updatesDenial = managedUpdatesDenial(useManagedPolicy(environmentId));
   const update = useServerUpdate();
   const { copyToClipboard } = useCopyToClipboard<{ command: string }>({
-    target: installation?.kind === "npm-global" ? "update command" : "relaunch command",
+    target: "update command",
     onCopy: ({ command }) => {
       toastManager.add({
         type: "success",
-        title:
-          installation?.kind === "npm-global" ? "Update command copied" : "Relaunch command copied",
-        description:
-          installation?.kind === "npm-global"
-            ? `Run \`${command}\` on ${serverLabel}, then restart t3 with your usual options.`
-            : `Stop t3 on ${serverLabel}, then relaunch with \`${command}\` using the same subcommand and options. This does not update an installed t3 command.`,
+        title: "Update command copied",
+        description: `Run \`${command}\` on ${serverLabel}, then restart its server if it did not restart itself.`,
       });
     },
     onError: (error) => {
@@ -282,7 +305,8 @@ export function ServerUpdateAction({
     if (isDesktopAppUpdate) {
       const confirmed =
         (await requestConfirmDialog(
-          `Update the T3 Agents desktop app that runs the ${serverLabel}? It will close and relaunch on that machine.`,
+          `Update the ${APP_NAME} desktop app that runs the ${serverLabel}? It will close and relaunch on that machine.`,
+          { initialFocus: "confirm" },
         )) ?? true;
       if (!confirmed) {
         return;
@@ -298,6 +322,18 @@ export function ServerUpdateAction({
     });
   };
 
+  if (updatesDenial !== undefined) {
+    return appearance === "icon" ? (
+      <ManagedControl reason={updatesDenial}>
+        <Button size="icon-xs" variant="ghost-muted" aria-label={updatesDenial} disabled>
+          <CircleArrowUpIcon className="size-3.5" />
+        </Button>
+      </ManagedControl>
+    ) : (
+      <span className="text-muted-foreground text-xs">{updatesDenial}</span>
+    );
+  }
+
   if (selfUpdate === "desktop-managed" && !desktopAppUpdate) {
     return (
       <span className="text-muted-foreground text-xs">
@@ -312,12 +348,7 @@ export function ServerUpdateAction({
 
   const manualCommand =
     selfUpdate === null ? manualServerUpdateCommand(targetVersion, installation) : null;
-  const actionLabel =
-    manualCommand !== null
-      ? installation?.kind === "npm-global"
-        ? "Copy update command"
-        : "Copy relaunch command"
-      : label;
+  const actionLabel = manualCommand !== null ? "Copy update command" : label;
   const onClick =
     manualCommand !== null
       ? () => copyToClipboard(manualCommand, { command: manualCommand })

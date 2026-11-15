@@ -33,9 +33,6 @@
   gap: 5px;
   white-space: nowrap;
 }
-.agents-brand span {
-  color: var(--muted-foreground);
-}
 .agents-topbar nav {
   display: flex;
   gap: 2px;
@@ -363,11 +360,6 @@
   color: var(--foreground);
   font-size: 13px;
 }
-.agent-form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
 .agent-form footer {
   display: flex;
   justify-content: flex-end;
@@ -377,18 +369,7 @@
 .agent-form footer > button {
   padding: 8px 12px;
 }
-.agent-skills,
-.agent-machines {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-.agent-skills label,
-.agent-machines label {
-  flex-direction: row;
-  align-items: center;
-}
+
 .agent-form legend {
   font-size: 12px;
 }
@@ -429,9 +410,6 @@
   }
   .agent-new-column {
     flex-basis: calc(100vw - 40px);
-  }
-  .agent-form-grid {
-    grid-template-columns: 1fr;
   }
   .agents-brand {
     font-size: 12px;
@@ -640,41 +618,14 @@
   justify-content: center;
   color: var(--agent-color);
 }
-.agent-appearance {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.agent-icon-option {
+  --agent-color: var(--muted-foreground);
+  display: inline-flex;
 }
-.agent-appearance-preview {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.agent-appearance input[type="color"] {
-  width: 64px;
-  height: 38px;
-  padding: 3px;
-  cursor: pointer;
-}
-.agent-color-options,
-.agent-icon-options {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.agent-color-options button {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-}
-.agent-icon-options button {
-  padding: 5px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-}
-.agent-appearance button[aria-pressed="true"] {
-  outline: 2px solid var(--foreground);
-  outline-offset: 3px;
+.agent-orb[data-size="sm"],
+.agent-custom-icon[data-size="sm"] {
+  width: 20px;
+  height: 20px;
 }
 
 .agent-thread-project {
@@ -923,119 +874,36 @@
   min-height: 0;
   overflow: hidden;
 }
+/* One fixed column of equal tiles: New on top, the agents scroll, Scheduled stays at the bottom. */
 .agents-filters {
   display: flex;
   flex-direction: column;
-  width: var(--agents-profiles-width, 280px);
+  gap: 4px;
+  width: var(--agents-rail-width, 88px);
   flex-shrink: 0;
-  overflow-y: auto;
+  min-height: 0;
   border-right: 1px solid var(--border);
-  padding: 12px 8px;
+  padding: 8px;
 }
-.agents-filters-heading {
+.agents-rail-list {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 4px 2px 6px 0;
-}
-.agents-filters-heading h2 {
   flex: 1;
-  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -8px;
+  padding: 4px 8px;
+  border-block: 1px solid var(--border);
+  scrollbar-width: none;
 }
-.agents-new-agent {
-  flex-shrink: 0;
-  white-space: nowrap;
-  gap: 6px;
-}
-.agents-filters > .agent-filter {
-  margin: 4px 0 8px;
-}
-.agents-filters h2,
+
 .agents-threads h2 {
   font-size: 16px;
   font-weight: 600;
   padding: 8px;
 }
-.agent-filter {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  padding: 8px;
-  border-radius: 8px;
-  text-align: left;
-}
-.agent-filter > svg,
-.agent-filter > .agent-orb,
-.agent-filter > .agent-custom-icon {
-  margin-top: 1px;
-}
-.agent-filter-body {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  flex: 1;
-  min-width: 0;
-}
-.agent-filter-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.agent-filter-description {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 1.35;
-}
-.agent-filter-model {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted-foreground);
-  font:
-    10px ui-monospace,
-    monospace;
-}
-.agent-filter-count {
-  flex-shrink: 0;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.6;
-}
-.agents-filters > .agent-filter[aria-pressed="true"] {
-  background: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--ring);
-}
-.agents-filters .agent-orb,
-.agents-filters .agent-custom-icon {
-  width: 22px;
-  height: 22px;
-}
-.agent-filter-row {
-  display: flex;
-  align-items: flex-start;
-  border-bottom: 1px solid var(--border);
-}
-.agent-filter-row:has(> .agent-filter[aria-pressed="true"]) {
-  background: var(--accent);
-  border-bottom-color: transparent;
-  border-radius: 8px;
-  box-shadow: inset 0 0 0 1px var(--ring);
-}
-.agent-filter-row > .agent-filter {
-  flex: 1;
-}
-.agent-filter-row > .agent-icon-button {
-  flex-shrink: 0;
-  border: 0;
-  padding: 5px;
-  margin: 4px 2px 0 0;
-}
+
 .agents-threads {
   width: var(--agents-threads-width, 360px);
   flex-shrink: 0;
@@ -1058,10 +926,6 @@
 .agents-threads > header p {
   color: var(--muted-foreground);
   padding: 0 8px;
-}
-.agents-new-chat {
-  flex-shrink: 0;
-  white-space: nowrap;
 }
 /* New chat dialog: agents and projects as radio cards, filled row by row. */
 .agent-choice-group {
@@ -1204,42 +1068,11 @@
 .agent-thread-container[data-current="true"] {
   border-color: var(--ring);
 }
-.agent-mobile-filters {
-  display: none;
-}
-/* Narrow windows fold the agent filters behind the Agents button; the chat
-   list stays beside the chat so a selected chat always keeps a sidebar. */
-@media (max-width: 1023px) {
-  /* The folded filters take the chat list's slot and width. */
-  .agents-filters {
-    display: none;
-    width: var(--agents-threads-width, 360px);
-  }
-  .agents-pane-resize[data-pane="profiles"] {
-    display: none;
-  }
-  .agent-mobile-filters {
-    display: inline-flex;
-  }
-  .agents-threads > header {
-    flex-wrap: wrap;
-  }
-  .agents-threads-heading {
-    order: -1;
-    flex-basis: 100%;
-  }
-  .agents-page[data-show-filters="true"] .agents-filters {
-    display: flex;
-  }
-  .agents-page[data-show-filters="true"] .agents-threads {
-    display: none;
-  }
-}
-/* Phone widths: one pane at a time. */
+/* Phone widths: the rail and chat list, or the selected chat on its own. */
 @media (max-width: 767px) {
-  .agents-filters,
   .agents-threads {
-    width: 100%;
+    flex: 1;
+    width: auto;
     border-right: 0;
   }
   .agents-chat-pane,
@@ -1295,138 +1128,6 @@
   cursor: default;
 }
 
-.agents-filters > * {
-  flex-shrink: 0;
-}
-/* Pinned under the agent list: pushed down when the list is short, stuck to the bottom when it scrolls. */
-.agents-filters-footer {
-  position: sticky;
-  bottom: -12px;
-  margin: auto -8px -12px;
-  padding: 8px;
-  border-top: 1px solid var(--border);
-  background: var(--background);
-}
-.agents-filters-footer > .agent-filter[aria-current="page"],
-.agents-filters > .agent-filter[aria-current="page"] {
-  background: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--ring);
-}
-.agent-checkbox-row {
-  flex-direction: row !important;
-  align-items: center;
-}
-.agent-mobile-back {
-  display: none;
-  gap: 4px;
-}
-@media (max-width: 767px) {
-  .agent-mobile-back {
-    display: inline-flex;
-  }
-}
-.scheduled-tasks {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 16px 20px 32px;
-}
-.scheduled-tasks-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.scheduled-tasks-header > div {
-  flex: 1;
-  min-width: 0;
-}
-.scheduled-tasks-header h2 {
-  font-size: 16px;
-  font-weight: 600;
-}
-.scheduled-tasks-header p {
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-.scheduled-task-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.scheduled-task {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--agent-color, var(--border));
-  border-radius: 10px;
-  padding: 12px 14px;
-}
-.scheduled-task[data-enabled="false"] {
-  opacity: 0.7;
-}
-.scheduled-task-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.scheduled-task-heading .agent-orb,
-.scheduled-task-heading .agent-custom-icon {
-  width: 22px;
-  height: 22px;
-}
-.scheduled-task-title {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-}
-.scheduled-task-title strong,
-.scheduled-task-title span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.scheduled-task-title span {
-  color: var(--muted-foreground);
-  font-size: 11px;
-}
-.scheduled-task-prompt {
-  margin-top: 8px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  white-space: pre-wrap;
-}
-.scheduled-task-facts {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 12px;
-}
-.scheduled-task-facts dt {
-  color: var(--muted-foreground);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.scheduled-task-facts dd[data-status="failed"],
-.scheduled-task-error {
-  color: var(--destructive);
-}
-.scheduled-task-error {
-  margin-top: 8px;
-  font-size: 12px;
-}
-.scheduled-task-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
-}
 .agent-thread-children {
   display: flex;
   flex-direction: column;
@@ -1652,72 +1353,4 @@
 .agent-thread-children-toggle:hover {
   background: var(--accent);
   color: var(--foreground);
-}
-
-/* New agent: start from scratch or from a bundled preset. */
-.agent-start-options {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 20px;
-}
-.agent-start-options > button,
-.agent-preset-card {
-  display: flex;
-  gap: 6px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--background);
-  text-align: left;
-  font-size: 12px;
-}
-.agent-start-options > button {
-  flex-direction: column;
-}
-.agent-start-options > button:hover,
-.agent-preset-card:hover {
-  background: var(--accent);
-}
-.agent-start-options span,
-.agent-preset-body > span {
-  color: var(--muted-foreground);
-}
-.agent-preset-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 20px;
-}
-.agent-preset-card {
-  align-items: flex-start;
-  gap: 10px;
-}
-.agent-preset-body {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.agent-preset-meta {
-  overflow-wrap: anywhere;
-}
-.agent-preset-notes,
-.agent-preset-setup ul {
-  margin: 2px 0 0;
-  padding-left: 16px;
-  list-style: disc;
-  color: var(--muted-foreground);
-}
-.agent-preset-setup {
-  margin-top: 14px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--muted);
-  font-size: 12px;
-}
-@media (max-width: 640px) {
-  .agent-start-options {
-    grid-template-columns: 1fr;
-  }
 }

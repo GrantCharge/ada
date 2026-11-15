@@ -34,19 +34,6 @@ describe("buildCodexAdditionalContext", () => {
 });
 
 describe("Codex runtime context", () => {
-  it("describes Markdown media support in the runtime context in both modes", () => {
-    {
-      const instructions = runtimeInstructions({
-        model: "gpt-5.3-codex",
-        reasoningEffort: "high",
-      });
-      NodeAssert.match(
-        instructions,
-        /<runtime_info>.*embed images, video, and audio.*Markdown image syntax with absolute file paths.*Link any other file.*absolute path.*files viewer.*<\/runtime_info>/,
-      );
-    }
-  });
-
   it("flattens multiline metadata into single-line runtime info", () => {
     const instructions = runtimeInstructions({
       model: "gpt\n5.3\ncodex",
@@ -67,8 +54,11 @@ describe("Codex orchestration context", () => {
       .join("\n");
 
     NodeAssert.ok(
+      orchestration.includes("Background agent: `delegate_task`, never a background `Agent`."),
+    );
+    NodeAssert.ok(
       orchestration.includes(
-        "For independent T3 delegated review rounds, call `delegate_task` again.",
+        "For independent Ada delegated review rounds, call `delegate_task` again.",
       ),
     );
     NodeAssert.ok(
@@ -130,6 +120,6 @@ describe("Codex device context", () => {
 
     NodeAssert.ok(tools(true).includes(T3_CODE_DEVICE_TOOL_INSTRUCTIONS));
     NodeAssert.ok(!tools(true).includes("ToolSearch"));
-    NodeAssert.ok(!tools(false).includes("## T3 Code devices"));
+    NodeAssert.ok(!tools(false).includes("## Ada devices"));
   });
 });

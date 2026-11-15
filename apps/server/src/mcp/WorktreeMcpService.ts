@@ -1,5 +1,6 @@
 import {
   CommandId,
+  type GitCommandError,
   MessageId,
   type ProjectId,
   WorktreeMcpFailure,
@@ -8,13 +9,18 @@ import {
   type WorktreeMcpHandoffResult,
   type WorktreeMcpSetupScriptStatus,
   type WorktreeMcpStatusResult,
+  type VcsListRefsInput,
+  type VcsListRefsResult,
 } from "@t3tools/contracts";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import type * as PlatformError from "effect/PlatformError";
 
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
@@ -23,6 +29,7 @@ import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.t
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
 import type { McpInvocationScope, McpThreadInvocationScope } from "./McpInvocationContext.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export class WorktreeMcpService extends Context.Service<
   WorktreeMcpService,
@@ -34,6 +41,12 @@ export class WorktreeMcpService extends Context.Service<
     readonly status: (
       scope: McpInvocationScope,
     ) => Effect.Effect<WorktreeMcpStatusResult, WorktreeMcpFailure>;
+    readonly listRefs: (
+      input: Omit<VcsListRefsInput, "cwd"> & {
+        readonly worktreePath: string | null;
+        readonly workspaceRoot: string;
+      },
+    ) => Effect.Effect<VcsListRefsResult, GitCommandError | PlatformError.PlatformError>;
   }
 >()("t3/mcp/WorktreeMcpService") {}
 
@@ -55,7 +68,8 @@ const asOperationFailed = (prefix: string) =>
   );
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
+  const fileSystem = yield* FileSystem.FileSystem;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
   const projects = yield* ProjectService.ProjectService;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -71,7 +85,7 @@ const make = Effect.gen(function* () {
       ? Effect.fail(
           failure(
             "thread_credential_required",
-            "Worktree handoff and status act as the calling T3 thread, so they need an agent running inside T3 Code.",
+            `Worktree handoff and status act as the calling ${APP_NAME} thread, so they need an agent running inside ${APP_NAME}.`,
           ),
         )
       : Effect.succeed(scope as McpThreadInvocationScope);
@@ -116,13 +130,17 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const readDefaultStartFromOrigin = serverSettings.getSettings.pipe(
-    Effect.map((settings) => settings.newWorktreesStartFromOrigin),
-    asOperationFailed("Unable to read server settings"),
-  );
+  const readDefaultStartFromOrigin = (projectId: ProjectId) =>
+    serverSettings.getSettings.pipe(
+      Effect.map(
+        (settings) =>
+          resolveProjectSettings(settings, projectId).settings.newWorktreesStartFromOrigin,
+      ),
+      asOperationFailed("Unable to read server settings"),
+    );
 
   const handoffIds = (scope: McpThreadInvocationScope) =>
-    crypto.randomUUIDv4().pipe(
+    random.uuidV4().pipe(
       Effect.map((uuid) => {
         const part = (kind: string, operation: string) =>
           [kind, "mcp", encodeURIComponent(scope.thread.providerSessionId), operation, uuid].join(
@@ -130,7 +148,6 @@ const make = Effect.gen(function* () {
           );
         return {
           commandId: CommandId.make(part("command", "worktree-handoff")),
-          continuationCommandId: CommandId.make(part("command", "worktree-continuation")),
           continuationMessageId: MessageId.make(part("message", "worktree-continuation")),
         };
       }),
@@ -205,7 +222,8 @@ const make = Effect.gen(function* () {
       baseRef = localStatus.refName;
     }
 
-    const startFromOrigin = input.startFromOrigin ?? (yield* readDefaultStartFromOrigin);
+    const startFromOrigin =
+      input.startFromOrigin ?? (yield* readDefaultStartFromOrigin(project.id));
 
     let worktreeBaseRef = baseRef;
     let baseRefName = baseRef;
@@ -275,7 +293,7 @@ const make = Effect.gen(function* () {
               `Thread '${scope.thread.threadId}' was archived while the worktree was being created; the handoff was rolled back.`,
             );
           }
-          yield* threadManagement
+          return yield* threadManagement
             .dispatch({
               type: "thread.metadata.update",
               commandId: ids.commandId,
@@ -283,6 +301,15 @@ const make = Effect.gen(function* () {
               branch: worktree.worktree.refName,
               worktreePath,
               expectedWorktreePath: null,
+              // Binding detaches the session and ends the caller; a later send could lose the race.
+              ...(input.continuationPrompt === undefined
+                ? {}
+                : {
+                    continuation: {
+                      messageId: ids.continuationMessageId,
+                      text: input.continuationPrompt,
+                    },
+                  }),
             })
             .pipe(
               Effect.catchCause((cause) =>
@@ -303,33 +330,18 @@ const make = Effect.gen(function* () {
           ),
         );
 
-        // Queue continuation immediately after binding; detachment terminates the caller, so relaunch needs a durable message.
-        const queueContinuation: Effect.Effect<WorktreeMcpContinuationStatus, WorktreeMcpFailure> =
-          Effect.suspend(() =>
-            input.continuationPrompt === undefined
-              ? Effect.succeed<WorktreeMcpContinuationStatus>({ status: "skipped" })
-              : threadManagement
-                  .sendToThread({
-                    projectId: projection.thread.projectId,
-                    commandId: ids.continuationCommandId,
-                    threadId: scope.thread.threadId,
-                    messageId: ids.continuationMessageId,
-                    text: input.continuationPrompt,
-                    attachments: [],
-                    mode: "queue",
-                    createdBy: "agent",
-                    creationSource: "mcp",
-                  })
-                  .pipe(
-                    Effect.map((sendResult): WorktreeMcpContinuationStatus => ({
-                      status: "scheduled",
-                      delivery: sendResult.delivery,
-                    })),
-                    reportFailed("worktree handoff continuation failed to queue"),
-                  ),
-          );
-
-        const continuation = yield* recheckAndBind.pipe(Effect.andThen(queueContinuation));
+        const bound = yield* recheckAndBind;
+        const continuation: WorktreeMcpContinuationStatus =
+          input.continuationPrompt === undefined
+            ? { status: "skipped" }
+            : {
+                status: "scheduled",
+                delivery: bound.storedEvents.some(
+                  ({ event }) => event.type === "run.created" && event.payload.status !== "queued",
+                )
+                  ? "started"
+                  : "queued",
+              };
 
         yield* vcsStatusBroadcaster
           .refreshStatus(worktreePath)
@@ -415,7 +427,7 @@ const make = Effect.gen(function* () {
       const projection = yield* loadThread(scope);
       const project = yield* loadProject(scope, projection.thread.projectId);
 
-      const defaultStartFromOrigin = yield* readDefaultStartFromOrigin;
+      const defaultStartFromOrigin = yield* readDefaultStartFromOrigin(project.id);
 
       const result: WorktreeMcpStatusResult = {
         attached: projection.thread.worktreePath !== null,
@@ -428,13 +440,25 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return WorktreeMcpService.of({ handoff, status });
+  const listRefs: WorktreeMcpService["Service"]["listRefs"] = Effect.fn(
+    "WorktreeMcpService.listRefs",
+  )(function* ({ worktreePath, workspaceRoot, ...refs }) {
+    // Storage cleanup removes a worktree but keeps its path on the thread.
+    const cwd =
+      worktreePath !== null && (yield* fileSystem.exists(worktreePath))
+        ? worktreePath
+        : workspaceRoot;
+    return yield* gitWorkflow.listRefs({ ...refs, cwd });
+  });
+
+  return WorktreeMcpService.of({ handoff, status, listRefs });
 });
 
 export const layer: Layer.Layer<
   WorktreeMcpService,
   never,
-  | Crypto.Crypto
+  | SecureRandom.SecureRandom
+  | FileSystem.FileSystem
   | ThreadManagementService.ThreadManagementService
   | ProjectService.ProjectService
   | ServerSettings.ServerSettingsService

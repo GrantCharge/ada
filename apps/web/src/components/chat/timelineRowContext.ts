@@ -1,6 +1,7 @@
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type {
   ProviderApprovalDecision,
+  ResponseContextRecord,
   RuntimeRequestId,
   WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
@@ -13,34 +14,18 @@ import {
   type ServerProviderSkill,
   type RunId,
   ThreadId,
-  type TurnItemId,
 } from "@t3tools/contracts";
-import type { AsyncResult, Atom } from "effect/reactivity";
-import type { CommandOutputView } from "@t3tools/client-runtime/state/command-output";
 import type { WorkflowOpening } from "@t3tools/client-runtime/state/subagentRuntime";
-import { createContext, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, createContext, type MouseEvent } from "react";
 import { type LegendListRef } from "@legendapp/list/react";
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
 import type { PendingApproval } from "../../session-logic";
 import { type ChatFileAttachment } from "../../types";
-import { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { type ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { type AssistantCitationTarget } from "./AssistantCitationSource";
 import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
-import type { TurnItemDetailSource } from "../../state/queries";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
-
-/**
- * Where an expanded row reads an item's detail and a command's output. The owner's rows read them
- * from the environment; the guest page reads them through its own routes.
- */
-export interface TurnItemSource {
-  readonly detail: TurnItemDetailSource;
-  readonly commandOutput: (target: {
-    readonly threadId: ThreadId;
-    readonly itemId: TurnItemId;
-  }) => Atom.Atom<AsyncResult.AsyncResult<CommandOutputView, unknown>>;
-}
 
 export interface TimelineRowSharedState {
   pendingApprovals: ReadonlyMap<RuntimeRequestId, PendingApproval>;
@@ -50,6 +35,8 @@ export interface TimelineRowSharedState {
     | ((requestId: RuntimeRequestId, decision: ProviderApprovalDecision) => Promise<unknown>)
     | undefined;
   citationRequest: AssistantCitationTarget | null;
+  /** Absent hides "Reply", as in the guest view. */
+  onReplyToResponse: ((response: ResponseContextRecord) => boolean) | undefined;
   listRef: React.RefObject<LegendListRef | null>;
   timestampFormat: TimestampFormat;
   routeThreadKey: string;
@@ -71,14 +58,10 @@ export interface TimelineRowSharedState {
   onOpenToolDiff: ((target: ToolCallDiffTarget) => void) | undefined;
   /** Unset where there is no diff to open, so the timeline shows no "Open diff" button. */
   onOpenTurnDiff: ((runId: RunId, filePath?: string) => void) | undefined;
-  /**
-   * Draws a published HTML visual. Unset, the row loads it from the environment; the guest page
-   * loads it through its own route.
-   */
-  renderHtmlRender: ((row: Extract<TimelineRow, { kind: "html-render" }>) => ReactNode) | undefined;
-  /** Unset, expanded rows read detail and command output from the environment. */
-  turnItemSource: TurnItemSource | undefined;
-  onOpenThread: (threadId: OrchestrationV2TurnItem["threadId"]) => void;
+  onOpenThread: (
+    threadId: OrchestrationV2TurnItem["threadId"],
+    environmentId?: EnvironmentId,
+  ) => void;
   workflowOpening: WorkflowOpening | null;
   /** Absent hides "Fork from this response", as in the guest view. */
   onForkFromRun:
@@ -90,7 +73,8 @@ export interface TimelineRowSharedState {
   onFileDownload: (attachment: ChatFileAttachment) => void;
   openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
   onToggleWorkGroup: (groupId: string, anchorKey: string) => void;
-  onToggleWorkEntry: (anchorKey: string, collapsed: boolean) => void;
+  onToggleWorkEntry: (anchorKey: string, collapsed: boolean, entryId?: string) => void;
+  onWorkEntryContentReady?: (anchorKey: string, entryId: string) => void;
   onCancelWorktreeSetup: (() => void) | null;
   retryableWorkspacePreparationRunIds: ReadonlySet<RunId>;
   onRetryWorkspacePreparation: ((runId: RunId) => void) | null;
@@ -105,8 +89,10 @@ export interface TimelineRowActivityState {
   isRevertingCheckpoint: boolean;
   awaitingUser: boolean;
   isPreparingWorktree: boolean;
+  providerStartingLabel: string | null;
   latestRunId: RunId | null;
   backgroundWorktreeSetup: WorktreeSetupSnapshot | null;
+  liveAnswerPreview: string | null;
 }
 
 export const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
@@ -118,9 +104,17 @@ export interface WorkGroupViewState {
   expandedEntries: Set<string>;
 }
 
+/** One image the group's agent viewed; `item` is null until its URL resolves. */
+export interface WorkGroupViewedImage {
+  readonly path: string;
+  readonly item: ExpandedImageItem | null;
+}
+
 export const WorkGroupViewCtx = createContext<{
   state: WorkGroupViewState;
-  onToggleEntry: (collapsed: boolean) => void;
+  viewedImages: ReadonlyArray<WorkGroupViewedImage>;
+  onToggleEntry: (collapsed: boolean, entryId: string) => void;
+  onContentReady?: ((entryId: string) => void) | undefined;
 } | null>(null);
 
 export type TimelineWorkEntry = Extract<
@@ -129,3 +123,14 @@ export type TimelineWorkEntry = Extract<
 >["groupedEntries"][number];
 
 export type TimelineRow = MessagesTimelineRow;
+
+export function useInitialOutputReady(pending: boolean, onReady: (() => void) | undefined) {
+  const notified = useRef(false);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- reveals a disclosure after its first async output commits
+  useEffect(() => {
+    if (!pending && !notified.current) {
+      notified.current = true;
+      onReady?.();
+    }
+  }, [pending, onReady]);
+}

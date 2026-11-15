@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import type * as Electron from "electron";
+import * as Electron from "electron";
 
 import { makeComponentLogger } from "../app/DesktopObservability.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
@@ -12,6 +12,7 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export class DesktopApplicationMenuActionError extends Schema.TaggedError<DesktopApplicationMenuActionError>()(
   "DesktopApplicationMenuActionError",
@@ -74,7 +75,7 @@ const checkForUpdatesFromMenu = Effect.gen(function* () {
     yield* electronDialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: `T3 Agents ${updateState.currentVersion} is currently the newest version available.`,
+      message: `${APP_NAME} ${updateState.currentVersion} is currently the newest version available.`,
       buttons: ["OK"],
     });
   } else if (updateState.status === "error") {
@@ -200,6 +201,17 @@ export const make = Effect.gen(function* () {
                 },
                 { type: "separator" as const },
               ]),
+          {
+            label: "Close Developer Tools",
+            accelerator: "CmdOrCtrl+W",
+            visible: false,
+            click: () => {
+              Electron.webContents
+                .getAllWebContents()
+                .find((contents) => !contents.isDestroyed() && contents.isDevToolsFocused())
+                ?.closeDevTools();
+            },
+          },
           // Cmd/Ctrl+W belongs to the renderer's tab close; it must never close the window.
           environment.platform === "darwin"
             ? { label: "Close Window", click: (_item, window) => window?.close() }

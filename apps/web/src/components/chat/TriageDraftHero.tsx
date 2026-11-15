@@ -1,8 +1,7 @@
-import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { TRIAGE_CLI_COMMAND } from "~/hooks/useStartTriage";
+import { TRIAGE_CLI_GUIDANCE } from "~/hooks/useStartTriage";
 
-import { InlineButton } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
  * The empty-draft hero for a triage session, in place of "What should we work on?".
@@ -12,7 +11,6 @@ export function TriageDraftHero(props: {
   readonly machineLabel: string | null;
   readonly serverVersion: string | null;
 }) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({ timeout: 1500, target: "command" });
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col items-center">
       <h1 className="w-full text-center font-normal text-2xl text-foreground tracking-tight sm:text-3xl">
@@ -31,7 +29,7 @@ export function TriageDraftHero(props: {
             )}
           </TooltipTrigger>
           <TooltipPopup side="bottom">
-            The agent reads T3 Code's logs and source here, and asks before it applies a fix or
+            The agent reads {APP_NAME}'s logs and source here, and asks before it applies a fix or
             posts anything.
           </TooltipPopup>
         </Tooltip>
@@ -39,19 +37,12 @@ export function TriageDraftHero(props: {
           ·
         </span>
         <Tooltip>
-          <TooltipTrigger
-            render={
-              <InlineButton
-                tone="muted"
-                className="pointer-events-auto"
-                onClick={() => copyToClipboard(TRIAGE_CLI_COMMAND, undefined)}
-              />
-            }
-          >
-            {isCopied ? "Copied" : "or run"}
-            {isCopied ? null : <code className="ml-1 font-mono text-xs">{TRIAGE_CLI_COMMAND}</code>}
+          <TooltipTrigger render={<span tabIndex={0} className="text-muted-foreground" />}>
+            or run <code className="font-mono text-xs">triage</code>
           </TooltipTrigger>
-          <TooltipPopup side="bottom">Copy command, for a terminal</TooltipPopup>
+          <TooltipPopup side="bottom">
+            In a terminal on that machine, {TRIAGE_CLI_GUIDANCE}.
+          </TooltipPopup>
         </Tooltip>
       </p>
     </div>

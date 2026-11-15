@@ -25,11 +25,11 @@ import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import packageJson from "../../package.json" with { type: "json" };
-import { ServiceLauncherHostProcess } from "../cloud/serviceLauncherClient.ts";
+import { ServiceLauncherHostProcess } from "../service/serviceLauncherClient.ts";
 import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_LAUNCHER_PROTOCOL,
-} from "../cloud/serviceProtocol.ts";
+} from "../service/serviceProtocol.ts";
 import { deriveServerPaths } from "../config.ts";
 import { resolveServerConfig } from "./config.ts";
 
@@ -210,7 +210,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           ),
           Effect.flip,
         );
-        expect(String(error)).toContain("A T3 Code server is already running");
+        expect(String(error)).toContain("An Ada server is already running");
         expect(String(error)).toContain(`pid ${child.pid}`);
         expect(yield* fs.exists(cwd)).toBe(false);
       }),
@@ -755,6 +755,43 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     tailscaleServePort: Option.none<number>(),
     lan: Option.none<boolean>(),
   });
+
+  it.effect("uses the automatic port selector only when no port is configured", () =>
+    Effect.gen(function* () {
+      const baseDir = yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) => fs.makeTempDirectoryScoped({ prefix: "t3-cli-auto-port-" })),
+      );
+      const selected: number[] = [];
+      const selectAutomaticPort = (preferred: number) =>
+        Effect.sync(() => {
+          selected.push(preferred);
+          return 50_123;
+        });
+      const resolvePort = (flags: {
+        readonly mode?: Option.Option<"web" | "desktop">;
+        readonly port: Option.Option<number>;
+      }) =>
+        resolveServerConfig({ ...minimalWebFlags(baseDir), ...flags }, Option.none(), {
+          selectAutomaticPort,
+        }).pipe(
+          Effect.map((config) => config.port),
+          Effect.provide(
+            Layer.merge(
+              NetService.layer,
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            ),
+          ),
+        );
+
+      expect(yield* resolvePort({ port: Option.none() })).toBe(50_123);
+      expect(selected).toEqual([3773]);
+      expect(yield* resolvePort({ port: Option.some(8788) })).toBe(8788);
+      expect(
+        yield* resolvePort({ mode: Option.some("desktop" as const), port: Option.none() }),
+      ).toBe(3773);
+      expect(selected).toEqual([3773]);
+    }),
+  );
 
   it.effect(
     "resolves each signal's endpoint through T3CODE_OTLP_*_URL, an OTEL endpoint, the bootstrap envelope, and persisted Settings, in that order",

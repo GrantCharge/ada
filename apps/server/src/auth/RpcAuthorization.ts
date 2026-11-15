@@ -19,8 +19,6 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
-  AuthRelayReadScope,
-  AuthRelayWriteScope,
   AuthTerminalOperateScope,
   ORCHESTRATION_V2_WS_METHODS,
   AuthTerminalReadScope,
@@ -42,6 +40,7 @@ export const RPC_REQUIRED_SCOPES = {
   ...CLIENT_GUARDED_RPC_SCOPES,
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: AuthOrchestrationOperateScope,
   [ORCHESTRATION_V2_WS_METHODS.getTurnDiff]: AuthOrchestrationReadScope,
@@ -51,6 +50,8 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.searchThreadStream]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.getThreadTitles]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.getThreadLinkMetadata]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getWorktreeThreadIds]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: AuthOrchestrationReadScope,
@@ -59,11 +60,15 @@ export const RPC_REQUIRED_SCOPES = {
   [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: AuthOrchestrationReadScope,
   [ORCHESTRATION_V2_WS_METHODS.subscribeCommandOutput]: AuthOrchestrationReadScope,
+  [ORCHESTRATION_V2_WS_METHODS.subscribePromptSuggestion]: AuthOrchestrationReadScope,
   [WS_METHODS.projectsMutate]: AuthOrchestrationOperateScope,
   [WS_METHODS.mcpGatewayConnect]: AuthOrchestrationOperateScope,
   [WS_METHODS.mcpGatewayRespond]: AuthOrchestrationOperateScope,
+  [WS_METHODS.mcpGatewayPreview]: AuthOrchestrationReadScope,
   [WS_METHODS.serverProbe]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetConfig]: AuthOrchestrationReadScope,
+  // The same skills subscribeServerConfig streams to readers, with their bodies.
+  [WS_METHODS.serverGetAgentSkills]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetNpmRelease]: AuthOrchestrationReadScope,
   [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateProvider]: AuthProvidersManageScope,
@@ -75,6 +80,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.chatGptHandoffSubscribe]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthRespond]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthCancel]: AuthProvidersManageScope,
+  [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthLogout]: AuthProvidersManageScope,
   [WS_METHODS.providerAuthSubscribe]: AuthProvidersManageScope,
   [WS_METHODS.providerInstallStart]: AuthProvidersManageScope,
@@ -89,7 +95,9 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverGetStorageCleanupReport]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetDatabaseStorage]: AuthOrchestrationReadScope,
   [WS_METHODS.peerLinksList]: AuthAccessReadScope,
+  [WS_METHODS.serverGetAgentGateway]: AuthAccessReadScope,
   [WS_METHODS.tailnetDevicesList]: AuthAccessReadScope,
+  [WS_METHODS.subscribeTailnetDevices]: AuthAccessReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthSettingsWriteScope,
   [WS_METHODS.serverRewriteDraft]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverSearchAcpRegistry]: AuthOrchestrationReadScope,
@@ -138,8 +146,6 @@ export const RPC_REQUIRED_SCOPES = {
   // Delivery logs hold request bodies, so they need the same scope as the URL.
   [WS_METHODS.scheduledTasksListWebhookDeliveries]: AuthOrchestrationOperateScope,
   [WS_METHODS.scheduledTasksGetWebhookDelivery]: AuthOrchestrationOperateScope,
-  [WS_METHODS.cloudGetRelayClientStatus]: AuthRelayReadScope,
-  [WS_METHODS.cloudInstallRelayClient]: AuthRelayWriteScope,
   [WS_METHODS.pullRequestsList]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsListStats]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsFilterOptions]: AuthOrchestrationReadScope,
@@ -160,6 +166,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.pullRequestsInvalidate]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsReportState]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsSubscribeRefreshes]: AuthOrchestrationReadScope,
+  [WS_METHODS.pullRequestsSubscribeLinkedThreadRefreshes]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsReviewerCandidates]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsLabelCandidates]: AuthOrchestrationReadScope,
   [WS_METHODS.sourceControlLookupRepository]: AuthOrchestrationReadScope,
@@ -189,6 +196,8 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.mcpAppsReadResource]: AuthOrchestrationReadScope,
   [WS_METHODS.mcpAppsUpdateModelContext]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeVcsStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.subscribeVcsBranch]: AuthOrchestrationReadScope,
+  [WS_METHODS.vcsRefreshBranch]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeWorktreeSetup]: AuthOrchestrationReadScope,
   [WS_METHODS.worktreeSetupCancel]: AuthOrchestrationOperateScope,
   [WS_METHODS.subscribeResourceTelemetry]: AuthDiagnosticsReadScope,
@@ -286,7 +295,8 @@ const requiredScopesForRpcCall = (
     return [
       resource._tag === "workspace-file" ||
       resource._tag === "media-file" ||
-      resource._tag === "draft-workspace-file"
+      resource._tag === "draft-workspace-file" ||
+      (resource._tag === "native-app-icon" && resource.app._tag === "app-path")
         ? AuthFilesystemReadScope
         : AuthOrchestrationReadScope,
     ];
@@ -305,17 +315,12 @@ const requiredScopesForRpcCall = (
  * RPC, that is when the stream completes. Every RPC passes through here, so it
  * is the one place to observe requests without wrapping each handler.
  */
-export const layer = (
-  scopes: ReadonlyArray<AuthEnvironmentScope>,
-  onAuthorized?: (method: string, payload: unknown) => Effect.Effect<void>,
-) =>
+export const layer = (scopes: ReadonlyArray<AuthEnvironmentScope>) =>
   Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) => {
     const requiredScopes = requiredScopesForRpcCall(rpc._tag, payload);
     const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
     if (requiredScope !== undefined) return Effect.fail(rpcAuthorizationError(requiredScope));
-    return onAuthorized === undefined
-      ? effect
-      : Effect.tap(effect, () => onAuthorized(rpc._tag, payload));
+    return effect;
   });
 
 /** Retrying can install or restart tools even though ordinary listing is readable. */

@@ -175,6 +175,8 @@ export const PreviewOpenInput = Schema.Struct({
   viewport: Schema.optional(PreviewViewportSetting),
   profileId: Schema.optional(BrowserProfileId),
   runtime: Schema.optional(PreviewRuntime),
+  colorScheme: Schema.optional(PreviewAppearancePreference),
+  zoomFactor: Schema.optional(PreviewZoomFactor),
   reveal: Schema.optional(Schema.Boolean),
 });
 export type PreviewOpenInput = typeof PreviewOpenInput.Type;
@@ -337,7 +339,7 @@ export class PreviewStopLocalServerError extends Schema.TaggedError<PreviewStopL
       case "not-found":
         return "This server is no longer running.";
       case "shared-group":
-        return "This server shares a process group with T3 Code, an agent, or a terminal shell, so it can't be stopped on its own.";
+        return "This server shares a process group with Ada, an agent, or a terminal shell, so it can't be stopped on its own.";
       case "unsupported":
         return "Stopping servers is not supported on this environment's platform.";
       case "signal-failed":
@@ -376,7 +378,7 @@ export class PreviewInvalidUrlError extends Schema.TaggedError<PreviewInvalidUrl
 ) {
   override get message() {
     const protocol = this.protocol === undefined ? "" : `: ${this.protocol}`;
-    return `Invalid preview URL (${this.reason}${protocol}; input length ${this.inputLength}).`;
+    return `Invalid preview URL (${this.reason}${protocol}; input length ${this.inputLength}). Use an http(s) URL or a schemeless host such as localhost:5173. With preview_open, omit url when creating a new tab to open a blank tab.`;
   }
 }
 

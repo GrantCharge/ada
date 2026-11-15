@@ -1,72 +1,34 @@
 # Remote access
 
-Connect a phone, browser, or another desktop app to T3 Code running on a different
+Connect a phone, browser, or another desktop app to Ada running on a different
 machine. That machine must stay running and reachable while you work.
 
-In **Settings → Connections**, open a machine’s **More actions** menu to rename it or
+In **Settings → Environments**, open a machine’s **More actions** menu to rename it or
 choose its icon (including desktop, laptop, and server). Names and icons are saved on
 that machine and shown on connected devices. **Reset name** restores the original name.
 
-## T3 Connect
+Other devices reach the machine directly: over your local network, over
+Tailscale, or through SSH from the desktop app.
 
-T3 Connect makes an environment available to your other devices without setting
-up router forwarding. In the desktop app on the host, open **Settings →
-Environments**, sign in, and enable **T3 Connect** for that environment.
+T3 Connect has been removed. Mobile push notifications, Live Activities, and
+guest links went with it.
 
-For a command-line host, run:
+### Coming from T3 Connect
 
-```bash
-t3 up
-```
-
-It asks how your other devices reach the machine: T3 Connect, the local network,
-or both. Choose T3 Connect and follow the sign-in instructions. On Linux and
-macOS, it then runs T3 Code as a [background service](./background-service.md).
-`t3 connect` is the same as `t3 up --connect`. Run `t3 up` again to change your
-choice, and `t3 status` to see it.
-
-The background service is not available on Windows, so there `t3 up` prints the
-`t3 serve` command to keep running in a terminal. You can also keep the desktop
-app running with its local environment enabled. Closing the desktop app's last
-window stops its local server. Saving your sign-in alone does not start a server
-or make the machine reachable.
-
-On your other device, sign in to the same T3 Connect account and choose the
-environment. On the app.t3.codes home page with no computer added yet, signing
-in adds compatible computers linked to your account. Over SSH, the CLI prints a
-browser link and a short code. Open the link on any device, confirm the code
-matches, and approve. The CLI continues on its own, so you do not need to forward
-an OAuth callback port.
-
-T3 Connect renews access credentials when needed without disconnecting a healthy
-connection. Pull request diffs and provider settings keep working after the
-previous credential expires. A failed renewal affects that request; it does not
-disconnect an otherwise healthy conversation.
-
-### Scripts and agents
-
-`t3 up` asks nothing when you name a choice: `--connect`, `--lan`, or their
-`--no-` forms. Choices you do not name keep their settings, and `--yes` takes
-the defaults. Without a terminal:
-
-- T3 Connect sign-in prints a URL and a code. Approve it on any device.
-- A needed restart runs without asking, and stops running agent turns.
-- With nothing set up and no choice named, `t3 up` stops and names the flags.
-
-`t3 status --json` prints the settings. `t3 up --help` lists every flag with
-examples.
-
-### More machines with T3 Chat
-
-Each T3 Connect account can link up to 3 machines. Phones and browsers do not
-count. A paid T3 Chat plan raises the limit to 10 machines with Pro, or 100 with
-Premier.
-
-To link T3 Chat, open your account menu on the web or desktop app, go to
-**T3 Chat**, and select **Link T3 Chat**. Sign in to T3 Chat in the window that
-opens and approve. The new limit applies the next time you add a machine. If you
-cancel or downgrade T3 Chat, machines you already linked stay linked, but you
-cannot add more until you are under the limit again.
+- **Machines you reached only through T3 Connect** are dropped from your saved
+  environments. The app tells you once which ones, so you can pair them again
+  directly over your network or Tailscale. Machines that also had a direct
+  route keep it and its sign-in.
+- **On the host,** the update deletes its local T3 Connect credentials and the
+  tunnel tool, and signs out devices that came in through T3 Connect. It does
+  not contact the T3 Connect service, so the machine stays listed there. To
+  release it, unlink T3 Connect in Settings on an older version before you
+  update.
+- **Webhook and MCP addresses** now work only from devices on your tailnet.
+  Services on the internet, such as GitHub or a hosted assistant, cannot reach
+  them.
+- **Going back to an older version** does not restore T3 Connect on that
+  machine. Link it again from the start there, and pair your phone again.
 
 ## Pair over a LAN or private network
 
@@ -76,25 +38,32 @@ On a desktop host, open **Settings → Environments**, enable **Network access**
 then create a pairing link using an address the other device can reach. Changing
 network access restarts the desktop app. You can turn it off in the same place.
 
-For a command-line host, choose the local network in `t3 up`, or run:
+For a command-line host, run `ada up` and choose the local network, or run:
 
 ```bash
-t3 up --lan
+ada up --lan
 ```
 
-For a server in a terminal, run `t3 serve --lan`. Either way, T3 Code then
+On Linux and macOS, `ada up` then runs Ada as a
+[background service](./background-service.md). The background service is not
+available on Windows, so there `ada up` prints the `ada serve` command to keep
+running in a terminal. Run `ada up` again to change your choice, and `ada status`
+to see it. `ada up` asks nothing when you pass `--lan` or `--no-lan`, and `--yes`
+takes the defaults; `ada up --help` lists every flag.
+
+For a server in a terminal, run `ada serve --lan`. Either way, Ada then
 accepts connections from your local network and tailnet, so a pairing code is
 all that keeps other devices on them out.
 
 If a server is already running, generate a fresh link without restarting it:
 
 ```bash
-t3 pair
+ada pair
 ```
 
 Scan the QR code on your phone or paste the pairing URL into **Add environment**
 in the receiving app. Connection settings are under **Settings → Environments**
-on web and desktop and **Settings → Environments** on mobile. A loopback address
+on web, desktop and mobile. A loopback address
 such as `127.0.0.1` reaches only the device opening the link.
 
 On a computer with the desktop app, you can open the printed `t3code://pair`
@@ -114,31 +83,30 @@ another link to share.
 ### Reach one machine several ways
 
 A machine can have more than one route: LAN, Tailscale, another VPN, a public
-URL, SSH, or T3 Connect. Tailscale shares its `100.64.0.0/10` address range with
+URL, or SSH. Tailscale shares its `100.64.0.0/10` address range with
 other VPNs such as Cloudflare WARP, so an address in that range shows as VPN
 unless the machine confirms it is on Tailscale. To add a route, choose **Add
-route** in the machine's route list, or next to it in the T3 Connect list.
+route** in the machine's route list.
 A pairing link for a saved machine is refused when it comes from an address
 that machine does not have yet; add that address with **Add route** instead.
 Pairing again over an address the machine already has still works. A new route
 is placed by speed, in that order, and you can reorder routes at any time.
 
-While connected through T3 Connect or a paired address, T3 Code also learns the
-machine's current LAN and Tailscale addresses and adds them as routes, so
-pairing once through T3 Connect is enough to use the LAN at home. When the
+While connected through a paired address, Ada also learns the machine's
+current LAN and Tailscale addresses and adds them as routes. When the
 machine's LAN address changes, for example after it joins another Wi-Fi network,
 the learned route follows it. The machine must allow network access for its LAN
 address to be learned: **Network access** in the desktop app, or the
-[local network](./background-service.md#local-network-access) choice in `t3 up`.
+[local network](./background-service.md#local-network-access) choice in `ada up`.
 You can reorder a learned route, but not remove it; it
 goes away with the route it was learned through, or when the machine stops
 reporting that address.
 
-T3 Code connects over the first route that answers. Away from home, a LAN
+Ada connects over the first route that answers. Away from home, a LAN
 address that does not answer is checked briefly and skipped. It is only tried
 again, after the other routes, if none of them connect. While connected over a
-later route, T3 Code checks earlier routes on a faster kind of network (LAN
-before Tailscale, Tailscale before T3 Connect) when your network changes, when
+later route, Ada checks earlier routes on a faster kind of network (LAN
+before Tailscale, Tailscale before a public address) when your network changes, when
 you return to the app, and every minute, and moves as soon as one works. It
 does not drop a working connection for an earlier route of the same kind, such
 as two Tailscale addresses; the order decides which is tried first next time.
@@ -146,15 +114,13 @@ as two Tailscale addresses; the order decides which is tried first next time.
 On web and desktop, select the route count under the machine's name in
 **Settings → Environments** to see its routes. Drag a route to change the order,
 or remove it. On mobile, open the machine under **Settings → Environments** and
-choose **Edit**. Signing out of T3 Connect removes only that route; a machine
-you can still reach another way stays saved.
+choose **Edit**.
 
 Open **Permissions** next to **Routes** in web or desktop, or **Your permissions**
 in the mobile route details, to see what your current connection can do on that
 environment. For a remote environment, this is in its route details. Permissions
 shown there apply only to the route marked **In use**; other routes are not
-checked. Direct pairing and T3 Connect have separate sessions and may grant
-different permissions.
+checked. Each pairing has its own session and may grant different permissions.
 
 ### Balance new threads across machines
 
@@ -179,16 +145,19 @@ Mobile keeps its manual environment selection.
 Join both devices to the same tailnet. In the desktop app, enable **Tailscale
 HTTPS** in **Settings → Environments**. Turn it off there to remove that route.
 
-To start a command-line server with Tailscale HTTPS:
+A command-line server publishes itself on the tailnet with Tailscale HTTPS by
+default, and its startup log says so. To keep a server off the tailnet:
 
 ```bash
-t3 serve --tailscale-serve
+ada serve --no-tailscale-serve
 ```
+
+Setting `T3CODE_TAILSCALE_SERVE=false` in the server's environment does the same.
 
 For an already-running server:
 
 ```bash
-t3 pair --tailscale
+ada pair --tailscale
 ```
 
 The pairing link uses an address such as `https://machine.tailnet.ts.net/`.
@@ -196,32 +165,34 @@ The mapping created by `pair --tailscale` persists across restarts. Remove its
 default-port mapping with:
 
 ```bash
-tailscale serve --https=443 off
+tailscale serve --https=443 --set-path=/ off
 ```
 
 If that port is already in use, choose another with
-`--tailscale-serve-port`. See `t3 pair --help` for other pairing options.
+`--tailscale-serve-port`. See `ada pair --help` for other pairing options.
 
 ### Hosted web app
 
-[app.t3.codes](https://app.t3.codes) needs an HTTPS endpoint. It connects directly
+Ada does not use a hosted web app unless one is set up. A hosted web app, served
+over HTTPS, needs an HTTPS endpoint. It connects directly
 to your server; a hosted pairing link does not make an unreachable backend
 reachable or convert HTTP to HTTPS.
 
-For a plain HTTP LAN endpoint, use the direct pairing URL in a browser that can
+A Tailscale HTTPS address works from a browser on the same tailnet. For a plain
+HTTP LAN endpoint, use the direct pairing URL in a browser that can
 open it, or pair from the desktop app. On mobile, an IP address entered without a
 scheme uses HTTP, so include `https://` when your server uses HTTPS.
 
 ## Desktop-managed SSH
 
-In the desktop app, open **Settings → Environments → Add environment**, choose
-**SSH**, and enter a host or SSH alias such as `user@example.com`. T3 Code starts
+In the desktop app, open **Settings → Environments → Add machine**, choose
+**SSH**, and enter a host or SSH alias such as `user@example.com`. Ada starts
 or reuses a server there and opens the port forward for you. Projects, provider
 credentials, and agent work stay on the remote machine.
 
 The remote host must be Linux or an Apple Silicon Mac with `curl` or `wget`,
 `tar`, `sha256sum` or `shasum`, and [provider setup](./install.md#providers).
-The first launch downloads T3 Code's server to `~/.t3/runtime` on the host, so
+The first launch downloads Ada's server to `~/.t3/runtime` on the host, so
 it takes longer than later ones.
 Provider CLIs must be on the `PATH` of a non-interactive login shell there;
 check with:
@@ -231,13 +202,13 @@ ssh user@example.com 'sh -lc "command -v claude codex"'
 ```
 
 If SSH reconnecting fails after an app update, retry the launch once. Removing
-the connection stops a server that T3 Code launched; a server that was already
+the connection stops a server that Ada launched; a server that was already
 running is left alone.
 
 Each desktop app keeps one session on the host for its SSH connection and reuses
 it when it reconnects. Revoke sessions you no longer use in **Settings →
-Environments** on the host, or on a headless host with `t3 auth session list` and
-`t3 auth session revoke <id>`. A desktop that can still sign in over SSH pairs
+Environments** on the host, or on a headless host with `ada auth session list` and
+`ada auth session revoke <id>`. A desktop that can still sign in over SSH pairs
 again on its next connect.
 
 For Antigravity's Google callback on a remote host, see
@@ -251,7 +222,7 @@ directly. Every other device, and the desktop app for other environments,
 streams them from the host. Agents keep using them while no device is
 connected, and `localhost` addresses reach servers on the host.
 
-The first tab downloads a headless Chrome, about 120 MB, into the T3 home. It
+The first tab downloads a headless Chrome, about 120 MB, into the Ada home. It
 is the same browser [HTML renders](html-renders.md) use, so a host downloads it
 only once. Some Linux hosts need [setup](#browser-host-setup) before it can
 start.
@@ -273,13 +244,13 @@ apps.
 ### Local servers
 
 The browser lists ports held by processes your terminals and agents started.
-T3 Code reads which process holds each port and never connects to it, so a
+Ada reads which process holds each port and never connects to it, so a
 listed port opens as `http://localhost:<port>` and might not be a web page. For
 an HTTPS server or a specific path, set the **Preview URL** on the project
-script that starts it; T3 Code checks that address and opens it as written.
+script that starts it; Ada checks that address and opens it as written.
 
 To stop listing ports, set `T3CODE_PORT_DISCOVERY=0` in the environment that
-starts the T3 Code server, such as
+starts the Ada server, such as
 [`service.env`](./background-service.md#configure-the-service-environment) for
 the background service, and restart it. Script preview URLs still appear.
 
@@ -292,37 +263,38 @@ the server says so at startup, and browser tabs and HTML previews show the
 command to run on the host:
 
 ```sh
-sudo t3 browser setup
+sudo ada browser setup
 ```
 
-The server shows the exact line for how you started it, such as
-`sudo npx t3 browser setup`, and keeps your `PATH` when Node is installed only
-for your user. Where `t3` is not on your `PATH`, such as with only the
-desktop app installed, it names the full path of the app's own `t3` instead. It allows Chrome's sandbox with an AppArmor profile and installs
+The server shows the exact line for how you started it, and keeps your `PATH`
+when you started it with `npx` and Node is installed only for your user. Where `ada` is not on your `PATH`, such as with only the
+desktop app installed, it names the full path of the app's own `ada` instead. It allows Chrome's sandbox with an AppArmor profile and installs
 any missing libraries and system fonts with apt; pages that load without text
-can mean the host has no fonts. It is safe to run again. Without `sudo`, it only
-reports what it would change.
+can mean the host has no fonts. It is safe to run again, and each run reloads
+the AppArmor profile: run it again if the browser reports a blocked sandbox on a
+host restored from an image or snapshot, where the profile can be on disk
+without being loaded. Without `sudo`, it only reports what it would change.
 
 The browser runs in Chrome's sandbox by default. Chrome cannot start that sandbox
-as root. If your T3 server runs as root, run it as a nonroot user to keep
-sandboxing enabled. `t3 browser setup` does not fix this root restriction.
+as root. If your Ada server runs as root, run it as a nonroot user to keep
+sandboxing enabled. `ada browser setup` does not fix this root restriction.
 
 If you need to run as root, or cannot enable the sandbox on your host, set
-`T3CODE_SERVER_BROWSER_SANDBOX=0` in the **T3 server's environment** and restart
+`T3CODE_SERVER_BROWSER_SANDBOX=0` in the **Ada server's environment** and restart
 the server. This disables Chrome's sandbox. For a manual launch:
 
 ```sh
-T3CODE_SERVER_BROWSER_SANDBOX=0 t3 serve
+T3CODE_SERVER_BROWSER_SANDBOX=0 ada serve
 ```
 
 For a systemd service, add `Environment=T3CODE_SERVER_BROWSER_SANDBOX=0` under
 `[Service]` in its configuration, run `sudo systemctl daemon-reload`, then restart
-your T3 service. Setting the variable in an agent's terminal does not change the
-environment of an already running T3 server.
+your Ada service. Setting the variable in an agent's terminal does not change the
+environment of an already running Ada server.
 
 ## Connect an outside agent
 
-Claude Code, Codex, ChatGPT and other agents T3 Code did not start can drive
+Claude Code, Codex, ChatGPT and other agents Ada did not start can drive
 threads on an environment through its MCP server. See
 [outside agents](./outside-agents.md) for setup.
 
@@ -330,56 +302,115 @@ threads on an environment through its MCP server. See
 
 Link two machines, such as your laptop and a VPS, and agents on one can work on
 the other: launch, message, wait on and stop its threads, answer their
-questions, and manage its queues, projects and scheduled tasks.
+questions, and manage their queues. Linked agents cannot change the other
+machine's projects, settings or scheduled tasks.
 
-Linked environments is on by default; turn it off for a machine in **Settings →
-Labs**, or on mobile in **Settings → Labs**. While it is off on either machine,
-agents start nothing over a link between them. A task already running on the
-other machine still finishes, and if that machine has it off, its result
-arrives once it is back on.
+Open **Settings → Environments → Machines** on web, desktop and mobile. Machines
+in your network show up here by themselves and open by themselves in every app
+of the network. Add a machine once and every app in your network can use it.
+Machines outside the network, such as a VPS paired by code or an SSH host, are
+rows in the same list.
 
-### Your tailnet devices
+Each row has a switch, **Show in this app**. It only affects this app: switch it
+off to disconnect the machine here, on to bring it back. Other apps are not
+affected. A row reads **Connected**, **Connecting…**, **Offline**, or **Off in
+this app**. **Can't connect · retrying** means the last try failed and the app
+tries again on its own, waiting longer each time.
 
-Machines running T3 Code that are signed in to the same Tailscale account link
-to each other on their own, both ways, with no pairing code. Install T3 Code on
-a new machine, sign in to Tailscale, and within ten minutes it appears in
-**Settings → Environments → Linked environments** on your other machines.
-Tagged nodes and machines shared from someone else's tailnet never link this
-way.
+To stop agents using a link, open the row's **…** menu and choose **Pause agent
+links**. While it is paused on either machine, agents start nothing over a link
+between them. A task already running on the other machine still finishes, and
+if that machine has agent links paused, its result arrives once they are back.
+While this app's machines have agent links paused, rows it is not connected to
+read **Agent links paused**, because nothing opens them until you resume.
 
-- Each device's access there is the most it may do on your machines. Change it
-  from any of them and the change reaches all of them. **Revoke** cuts the
-  device off everywhere; **Restore** gives it back the default access.
-- New devices get the default access set in the same section, and you can turn
-  automatic linking off there.
-- **Open** adds a device to this app without a code. Below full access, it
-  opens read-only.
+**+ Add machine** offers a Tailscale machine, a pairing code, or SSH. **Remove**
+is for machines outside the network. A machine in the network is switched off
+here or forgotten from the network instead.
+
+A phone that is not on your tailnet shows network machines as **Can't reach from
+this phone**. On a hosted web app, a machine reachable only over plain HTTP shows
+**Can't reach from this browser**. Open the app from a machine on your network,
+or use Tailscale HTTPS.
+
+### Your device network
+
+Machines running Ada on your Tailscale account show up in **Machines** on
+your other machines. Being on the same account is not permission: a machine
+joins only when you add it and pick what it may do. Adding the first one starts
+your network, with the machine you added from at full access. Tagged nodes and
+machines shared from someone else's tailnet never show up. A machine
+reinstalled on the same computer shows as one row. An old install you revoked
+is not listed beside it; one still in the network is, with **Forget**.
+
+Changes go through a full-access machine this app is connected to, and every
+machine in the network picks them up.
+
+- **Add to network** gives a machine the access you pick on every machine,
+  full access unless you choose less. Every machine in the network can then
+  reach it, and it can reach each of them, with nothing more to do. A
+  limit one machine already set for it stays until you clear it. **Link to … only** links it to one machine, as a pairing code would.
+  A machine linked that way, or with a pairing code, can be added to the
+  network later.
+- A machine must agree before another machine adds it or links to it: on it,
+  choose **Allow joining**. That stays open for 10 minutes, and the list shows
+  until when. A machine already in a network needs this too before a link
+  from outside it.
+- A member's access is the most it may do on every machine. A full-access
+  machine can narrow it, **Revoke** it everywhere, or restore it at a level you
+  pick. **Only on …: limit** narrows it on one machine alone; choose **No
+  limit** to clear it.
+- **Forget** removes a machine from the list. A member is revoked everywhere
+  first, so it cannot rejoin by itself. If it is still on your tailnet, it
+  shows up again as a machine you can add.
+- **Leave network** takes a machine out of the network. Other apps that reach
+  it through the network are signed out, and the others see it as left. The
+  app you leave from keeps its connection until that session ends, 30 days
+  after it was issued, and its row shows until when; nothing renews it. The
+  only full-access machine cannot leave while other members remain: give
+  another machine full access first. The others then show it as **Left the
+  network**; to bring it back before the session ends, choose **Allow
+  joining** on it, then **Add again** on its row from a full-access machine.
+  After that, pair with it by code.
+- After updating from a version before machines were tied to their Tailscale
+  identity, machines that were linked both ways (by Tailscale or by pairing
+  code) and still hold those links reconnect on their own, at the access they
+  had, and come out as one network. Any other member shows **Needs re-adding
+  after the update**, and the other machines refuse it until then. Choose
+  **Add again** on its row from a full-access machine; if this app is not also
+  connected to that machine, first choose **Allow joining** on it.
+- A machine that is in another of your networks shows **Merge networks**.
+  Adding it makes the two networks one, and every machine and app keeps the
+  access it has. A machine you forgot shows **Restore** once it is found on
+  your tailnet again.
+- Below full access, a member opens read-only, and its row shows **Connected ·
+  read-only in this app**.
+- When you create a pairing link on a full-access member, **Works on all your
+  network's machines** pairs the phone or browser with the whole network at
+  once. It is listed under **Phones and browsers** once it pairs. Apps are full
+  access or read-only. **Make read-only** or **Revoke** signs it out
+  everywhere. To give it more access or bring it back, choose **Pair again** on
+  web or desktop and open the new link on that device; it replaces the old
+  entry on every machine. If the network no longer lists the old entry, choose
+  **Pair as new** instead, then forget the old entry.
 - Other people's machines, and anything off your tailnet, still link with a
   pairing code as described below.
 
-To count only machines you choose, turn on **Only devices with the T3
-capability** and grant `t3.codes/device` in your Tailscale policy file, from
-the machines that should count to your T3 machines:
-
-```json
-"grants": [
-  { "src": ["group:me"], "dst": ["group:me"], "app": { "t3.codes/device": [{}] } }
-]
-```
-
 ### Link with a pairing code
 
-On the machine you will work from, open **Settings → Environments → Linked environments**,
-choose **Link**, and pick the other machine or enter its address. The list
-holds the machines this app knows and those on your T3 Connect account. If this
-app is connected to that machine with a session that manages access there, it
-makes the pairing code itself; otherwise paste one from that machine's
-**Settings → Environments**. From a terminal, use
-`t3 environment link <address> --pairing-code <code> --access <mode>`.
+Open the **…** menu in the **Machines** header, choose **Link for agents**, and pick the other machine or enter its address. The list
+holds the machines this app knows. If this
+app has an address for that machine and is connected to it with a session that
+manages access there, it makes the pairing code itself; otherwise paste one
+from that machine's **Settings → Environments**. An address you type always
+needs a pasted code. From a terminal, use
+`ada environment link <address> --pairing-code <code> --access <mode>`.
 
 You can also ask an agent to link a machine by name, such as "delegate this to
 my vps". It shows a card in the thread where you pick the machine the same way
-and the access, then approve.
+and the access, then approve. An address the agent gives that this app does
+not know for one of your machines also needs a pasted code. Paste one only for
+an address you trust: the code is sent there.
 
 - The access you pick is the most agents from this machine may do there. An
   agent also never gets more there than its own mode here.
@@ -409,7 +440,11 @@ others** ends every other paired phone, browser, desktop, and linked machine at
 once. A revoked device says the machine revoked its pairing; to restore it,
 create a fresh pairing link and use **Pair again** in the connection details on
 that device. Its saved threads stay. Command-line management is
-available through `t3 auth --help`.
+available through `ada auth --help`.
+
+When the app connects to more than one environment, choose one at the top of the
+page. A desktop app with **Local environment** off can manage a background
+service on the same machine this way.
 
 A session with an open connection stays listed after its access credential
 expires.
@@ -417,13 +452,13 @@ expires.
 To choose a token's permissions, pass `--scope` once for each scope you want:
 
 ```sh
-npx t3 pair --scope orchestration:read --scope relay:read
+ada pair --scope orchestration:read --scope filesystem:read
 ```
 
 The selected scopes replace the default permissions. The same option works with
-`npx t3 auth pairing create` and `npx t3 auth session issue`; each command's
+`ada auth pairing create` and `ada auth session issue`; each command's
 `--help` lists the available scopes. Without `--scope`, pairing tokens and issued
-bearer sessions get every permission, including managing access and T3 Connect.
+bearer sessions get every permission, including managing access.
 A terminal or a full-access agent on the host can reach those as well, so a
 client that should not manage access also needs to go without `terminal:operate`
 and `orchestration:operate`.
@@ -445,8 +480,8 @@ worktrees. It does not restrict what a task does. Starting a task in a new
 worktree still creates that branch and worktree with `orchestration:operate`,
 and the agent it runs can use Git however the environment allows.
 
-Settings changes, provider management, environment maintenance, access
-management, and T3 Connect management can each be granted separately. New
+Settings changes, provider management, environment maintenance, and access
+management can each be granted separately. New
 pairings without `--scope` include all of them. Existing clients keep the
 permissions they paired with and can stay connected after an update, but newly
 separated features may require pairing again with the permissions they need.
@@ -457,56 +492,30 @@ link to change a client's permissions.
 local changes. Add `filesystem:write` to allow editing files or saving plans to
 the workspace. These scopes control direct file access from the client.
 
-To remove an environment from T3 Connect, open your account menu's **T3 Connect**
-page, or **Settings → T3 Connect** on mobile, and choose **Deregister**. This
-revokes its cloud access and frees its host space even when the environment is
-offline or has been wiped. When T3 Connect rejects a host's link, the host
-shows that it was removed from T3 Connect. To link it again, turn on
-**T3 Connect** in **Settings → Environments** on a desktop host, or run
-`t3 connect link` on a command-line host and then restart T3 Code there. A
-command-line host that released its tunnel when it last stopped may link itself
-again on its next start; run `t3 connect unlink` on that host to keep it off.
-Removing an environment from a device's connection settings only forgets it on
-that device and doesn't change your T3 Connect account. A device keeps a saved
-environment after it's deregistered until you remove it from that device.
-
-When idle tunnel cleanup is enabled, T3 Connect removes a linked environment's
-tunnel after it stays offline for several minutes. The environment stays linked
-and keeps the same address. When the host starts again or wakes, T3 Connect
-creates a replacement tunnel on its own. You do not need to pair again. Cleanup
-usually runs five to ten minutes after the tunnel goes down.
-
-T3 Connect also removes the tunnel of an environment running an older version of
-T3 Code once it has been offline for seven days. That environment shows a message
-asking you to update. Start T3 Code on that computer and update it to the latest
-version; it reconnects at the same address without pairing again.
-
-On a command-line host, `t3 connect unlink` disables exposure while retaining
-your login; `t3 connect logout` also clears that login. Background-service
-[removal](./background-service.md#manage-the-service) is separate.
-
 Treat pairing URLs and authorization codes as passwords. Do not include them in
 screenshots, logs, or bug reports.
 
-## T3 Connect troubleshooting
-
-When a T3 Connect connection fails, see
-[T3 Connect troubleshooting](./t3-connect-troubleshooting.md). It explains each
-error, where the problem is, and how to fix it.
-
 ## Use MCP with connected environments
 
-Agents in T3 Code chats always have the T3 Agents tools for the machine they run on. To let
+Agents in Ada chats always have the Ada tools for the machine they run on. To let
 them act on your other machines too, enable **Settings → Environments → MCP Gateway** in the desktop app and
 grant access to each environment involved, including the one the chat runs on. Keep this
 desktop connected while agents use it; calls for other machines go through it, under the
 grants you set. Disabling the gateway stops those calls immediately.
 
-For assistants outside T3 Code, copy the external MCP host configuration from the same page.
+For assistants outside Ada, copy the external MCP host configuration from the same page.
 For standalone OpenCode, merge **Copy OpenCode config** into `~/.config/opencode/opencode.jsonc`
 on the desktop's machine, preserving existing servers, then reconnect OpenCode. Other hosts
 using `mcpServers` can use **Copy MCP config**. The copied configuration includes the bridge
 token and the desktop's state-file path.
+
+A server can also host its own gateway, without the desktop app: in the browser, on the desktop
+app for a connected server, or in mobile Settings → Maintenance → **Agent gateway**, turn on
+**Server gateway** for that environment. It covers only that environment, with the capabilities
+you choose in its access menu (read is always on), for MCP hosts on the server's machine and for
+Ada webhooks. **Show token** gives the bridge token those hosts need; **Rotate token**
+replaces it and disconnects hosts using the old one. Changing these needs access management
+permission. A server run by the desktop app leaves its gateway to the app's own settings above.
 
 Enable access per environment and select **Save** to apply permission changes. Default access allows
 reading chats, creating threads, and sending messages. **Enable all environments** enables machines
@@ -577,22 +586,21 @@ chat does not start or stop its agent. The desktop app must already be running a
 ### Show a chat on another device
 
 Your assistant can also put a chat on a different screen, for example when you talk to an assistant
-on your laptop but watch T3 Code on your desktop. `t3_list_devices` lists the desktop, web, and
+on your laptop but watch Ada on your desktop. `t3_list_devices` lists the desktop, web, and
 mobile apps connected to an environment, and shows which one you are looking at. `t3_focus_device`
 then opens a chat on one of them by device ID or name. It can also open a file from that chat's
 workspace beside the chat, such as a screenshot, video, PDF, or source file, or open the Agents board.
 Desktop apps come to the front. Browser tabs switch to the chat but stay behind other windows. Phones
-must have T3 Code open. On mobile, that request opens Home’s Agents tab.
+must have Ada open. On mobile, that request opens Home’s Agents tab.
 
-A device appears once it connects to the environment directly, over your network, Tailscale, or T3
-Connect. Desktop apps use the computer's name; browsers show as the browser and OS, such as "Chrome
+A device appears once it connects to the environment directly, over your network or Tailscale. Desktop apps use the computer's name; browsers show as the browser and OS, such as "Chrome
 on Windows".
 
 ### Organize work by agent
 
-Open **Open agents** in the command palette, or visit `/agents`. Create a named agent, choose its
-provider, model, thinking, allowed machines, and a system prompt describing its role and workflow,
-then start a task or an empty chat. Clicking a
+Open **Open agents** in the command palette, or visit `/agents`. Create a named agent with an icon,
+optional roles, and a model; its thinking, allowed machines, system prompt, and other settings sit
+under **Advanced**. Then start a task or an empty chat. Clicking a
 card opens the conversation; **Back to agents** returns to the board. Settled work moves into a collapsed **Settled** section
 in its agent column. Right-click a chat to settle or un-settle it. Deleting an agent keeps its conversations under **Removed agents**.
 
@@ -605,8 +613,14 @@ switch away; settled chats remain on the board under **Settled**.
 Agents are shared across clients connected to the same server. Updated clients also synchronize
 the agent library between connected environments that support agent sync, including after reconnecting. Each target resolves the provider and model locally; an unavailable or
 ambiguous selection must be re-selected before starting a thread. Agent configuration and skill changes apply when a new chat is created. Existing chats keep the configuration and skill contents they started with.
+Agent names ignore case, so "Doug" and "doug" cannot coexist. When synchronizing machines brings two
+agents with the same name together, the one created later is renamed with a number, such as
+"Doug (2)".
 
-Add a short **Specialization** when creating or editing an agent to show what it does beneath its name and in MCP. This description does not replace its instructions.
+Add a short **Specialization** to show what an agent does on its details card and in MCP. This description does not replace its instructions.
+
+Hover or keyboard-focus an agent in the left rail, or tap it on a touch screen, to see its details
+and to edit, schedule, reorder, or delete it. Its roles are listed on the same card.
 
 MCP assistants can discover agents with read access using `t3_list_agents`, or manage them using `t3_create_agent`, `t3_update_agent`, and `t3_delete_agent` with create
 or admin access. Agent writes share only to connected environments with one of those grants;
@@ -659,6 +673,8 @@ scheduled task bound to the chat. A child chat starts with a **Child of** link t
 parent's details list its **Children** with their status.
 
 Manually settling a parent card also settles its child chats through the existing cascade.
+Child chats on another machine follow over that machine's full-access link, or through the desktop
+app; one that is offline catches up within a minute of answering again, for up to seven days.
 Working child chats remain active and follow that manual choice when they finish. Un-settling
 the parent restores chats that settled with it; ones you settled earlier stay settled.
 
@@ -677,22 +693,28 @@ cards, and a chat left pointing at a missing parent is detached when the server 
 
 ### Schedule prompts for an agent
 
-Open **Scheduled** on the Agents board, or choose **Schedule task** from an agent's menu, to send
+Open **Scheduled** on the Agents board, or choose **Schedule** from an agent's menu, to send
 an agent a prompt at a set time (for example a deploy tonight) or on repeat (for example pulling
-the latest changes every weekday at 7:00). Each task has one thread: the first run creates it and
-every later run posts into it. Pause, resume, run now, edit, or delete a task from the same list.
+the latest changes every weekday at 7:00). Set **Destination** to **An agent's thread** and pick
+the agent. Each task has one thread: the first run creates it and every later run posts into it.
+This is the same list as **Settings → Scheduled tasks**, opened on **Agents**; choose **All**,
+**Threads**, **New thread** or **Archived** to see the rest. To add another task to a chat that
+already has one, choose **+** under **Automations** in its details. Pause, resume, run now, edit, or
+delete a task from the list.
 
 A task is kept on, and runs on, the machine that hosts its project. When you ask an agent in a chat
 to schedule something, that is the chat's machine, not the device you are typing on, so the task
-still runs after that device shuts down. Tasks run only while that machine's T3 server is up and it is awake;
-T3 does not wake a sleeping machine or keep it awake. A run missed while it was off or asleep
-happens once when it is back. For unattended runs, set the machine not to sleep and keep T3 running
+still runs after that device shuts down. Tasks run only while that machine's Ada server is up and it is awake;
+Ada does not wake a sleeping machine or keep it awake. A run missed while it was off or asleep
+happens once when it is back. For unattended runs, set the machine not to sleep and keep Ada running
 with the desktop app open or as a [background service](./background-service.md). Runs use the agent's permission mode, so an agent that
 asks for approvals waits for you. Changing a task's agent or project starts a new thread on the next
-run. MCP assistants can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
+run. Agents in Ada chats schedule work for an agent with `schedule_task` and its `profileId`.
+MCP assistants outside Ada can manage tasks with `t3_list_scheduled_tasks`, `t3_create_scheduled_task`,
 `t3_update_scheduled_task`, and `t3_delete_scheduled_task` (create or admin access), and run one
 immediately with `t3_run_scheduled_task` (send access). Pass `runAt` for a single run, or `cron`
-with an optional IANA `timezone` for a repeating one.
+with an optional IANA `timezone` for a repeating one, and an `idempotencyKey` to make a retried
+create return the same task.
 
 MCP assistants can keep a project's [TODO list](./thread-sidebar.md#keep-a-todo-list) with
 `t3_list_todos` (read access) and `t3_add_todo`, `t3_update_todo`, `t3_settle_todo`,
@@ -706,10 +728,12 @@ skill you already have with identical content. If a preset's provider or model i
 your machines, choose an available one before saving. Some presets list software they need for
 full compatibility, such as a signed-in CLI.
 
-Ask an assistant connected to the **T3 Agents MCP** to create a shared skill and assign it to
+Ask an assistant connected to the **Ada MCP** to create a shared skill and assign it to
 an agent. For example: “Create a shared skill for reviewing pull requests and assign it to Randy.”
 The MCP can list skills with read access and create, update, or delete them with create or admin
-access. One shared library supplies every assigned agent, regardless of provider.
+access. Only a chat running in full access with default mode can change skills or agents, since every
+machine shares the library; a more limited chat can read it, and you can always edit it yourself.
+One shared library supplies every assigned agent, regardless of provider.
 
 For manual editing, open **Skills** on the Agents board and expand **Create or edit manually**.
 Assign skills in the agent editor. Skills can include references, scripts, and binary assets beside
@@ -719,7 +743,7 @@ skill folder; references are read only when needed. Each skill supports up to 25
 file and 2 MiB of resources; the shared library supports 8 MiB of resources. On update, omitting
 `resources` preserves the files, while supplying a list replaces them (`[]` removes them).
 
-Update the T3 gateway, clients, and connected environments before using resource bundles. Older
+Update the Ada gateway, clients, and connected environments before using resource bundles. Older
 environments cannot synchronize them. New chats receive the updated bundle; existing chats retain
 their starting copy, including files. Deleting a skill excludes it from new chats.
 
@@ -727,13 +751,13 @@ To migrate previously imported skills that still refer to local folders, use the
 [resource import utility](../operations/skill-resource-import.md). It verifies uploaded resources
 before removing the local-folder workaround and preserves skill IDs and agent assignments.
 
-Before creating an agent chat, T3 synchronizes its library from environments available to the client.
+Before creating an agent chat, Ada synchronizes its library from environments available to the client.
 Keep both machines connected to a client at least once after an edit so the destination can
 receive it. Offline machines catch up when they reconnect; a disconnected source that this
 client has never seen cannot supply updates.
 
 Each chat has generated instructions and assigned skill files under `.agents/t3/` in its workspace.
-T3 creates these from the configuration saved when the chat was created and clears them when
+Ada creates these from the configuration saved when the chat was created and clears them when
 the chat is settled. Continuing or resuming restores that same configuration, even if the agent
 or shared skills have since been edited or deleted. Deleting an agent keeps its existing chats
 and their saved instructions and skills.
@@ -756,9 +780,12 @@ the destination; settlement needs lifecycle access.
 
 If a computer should only drive work running elsewhere, turn off its local environment. In the
 desktop app, open **Settings → Environments** and switch off **Local
-environment**. T3 Code restarts without a local server: no local agents or terminals run, WSL
+environment**. Ada restarts without a local server: no local agents or terminals run, WSL
 backends stay off, and other devices can no longer connect to this computer. Your projects,
-history, and saved connections are kept, and you keep working through pairing, T3 Connect, or SSH.
+history, and saved connections are kept, and you keep working through pairing or SSH.
+If a [background service](./background-service.md) on this computer uses the same Ada home, the
+app still treats it as this computer: **Open in** and file reveal for its projects run here,
+whichever connection you reach it through.
 
 Switch **Local environment** back on in the same place to restart with your previous local
 settings.

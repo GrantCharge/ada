@@ -2,9 +2,12 @@ import { useAtomValue } from "@effect/atom-react";
 import { connectionStatusTitle } from "@t3tools/client-runtime/connection";
 import { AsyncResult } from "effect/reactivity";
 import {
+  ArchiveRestoreIcon,
+  ChevronDownIcon,
   Clock3Icon,
   CopyIcon,
   InboxIcon,
+  MessageSquareIcon,
   MoreHorizontalIcon,
   PencilIcon,
   PlayIcon,
@@ -14,12 +17,13 @@ import {
 import { type ReactNode, useRef, useState } from "react";
 import type {
   EnvironmentId,
+  McpGatewayProfile,
   ModelSelection,
   OrchestrationV2ThreadLaunchWorkspaceStrategy,
   ProjectId,
   ScheduledTask,
   ScheduledTaskId,
-  ScheduledTaskSchedule,
+  ScheduledTaskThreadMode,
   ScheduledTaskUpsertInput,
   ScheduledTaskWebhookDeliverySummary,
   ThreadId,
@@ -32,12 +36,14 @@ import {
   WEBHOOK_FILTER_OPS,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
+import { scheduleTimeZoneLabel } from "@t3tools/client-runtime/scheduled-task-time-zone";
+import { scheduledTaskDestinationThreads } from "@t3tools/client-runtime/scheduled-task-destinations";
 import {
-  MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MAX_WEBHOOK_FILTERS,
   MIN_SCHEDULED_TASK_INTERVAL_MS,
   ProviderInstanceId,
   resolveEnvironmentMachineKind,
+  scheduledTaskThreadMode,
 } from "@t3tools/contracts";
 import {
   isAtomCommandInterrupted,
@@ -48,7 +54,6 @@ import { formatRelativeTime } from "../../timestampFormat";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { getCustomModelOptionsByInstance } from "../../modelSelection";
 import { providerInstanceEntriesFor } from "../../providerInstances";
-import { usePrimaryCloudLinkState } from "../../cloud/primaryCloudLinkState";
 import { requestConfirmDialog } from "../../confirmDialog";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -57,11 +62,19 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import {
   useEnvironment,
   useEnvironmentHttpBaseUrl,
+  useEnvironmentProviders,
   type EnvironmentPresentation,
 } from "../../state/environments";
-import { useProjects, useThreadShell } from "../../state/entities";
+import {
+  useProjects,
+  useQuietThreadShell,
+  useThreadShell,
+  useVisibleThreadShells,
+} from "../../state/entities";
+import { buildThreadRouteParams } from "../../threadRoutes";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { environmentAtomList, environmentIdsKey } from "../../state/environmentAtomList";
+import { useThreadSearch } from "../../state/queries";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { threadFamilies } from "../../state/threads";
@@ -69,14 +82,44 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { WorktreeBaseBranchPicker } from "../WorktreeBaseBranchPicker";
 import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ConnectionStatusDot, connectionPhaseDotClassName } from "../ConnectionStatusDot";
-import { AuthOrchestrationOperateScope } from "@t3tools/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  clampManagedRuntimeMode,
+  managedCapabilityDenial,
+} from "@t3tools/contracts";
+import { resolvePastedPath } from "@t3tools/shared/path";
+import {
+  isScheduledTaskArchived,
+  SCHEDULED_TASK_FILTERS,
+  scheduledTaskArchiveLabel,
+  scheduledTaskMatchesFilter,
+  scheduledTaskRestoreNeedsEditor,
+  type ScheduledTaskFilter,
+} from "@t3tools/client-runtime/scheduled-task-archive";
+import {
+  localTimeZone,
+  repeatFormToCron,
+  WEEKDAY_NAMES,
+  type RepeatForm,
+  type RepeatPreset,
+} from "@t3tools/client-runtime/scheduled-task-cron";
+import { useAgentLibrary } from "~/hooks/useAgentLibrary";
+import { agentMachineUnavailableReason } from "../agents/agentMachineAvailability";
+import { useManagedPolicy } from "~/state/managedPolicy";
+import { ManagedNotice } from "../ManagedPolicy";
 import { readEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { EnvironmentRow, useEnvironmentTransportLabel } from "./EnvironmentRow";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
+  DEFAULT_CRON_FORM,
   WEBHOOK_SIGNATURE_DEFAULTS,
+  changeDraftProject,
+  moveDraftOffAgent,
+  moveDraftToAgent,
+  moveDraftToThread,
+  scheduledTaskDraftRouting,
   scheduleDraftErrors,
   toDateTimeLocalValue,
   webhookDeliveryLabel,
@@ -84,8 +127,12 @@ import {
   matchesScheduledTaskScope,
   newScheduledTaskEnvironment,
   scheduleFromDraft,
+  scheduleLabel,
   scheduledTaskDefaultModel,
+  scheduledTaskDeletesLabel,
+  WEEKDAY_LABELS,
   taskToDraft,
+  unbindDraftFromThread,
   type DraftState,
   type ScheduleMode,
   type WorkspaceMode,
@@ -97,6 +144,15 @@ import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "..
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import {
+  Combobox,
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxSearchInput,
+  ComboboxTrigger,
+} from "../ui/combobox";
 import {
   Dialog,
   DialogClose,
@@ -113,16 +169,28 @@ import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { searchableSetting } from "./settingsSearch";
 import {
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
   SETTINGS_PICKER_TRIGGER_CLASSNAME,
 } from "./settingsLayout";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0] as const;
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const WEEKDAY_SHORT = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"] as const;
+
+// Thread ids are trimmed, so the leading space keeps this from matching one.
+const NEW_THREAD_DESTINATION = " new-thread";
+
+const REPEAT_PRESETS: Record<RepeatPreset, string> = {
+  daily: "Every day",
+  weekdays: "Weekdays",
+  weekly: "Every week",
+  hourly: "Every hour",
+  custom: "Custom (cron)",
+};
 
 const WORKSPACE_MODE_LABELS: Record<WorkspaceMode, string> = {
   worktree: "Create a new worktree",
@@ -141,9 +209,12 @@ const EMPTY_DRAFT: DraftState = {
   runAt: "",
   savedRunAt: "",
   weekdays: new Set([1, 2, 3, 4, 5]),
-  keptSchedule: null,
+  cron: DEFAULT_CRON_FORM,
+  cronTimezone: "",
   projectId: "",
   threadId: "",
+  profileId: "",
+  threadMode: "new_thread",
   workspaceMode: "worktree",
   baseRef: "main",
   startFromOrigin: true,
@@ -155,7 +226,6 @@ const EMPTY_DRAFT: DraftState = {
   signatureEnabled: false,
   ...WEBHOOK_SIGNATURE_DEFAULTS,
   signatureSecret: "",
-  maxDeliveryAgeMinutes: "",
   replayKey: "",
   coalesceKey: "",
   coalesceWindowSeconds: "",
@@ -289,31 +359,6 @@ function splitModelKey(value: string): ModelSelection | null {
   };
 }
 
-const ONCE_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-export function scheduleLabel(schedule: ScheduledTaskSchedule): string {
-  if (schedule.type === "cron") return `Cron ${schedule.expression} (${schedule.timezone})`;
-  if (schedule.type === "webhook") return "On webhook";
-  if (schedule.type === "once") return `Once, ${ONCE_FORMATTER.format(new Date(schedule.runAt))}`;
-  if (schedule.type === "interval") {
-    const minutes = schedule.everyMs / 60_000;
-    return Number.isInteger(minutes)
-      ? `Every ${minutes} min`
-      : `Every ${Math.round(schedule.everyMs / 1000)} sec`;
-  }
-  const weekdays = schedule.weekdays ?? [];
-  const days =
-    weekdays.length === 0
-      ? "Daily"
-      : weekdays.length === 5 && weekdays.every((day) => day >= 1 && day <= 5)
-        ? "Weekdays"
-        : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
-  return `${days} at ${schedule.timeOfDay}`;
-}
-
 /** formatRelativeTime handles only the past; upcoming runs need future labels. */
 function relativeLabel(value: string | null, nowMs: number): string {
   if (!value) return "Not scheduled";
@@ -359,15 +404,52 @@ function statusVariant(status: ScheduledTask["lastRunStatus"]) {
   return "outline";
 }
 
+type EditorPreset =
+  | { readonly threadId: ThreadId; readonly projectId: ProjectId }
+  | { readonly profileId: string };
+
+interface EditorTarget {
+  readonly environmentId: EnvironmentId;
+  readonly task: ScheduledTask | null;
+  readonly preset?: EditorPreset;
+}
+
 export function ScheduledTasksSettings(target: {
   readonly environmentId?: EnvironmentId;
   readonly taskId?: ScheduledTaskId | undefined;
+  readonly threadId?: ThreadId | undefined;
+}) {
+  const navigate = useNavigate({ from: "/settings/scheduled-tasks" });
+  return (
+    <SettingsPageContainer>
+      <ScheduledTaskList
+        {...target}
+        onLinkClosed={() =>
+          void navigate({
+            to: "/settings/scheduled-tasks",
+            search: ({ taskId: _task, threadId: _thread, ...rest }) => rest,
+            replace: true,
+          })
+        }
+      />
+    </SettingsPageContainer>
+  );
+}
+
+/**
+ * Every scheduled task in the settings scope, with the editor. Settings and the Agents board
+ * both render it. A `taskId`, `threadId` or `profileId` link opens the editor once.
+ */
+export function ScheduledTaskList(target: {
+  readonly environmentId?: EnvironmentId | undefined;
+  readonly taskId?: ScheduledTaskId | undefined;
+  readonly threadId?: ThreadId | undefined;
+  readonly profileId?: string | undefined;
+  readonly initialFilter?: ScheduledTaskFilter;
+  readonly onLinkClosed: () => void;
 }) {
   const { scope, environments, connectedEnvironments, environment } = useSettingsScope();
-  const [editor, setEditor] = useState<{
-    environmentId: EnvironmentId;
-    task: ScheduledTask | null;
-  } | null>(null);
+  const [editor, setEditor] = useState<EditorTarget | null>(null);
   const openForEdit = (environmentId: EnvironmentId, task: ScheduledTask) => {
     setEditor({ environmentId, task });
   };
@@ -394,27 +476,11 @@ export function ScheduledTasksSettings(target: {
       linkedEnvironmentId !== undefined &&
       matchesScheduledTaskScope(scope, linkedEnvironmentId, task.projectId),
   );
-  // A `taskId` link opens its editor once, the first time the task loads. The editor then owns
-  // the session until close, so a disconnect that disables the query cannot drop unsaved edits.
-  // An editor the user already opened wins: a late-loading link must not replace its draft.
-  const [openedLinkTaskId, setOpenedLinkTaskId] = useState<ScheduledTaskId | undefined>();
-  if (target.taskId === undefined && openedLinkTaskId !== undefined) {
-    setOpenedLinkTaskId(undefined);
-  }
-  if (linkedTask && linkedEnvironmentId !== undefined && openedLinkTaskId !== target.taskId) {
-    setOpenedLinkTaskId(target.taskId);
-    if (editor === null) setEditor({ environmentId: linkedEnvironmentId, task: linkedTask });
-  }
-  const navigate = useNavigate({ from: "/settings/scheduled-tasks" });
-  const closeEditor = () => {
-    setEditor(null);
-    if (target.taskId === undefined) return;
-    void navigate({
-      to: "/settings/scheduled-tasks",
-      search: ({ taskId: _closed, ...rest }) => rest,
-      replace: true,
-    });
-  };
+  const linkedThread = useQuietThreadShell(
+    target.threadId !== undefined && linkedEnvironmentId !== undefined
+      ? scopeThreadRef(linkedEnvironmentId, target.threadId)
+      : null,
+  );
   const createPermissions = useAtomValue(
     scheduledTaskCreatePermissionsAtom(
       environmentIdsKey(connectedEnvironments.map((entry) => entry.environmentId)),
@@ -427,10 +493,81 @@ export function ScheduledTasksSettings(target: {
     permittedEnvironments.find(
       (entry) => entry.environmentId === defaultEnvironment?.environmentId,
     ) ?? permittedEnvironments[0];
+  const { profiles } = useAgentLibrary();
+  const providersByEnvironment = useEnvironmentProviders();
+  const linkedProfile = profiles.find((profile) => profile.profileId === target.profileId);
+  // An agent's task starts on a machine that can run that agent, when one is connected.
+  const agentEnvironment = linkedProfile
+    ? (permittedEnvironments.find(
+        (entry) =>
+          agentMachineUnavailableReason(linkedProfile, {
+            ...entry,
+            providers: providersByEnvironment.get(entry.environmentId),
+          }) === undefined,
+      ) ?? creationEnvironment)
+    : undefined;
+  const linkKey =
+    target.taskId ??
+    (target.threadId !== undefined
+      ? `thread:${target.threadId}`
+      : target.profileId !== undefined
+        ? `agent:${target.profileId}`
+        : undefined);
+  const linkEditor: EditorTarget | null =
+    linkedTask && linkedEnvironmentId !== undefined
+      ? { environmentId: linkedEnvironmentId, task: linkedTask }
+      : target.threadId !== undefined &&
+          linkedThread &&
+          permittedEnvironments.some((entry) => entry.environmentId === linkedEnvironmentId)
+        ? {
+            environmentId: linkedThread.environmentId,
+            task: null,
+            preset: { threadId: target.threadId, projectId: linkedThread.projectId },
+          }
+        : linkedProfile && agentEnvironment
+          ? {
+              environmentId: agentEnvironment.environmentId,
+              task: null,
+              preset: { profileId: linkedProfile.profileId },
+            }
+          : null;
+  // A link opens its editor once, the first time its target loads. The editor then owns the
+  // session until close, so a disconnect that disables the query cannot drop unsaved edits.
+  // An editor the user already opened wins: a late-loading link must not replace its draft.
+  const [openedLink, setOpenedLink] = useState<string | undefined>();
+  if (linkKey === undefined && openedLink !== undefined) {
+    setOpenedLink(undefined);
+  }
+  if (linkEditor && linkKey !== undefined && openedLink !== linkKey) {
+    setOpenedLink(linkKey);
+    if (editor === null) setEditor(linkEditor);
+  }
+  const closeEditor = () => {
+    setEditor(null);
+    if (linkKey !== undefined) target.onLinkClosed();
+  };
+  const [filter, setFilter] = useState<ScheduledTaskFilter>(target.initialFilter ?? "all");
+  const listQueries = useAtomValue(
+    scheduledTasksListAtom(
+      environmentIdsKey(connectedEnvironments.map((entry) => entry.environmentId)),
+    ),
+  );
+  const archivedCount = listQueries.reduce((count, query, index) => {
+    const environmentId = connectedEnvironments[index]!.environmentId;
+    const tasks = AsyncResult.getOrElse(query, () => null)?.tasks ?? [];
+    return (
+      count +
+      tasks.filter(
+        (task) =>
+          isScheduledTaskArchived(task) &&
+          matchesScheduledTaskScope(scope, environmentId, task.projectId),
+      ).length
+    );
+  }, 0);
   return (
-    <SettingsPageContainer>
+    <>
       <SettingsSection
-        title="Scheduled tasks"
+        {...searchableSetting("scheduled-tasks")}
         variant="plain"
         headerAction={
           <Button
@@ -447,6 +584,24 @@ export function ScheduledTasksSettings(target: {
           </Button>
         }
       >
+        <div className="px-3 pb-2 sm:px-4">
+          <ToggleGroup
+            aria-label="Show tasks"
+            className="max-w-full flex-wrap"
+            value={[filter]}
+            onValueChange={(values) => {
+              const next = SCHEDULED_TASK_FILTERS.find((option) => option.value === values[0]);
+              if (next) setFilter(next.value);
+            }}
+          >
+            {SCHEDULED_TASK_FILTERS.map((option) => (
+              <Toggle key={option.value} value={option.value}>
+                {option.label}
+                {option.value === "archived" && archivedCount > 0 ? ` (${archivedCount})` : ""}
+              </Toggle>
+            ))}
+          </ToggleGroup>
+        </div>
         {scope.kind === "unavailable" ? (
           <SettingsSection title="Unavailable selection">
             <SettingsRow title={scope.message} />
@@ -463,6 +618,8 @@ export function ScheduledTasksSettings(target: {
           </Empty>
         ) : environments.length > 1 ? (
           <ScheduledTaskEnvironmentList
+            filter={filter}
+            profiles={profiles}
             environmentId={linkedEnvironmentId}
             taskId={target.taskId}
             onEdit={openForEdit}
@@ -472,6 +629,8 @@ export function ScheduledTasksSettings(target: {
             {environments.map((entry) => (
               <ScheduledTaskEnvironmentSection
                 key={entry.environmentId}
+                filter={filter}
+                profiles={profiles}
                 environment={entry}
                 taskId={linkedEnvironmentId === entry.environmentId ? target.taskId : undefined}
                 onEdit={openForEdit}
@@ -485,10 +644,11 @@ export function ScheduledTasksSettings(target: {
           key={`${editor.environmentId}:${editor.task?.id ?? "new"}`}
           initialEnvironmentId={editor.environmentId}
           task={editor.task}
+          preset={editor.preset}
           onClose={closeEditor}
         />
       ) : null}
-    </SettingsPageContainer>
+    </>
   );
 }
 
@@ -502,10 +662,14 @@ const scheduledTasksListAtom = environmentAtomList("web-scheduled-tasks-list", (
 );
 
 function ScheduledTaskEnvironmentList({
+  filter,
+  profiles,
   environmentId,
   taskId,
   onEdit,
 }: {
+  readonly filter: ScheduledTaskFilter;
+  readonly profiles: ReadonlyArray<McpGatewayProfile>;
   readonly environmentId: EnvironmentId | undefined;
   readonly taskId: ScheduledTaskId | undefined;
   readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
@@ -524,6 +688,7 @@ function ScheduledTaskEnvironmentList({
     return {
       environment,
       connected: index >= 0,
+      timeZone: data?.timeZone,
       tasks: data?.tasks.filter((task) =>
         matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
       ),
@@ -533,8 +698,13 @@ function ScheduledTaskEnvironmentList({
   const linkedState = states.find((state) => state.environment.environmentId === environmentId);
   const linkedTask = linkedState?.tasks?.find((task) => task.id === taskId);
 
-  const loaded = states.filter((state) => state.connected && state.error === null && state.tasks);
-  const populated = loaded.filter((state) => state.tasks && state.tasks.length > 0);
+  const loaded = states
+    .filter((state) => state.connected && state.error === null && state.tasks)
+    .map((state) => ({
+      ...state,
+      tasks: (state.tasks ?? []).filter((task) => scheduledTaskMatchesFilter(task, filter)),
+    }));
+  const populated = loaded.filter((state) => state.tasks.length > 0);
   const summaries: Record<string, string[]> = {
     "Not connected:": [],
     "Loading scheduled tasks on": [],
@@ -551,14 +721,17 @@ function ScheduledTaskEnvironmentList({
       summaries["Could not load scheduled tasks:"]!.push(`${label}: ${error}`);
     } else if (!tasks) {
       summaries["Loading scheduled tasks on"]!.push(label);
-    } else if (tasks.length === 0 && populated.length > 0) {
+    } else if (
+      !tasks.some((task) => scheduledTaskMatchesFilter(task, filter)) &&
+      populated.length > 0
+    ) {
       summaries["No tasks on"]!.push(label);
     }
   }
 
   return (
     <SettingsGroup>
-      {populated.map(({ environment, tasks }) => {
+      {populated.map(({ environment, tasks, timeZone }) => {
         const { primary, secondary } = settingsScopeEnvironmentLabels(environment, environments);
         return (
           <div key={environment.environmentId} className="divide-y divide-border/50">
@@ -577,11 +750,13 @@ function ScheduledTaskEnvironmentList({
                 {connectionStatusTitle(environment.connection)}
               </span>
             </EnvironmentRow>
-            {tasks?.map((task) => (
+            {tasks.map((task) => (
               <ScheduledTaskRow
                 key={task.id}
                 environmentId={environment.environmentId}
                 task={task}
+                profiles={profiles}
+                timeZone={timeZone}
                 onEdit={() => onEdit(environment.environmentId, task)}
               />
             ))}
@@ -595,12 +770,7 @@ function ScheduledTaskEnvironmentList({
           role="status"
         />
       ) : null}
-      {populated.length === 0 && loaded.length > 0 ? (
-        <SettingsRow
-          title="No scheduled tasks"
-          description="No tasks match this environment and project selection."
-        />
-      ) : null}
+      {populated.length === 0 && loaded.length > 0 ? <EmptyTasksRow filter={filter} /> : null}
       {Object.entries(summaries).map(([label, entries]) => {
         if (entries.length === 0) return null;
         const summary = `${label} ${entries.join(", ")}`;
@@ -643,10 +813,14 @@ function ScheduledTaskEnvironmentSubtitle({
 }
 
 function ScheduledTaskEnvironmentSection({
+  filter,
+  profiles,
   environment,
   taskId,
   onEdit,
 }: {
+  readonly filter: ScheduledTaskFilter;
+  readonly profiles: ReadonlyArray<McpGatewayProfile>;
   readonly environment: EnvironmentPresentation;
   readonly taskId?: ScheduledTaskId | undefined;
   readonly onEdit: (environmentId: EnvironmentId, task: ScheduledTask) => void;
@@ -666,6 +840,7 @@ function ScheduledTaskEnvironmentSection({
     matchesScheduledTaskScope(scope, environment.environmentId, task.projectId),
   );
   const linkedTask = tasks?.find((task) => task.id === taskId);
+  const shown = tasks?.filter((task) => scheduledTaskMatchesFilter(task, filter));
   return (
     <SettingsSection
       title={environment.label}
@@ -684,7 +859,7 @@ function ScheduledTaskEnvironmentSection({
         />
       ) : tasksQuery.error ? (
         <SettingsRow title="Could not load scheduled tasks" description={tasksQuery.error} />
-      ) : !tasks ? (
+      ) : !tasks || !shown ? (
         <SettingsRow title="Loading scheduled tasks…" role="status" />
       ) : (
         <>
@@ -695,17 +870,16 @@ function ScheduledTaskEnvironmentSection({
               role="status"
             />
           ) : null}
-          {tasks.length === 0 ? (
-            <SettingsRow
-              title="No scheduled tasks"
-              description="No tasks match this environment and project selection."
-            />
+          {shown.length === 0 ? (
+            <EmptyTasksRow filter={filter} />
           ) : (
-            tasks.map((task) => (
+            shown.map((task) => (
               <ScheduledTaskRow
                 key={task.id}
                 environmentId={environment.environmentId}
                 task={task}
+                profiles={profiles}
+                timeZone={tasksQuery.data?.timeZone}
                 onEdit={() => onEdit(environment.environmentId, task)}
               />
             ))
@@ -716,13 +890,35 @@ function ScheduledTaskEnvironmentSection({
   );
 }
 
+function EmptyTasksRow({ filter }: { readonly filter: ScheduledTaskFilter }) {
+  return filter === "archived" ? (
+    <SettingsRow
+      title="No archived tasks"
+      description="Tasks that stay paused, keep failing, or finish their one-time run are archived here."
+    />
+  ) : (
+    <SettingsRow
+      title="No scheduled tasks"
+      description={
+        filter === "all"
+          ? "No tasks match this environment and project selection."
+          : "No tasks match this filter and selection."
+      }
+    />
+  );
+}
+
 function ScheduledTaskRow({
   environmentId,
   task,
+  profiles,
+  timeZone,
   onEdit,
 }: {
   readonly environmentId: EnvironmentId;
   readonly task: ScheduledTask;
+  readonly profiles: ReadonlyArray<McpGatewayProfile>;
+  readonly timeZone: string | undefined;
   readonly onEdit: () => void;
 }) {
   const canOperate = useAtomValue(
@@ -731,6 +927,7 @@ function ScheduledTaskRow({
   const [busy, setBusy] = useState(false);
   const [deliveriesOpen, setDeliveriesOpen] = useState(false);
   const isWebhook = task.schedule.type === "webhook";
+  const archived = isScheduledTaskArchived(task);
   const toggle = useAtomCommand(serverEnvironment.setScheduledTaskEnabled, {
     label: "scheduled task enabled",
   });
@@ -740,11 +937,15 @@ function ScheduledTaskRow({
   const remove = useAtomCommand(serverEnvironment.deleteScheduledTask, {
     label: "scheduled task delete",
   });
-  const act = async (action: "toggle" | "run" | "delete") => {
+  const act = async (action: "toggle" | "restore" | "run" | "delete") => {
     if (busy || !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+    if (action === "restore" && scheduledTaskRestoreNeedsEditor(task, Date.now())) {
+      onEdit();
+      return;
+    }
     setBusy(true);
     const result =
-      action === "toggle"
+      action === "toggle" || action === "restore"
         ? await toggle({ environmentId, input: { id: task.id, enabled: !task.enabled } })
         : action === "run"
           ? await run({ environmentId, input: { id: task.id } })
@@ -767,8 +968,15 @@ function ScheduledTaskRow({
       status={
         <div className="flex flex-wrap items-center gap-2">
           <span>
-            {scheduleLabel(task.schedule)} ·{" "}
-            {!task.enabled ? (
+            {scheduleLabel(task.schedule, timeZone, task.nextRunAt)} ·{" "}
+            {archived ? (
+              <>
+                {scheduledTaskArchiveLabel(task)}
+                {scheduledTaskDeletesLabel(task) ? ` · ${scheduledTaskDeletesLabel(task)}` : null}
+              </>
+            ) : task.blockedByPolicy !== undefined ? (
+              task.blockedByPolicy
+            ) : !task.enabled ? (
               "Paused"
             ) : isWebhook ? (
               "Listening"
@@ -783,17 +991,38 @@ function ScheduledTaskRow({
           {task.lastRunStatus !== "never" ? (
             <Badge variant={statusVariant(task.lastRunStatus)}>{task.lastRunStatus}</Badge>
           ) : null}
+          {task.profileId !== undefined ? (
+            <Badge variant="outline">
+              {profiles.find((profile) => profile.profileId === task.profileId)?.name ??
+                "Agent unavailable"}
+            </Badge>
+          ) : null}
+          {task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread" ? (
+            <ScheduledTaskThreadLink environmentId={environmentId} threadId={task.threadId} />
+          ) : null}
           {task.lastRunError ? <span className="text-destructive">{task.lastRunError}</span> : null}
         </div>
       }
       control={
         <div className="flex items-center gap-2">
-          <Switch
-            checked={task.enabled}
-            disabled={busy || !canOperate}
-            aria-label={`Enable ${task.title}`}
-            onCheckedChange={() => void act("toggle")}
-          />
+          {archived ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={busy || !canOperate}
+              onClick={() => void act("restore")}
+            >
+              <ArchiveRestoreIcon />
+              Restore
+            </Button>
+          ) : (
+            <Switch
+              checked={task.enabled}
+              disabled={busy || !canOperate}
+              aria-label={`Enable ${task.title}`}
+              onCheckedChange={() => void act("toggle")}
+            />
+          )}
           <Menu>
             <MenuTrigger
               render={
@@ -817,7 +1046,7 @@ function ScheduledTaskRow({
                   <InboxIcon />
                   Deliveries
                 </MenuItem>
-              ) : (
+              ) : archived ? null : (
                 <MenuItem onClick={() => void act("run")}>
                   <PlayIcon />
                   Run now
@@ -840,6 +1069,26 @@ function ScheduledTaskRow({
         </div>
       }
     />
+  );
+}
+
+function ScheduledTaskThreadLink({
+  environmentId,
+  threadId,
+}: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const ref = scopeThreadRef(environmentId, threadId);
+  const title = useQuietThreadShell(ref)?.title.trim();
+  return (
+    <Link
+      to="/$environmentId/$threadId"
+      params={buildThreadRouteParams(ref)}
+      className="max-w-64 truncate underline underline-offset-2 hover:text-foreground"
+    >
+      {title || "Open thread"}
+    </Link>
   );
 }
 
@@ -1088,33 +1337,25 @@ function WebhookEndpointField({
         </Button>
       </div>
       {note !== null ? <p className="text-xs text-muted-foreground">{note}</p> : null}
-      {endpoint.url !== null ? <WebhookDeliveryMode environmentId={environmentId} /> : null}
+      {endpoint.url !== null ? (
+        <p className="text-xs text-muted-foreground">
+          Reachable only from devices on your tailnet. Services outside it, such as GitHub or
+          Linear, cannot call it, and requests fail while this environment is offline.
+        </p>
+      ) : null}
     </div>
-  );
-}
-
-function WebhookDeliveryMode({ environmentId }: { readonly environmentId: EnvironmentId }) {
-  const cloudLink = usePrimaryCloudLinkState();
-  if (cloudLink.target?.environmentId !== environmentId || cloudLink.data === null) return null;
-  return (
-    <p className="text-xs text-muted-foreground">
-      {cloudLink.data.holdWebhooksWhileOffline
-        ? "Held for up to 24 hours while this environment is offline. "
-        : "Forwarded live. Requests fail while this environment is offline. "}
-      <Link to="/settings/connections" className="underline underline-offset-2">
-        Change in Environments
-      </Link>
-    </p>
   );
 }
 
 function ScheduledTaskEditorDialog({
   initialEnvironmentId,
   task,
+  preset,
   onClose,
 }: {
   readonly initialEnvironmentId: EnvironmentId;
   readonly task: ScheduledTask | null;
+  readonly preset: EditorPreset | undefined;
   readonly onClose: () => void;
 }) {
   const [saving, setSaving] = useState(false);
@@ -1130,6 +1371,7 @@ function ScheduledTaskEditorDialog({
         <ScheduledTaskEditorForm
           initialEnvironmentId={initialEnvironmentId}
           task={task}
+          preset={preset}
           saving={saving}
           onSavingChange={setSaving}
           onClose={onClose}
@@ -1139,13 +1381,46 @@ function ScheduledTaskEditorDialog({
   );
 }
 
+const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
+  new_thread: "New thread each run",
+  continue: "One thread, continuing the conversation",
+  fresh_session: "One thread, fresh session each run",
+};
+
+const AGENT_DESTINATION = "agent";
+
 function ScheduledTaskDestination({
   environmentId,
+  projectId,
   threadId,
+  threadMode,
+  profiles,
+  profileId,
+  agentUnavailableReason,
+  disabled,
+  onSelect,
+  onThreadModeChange,
+  onAgentChange,
 }: {
   readonly environmentId: EnvironmentId;
+  readonly projectId: string;
   readonly threadId: ThreadId | null;
+  readonly threadMode: ScheduledTaskThreadMode;
+  /** Agents that can run scheduled tasks. */
+  readonly profiles: ReadonlyArray<McpGatewayProfile>;
+  /** Empty when runs do not go to an agent. */
+  readonly profileId: string;
+  readonly agentUnavailableReason: string | undefined;
+  readonly disabled: boolean;
+  readonly onSelect: (thread: { id: ThreadId; projectId: ProjectId } | null) => void;
+  /** Absent on servers that predate thread modes. */
+  readonly onThreadModeChange: ((mode: ScheduledTaskThreadMode) => void) | undefined;
+  readonly onAgentChange: (profileId: string) => void;
 }) {
+  const toAgent = profileId !== "";
+  const profile = profiles.find((item) => item.profileId === profileId);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const ref = threadId === null ? null : scopeThreadRef(environmentId, threadId);
   const shell = useThreadShell(ref);
   // The shell can omit older settled threads; their family read still carries the title.
@@ -1153,33 +1428,290 @@ function ScheduledTaskDestination({
     ref !== null && shell === null ? threadFamilies.familyAtom(environmentId, ref.threadId) : null,
   );
   const thread = shell ?? family.data?.threads.find((row) => row.id === threadId);
+  const currentLabel =
+    ref !== null
+      ? thread?.title.trim() || `Thread ${ref.threadId}`
+      : threadMode === "new_thread"
+        ? "New thread each run"
+        : "Started by the first run";
+  const shells = useVisibleThreadShells(open);
+  // Mounts older settled threads matching the query, which shells may leave out.
+  useThreadSearch(open && projectId ? [environmentId] : [], query, {
+    titlesOnly: true,
+    projectIds: [projectId as ProjectId],
+  });
+  const threads = scheduledTaskDestinationThreads(shells, {
+    environmentId,
+    projectId,
+    currentThreadId: threadId,
+    query,
+  });
+  const search = query.trim().toLocaleLowerCase();
+  const items: ReadonlyArray<string> = [
+    ...(search ? [] : [NEW_THREAD_DESTINATION]),
+    ...(threadId !== null && currentLabel.toLocaleLowerCase().includes(search) ? [threadId] : []),
+    ...threads.map((row) => row.id),
+  ];
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next) setQuery("");
+  };
+  const detail = toAgent
+    ? threadId === null
+      ? "The first run starts a thread for this agent. Later runs post there. The agent's model and permission mode apply."
+      : "Each run posts to this agent's thread. The agent's model and permission mode apply."
+    : threadMode === "new_thread"
+      ? "Each run starts a new thread with the workspace and model below."
+      : ref === null
+        ? threadMode === "continue"
+          ? "The first run starts a thread with the workspace and model below. Later runs continue that conversation."
+          : "The first run starts a thread with the workspace and model below. Later runs post there, each in a fresh session without earlier runs' context."
+        : threadMode === "continue"
+          ? "Each run continues this conversation, in its workspace and with its current model."
+          : "Each run starts a fresh session in this thread, without earlier runs' context.";
   return (
-    <Field label="Destination">
-      {ref === null ? (
-        <p className="text-sm text-muted-foreground">
-          Each run starts a new thread with the workspace and model below.
-        </p>
-      ) : (
-        <div className="space-y-1 text-sm">
-          <p className="wrap-anywhere">{thread?.title.trim() || `Thread ${ref.threadId}`}</p>
-          <p className="text-muted-foreground">
-            Each run continues this conversation, in its workspace and with its current model.
+    <Field label="Destination" htmlFor="scheduled-task-destination">
+      {onThreadModeChange || toAgent ? (
+        <Select
+          value={toAgent ? AGENT_DESTINATION : threadMode}
+          onValueChange={(value) => {
+            if (value === AGENT_DESTINATION) {
+              const first = profiles[0];
+              if (!toAgent && first) onAgentChange(first.profileId);
+              return;
+            }
+            onThreadModeChange?.(value as ScheduledTaskThreadMode);
+          }}
+        >
+          <SelectTrigger size="sm" id="scheduled-task-destination">
+            <SelectValue>
+              {toAgent ? "An agent's thread" : THREAD_MODE_LABELS[threadMode]}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            {profiles.length > 0 || toAgent ? (
+              <SelectItem value={AGENT_DESTINATION}>An agent's thread</SelectItem>
+            ) : null}
+            {onThreadModeChange
+              ? (Object.keys(THREAD_MODE_LABELS) as ScheduledTaskThreadMode[]).map((mode) => (
+                  <SelectItem key={mode} value={mode}>
+                    {THREAD_MODE_LABELS[mode]}
+                  </SelectItem>
+                ))
+              : null}
+          </SelectPopup>
+        </Select>
+      ) : null}
+      {toAgent ? (
+        <Select value={profileId} onValueChange={(value) => value && onAgentChange(value)}>
+          <SelectTrigger size="sm" aria-label="Agent" disabled={disabled}>
+            <SelectValue>{profile?.name ?? "Agent unavailable"}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            {profiles.map((item) => (
+              <SelectItem key={item.profileId} value={item.profileId} label={item.name}>
+                {item.name}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      ) : !onThreadModeChange || threadMode !== "new_thread" ? (
+        <Combobox
+          items={items}
+          filteredItems={items}
+          filter={null}
+          autoHighlight
+          open={open && !disabled}
+          onOpenChange={handleOpenChange}
+          value={threadId ?? (threadMode === "new_thread" ? NEW_THREAD_DESTINATION : null)}
+          onValueChange={(value) => {
+            if (value === NEW_THREAD_DESTINATION) {
+              onSelect(null);
+              handleOpenChange(false);
+              return;
+            }
+            const picked = threads.find((row) => row.id === value);
+            if (picked) onSelect(picked);
+            handleOpenChange(false);
+          }}
+        >
+          <ComboboxTrigger
+            id={
+              onThreadModeChange
+                ? "scheduled-task-destination-thread"
+                : "scheduled-task-destination"
+            }
+            aria-label={onThreadModeChange ? "Destination thread" : undefined}
+            disabled={disabled}
+            render={<Button variant="outline" size="sm" />}
+            className="w-full justify-between"
+          >
+            <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 flex-1 truncate text-left">{currentLabel}</span>
+            <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+          </ComboboxTrigger>
+          <ComboboxPopup align="start" side="bottom" className="w-80">
+            <ComboboxSearchInput
+              aria-label="Search threads"
+              placeholder="Search all threads..."
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+            <ComboboxEmpty>No threads found.</ComboboxEmpty>
+            <ComboboxList className="max-h-72">
+              {items.map((value, index) => (
+                <ComboboxItem key={value} index={index} value={value}>
+                  <span className="block truncate">
+                    {value === NEW_THREAD_DESTINATION
+                      ? "New thread each run"
+                      : value === threadId
+                        ? currentLabel
+                        : threads.find((row) => row.id === value)?.title || "Untitled thread"}
+                  </span>
+                </ComboboxItem>
+              ))}
+            </ComboboxList>
+          </ComboboxPopup>
+        </Combobox>
+      ) : null}
+      <div className="space-y-1 text-sm">
+        {toAgent && profile && agentUnavailableReason !== undefined ? (
+          <p className="text-destructive" role="status">
+            {`${profile.name} can't run here: ${agentUnavailableReason}`}
           </p>
-        </div>
-      )}
+        ) : null}
+        <p className="text-muted-foreground">{detail}</p>
+        {threadMode !== "new_thread" ? (
+          <p className="text-muted-foreground">Deleting the thread also deletes this task.</p>
+        ) : null}
+      </div>
     </Field>
+  );
+}
+
+function CronScheduleFields({
+  form,
+  timezone,
+  onFormChange,
+  onTimezoneChange,
+}: {
+  readonly form: RepeatForm;
+  readonly timezone: string;
+  readonly onFormChange: (form: RepeatForm) => void;
+  readonly onTimezoneChange: (timezone: string) => void;
+}) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <Field label="Repeat" htmlFor="scheduled-task-cron-preset">
+        <Select
+          value={form.preset}
+          onValueChange={(value) => {
+            const preset = (Object.keys(REPEAT_PRESETS) as RepeatPreset[]).find(
+              (option) => option === value,
+            );
+            if (!preset) return;
+            onFormChange({
+              ...form,
+              preset,
+              expression: preset === "custom" ? repeatFormToCron(form) : form.expression,
+            });
+          }}
+        >
+          <SelectTrigger size="sm" id="scheduled-task-cron-preset">
+            <SelectValue>{REPEAT_PRESETS[form.preset]}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup>
+            {(Object.keys(REPEAT_PRESETS) as RepeatPreset[]).map((preset) => (
+              <SelectItem key={preset} value={preset}>
+                {REPEAT_PRESETS[preset]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      </Field>
+      {form.preset === "custom" ? (
+        <Field
+          label="Cron expression"
+          hint="minute hour day month weekday"
+          htmlFor="scheduled-task-cron-expression"
+        >
+          <Input
+            id="scheduled-task-cron-expression"
+            placeholder="0 7 * * 1-5"
+            value={form.expression}
+            onChange={(event) => onFormChange({ ...form, expression: event.target.value })}
+          />
+        </Field>
+      ) : form.preset === "hourly" ? (
+        <Field label="Minute past the hour" htmlFor="scheduled-task-cron-minute">
+          <Input
+            id="scheduled-task-cron-minute"
+            type="number"
+            nativeInput
+            min={0}
+            max={59}
+            value={Number(form.time.slice(3))}
+            onChange={(event) =>
+              onFormChange({
+                ...form,
+                time: `00:${String(Math.min(59, Math.max(0, event.target.valueAsNumber || 0))).padStart(2, "0")}`,
+              })
+            }
+          />
+        </Field>
+      ) : (
+        <Field label="Time" htmlFor="scheduled-task-cron-time">
+          <Input
+            id="scheduled-task-cron-time"
+            type="time"
+            nativeInput
+            value={form.time}
+            onChange={(event) => onFormChange({ ...form, time: event.target.value })}
+          />
+        </Field>
+      )}
+      {form.preset === "weekly" ? (
+        <Field label="Day" htmlFor="scheduled-task-cron-day">
+          <Select
+            value={String(form.weekday)}
+            onValueChange={(value) => onFormChange({ ...form, weekday: Number(value) })}
+          >
+            <SelectTrigger size="sm" id="scheduled-task-cron-day">
+              <SelectValue>{WEEKDAY_NAMES[form.weekday]}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup>
+              {WEEKDAY_NAMES.map((name, index) => (
+                <SelectItem key={name} value={String(index)}>
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </Field>
+      ) : null}
+      <Field label="Time zone" htmlFor="scheduled-task-cron-timezone">
+        <Input
+          id="scheduled-task-cron-timezone"
+          placeholder={localTimeZone()}
+          value={timezone}
+          onChange={(event) => onTimezoneChange(event.target.value)}
+        />
+      </Field>
+    </div>
   );
 }
 
 function ScheduledTaskEditorForm({
   initialEnvironmentId,
   task,
+  preset,
   saving,
   onSavingChange: setSaving,
   onClose,
 }: {
   readonly initialEnvironmentId: EnvironmentId;
   readonly task: ScheduledTask | null;
+  readonly preset: EditorPreset | undefined;
   readonly saving: boolean;
   readonly onSavingChange: (saving: boolean) => void;
   readonly onClose: () => void;
@@ -1191,6 +1723,8 @@ function ScheduledTaskEditorForm({
   const offersOnce =
     environment?.serverConfig?.environment.capabilities.oneTimeSchedules === true ||
     task?.schedule.type === "once";
+  const offersThreadModes =
+    environment?.serverConfig?.environment.capabilities.scheduledTaskThreadModes === true;
   const connected =
     environment?.connection.phase === "connected" && environment.serverConfig !== null;
   const tasksQuery = useEnvironmentQuery(
@@ -1211,14 +1745,28 @@ function ScheduledTaskEditorForm({
   const upsertTask = useAtomCommand(serverEnvironment.upsertScheduledTask, {
     label: "scheduled task upsert",
   });
-  const [draft, setDraft] = useState<DraftState>(() =>
-    task
-      ? taskToDraft(task)
-      : {
-          ...EMPTY_DRAFT,
-          projectId: defaultScheduledTaskProjectId(scopedProjects, scope),
-        },
+  const webhookDenial = managedCapabilityDenial(useManagedPolicy(environmentId), "webhookTasks");
+  const { profiles } = useAgentLibrary();
+  const [draft, setDraft] = useState<DraftState>(() => {
+    if (task) return taskToDraft(task);
+    const empty = {
+      ...EMPTY_DRAFT,
+      cronTimezone: localTimeZone(),
+      projectId: defaultScheduledTaskProjectId(scopedProjects, scope),
+    };
+    if (preset === undefined) return empty;
+    return "profileId" in preset
+      ? moveDraftToAgent(empty, preset.profileId, null)
+      : moveDraftToThread(empty, { id: preset.threadId, projectId: preset.projectId });
+  });
+  const agentProfiles = profiles.filter(
+    (profile) => profile.runtimeMode !== "read-only" || profile.profileId === draft.profileId,
   );
+  const draftProfile = profiles.find((profile) => profile.profileId === draft.profileId);
+  const agentUnavailableReason =
+    draftProfile && environment
+      ? agentMachineUnavailableReason(draftProfile, { ...environment, providers })
+      : undefined;
   // Pinned first. The chosen project stays listed after it is archived.
   const projects = scopedProjects
     .filter(
@@ -1233,6 +1781,7 @@ function ScheduledTaskEditorForm({
     draft.editingId !== null &&
     tasksQuery.data !== null &&
     !tasksQuery.data.tasks.some((entry) => entry.id === draft.editingId);
+  const runAtZone = scheduleTimeZoneLabel(tasksQuery.data?.timeZone);
   const liveTask = tasksQuery.data
     ? (tasksQuery.data.tasks.find((entry) => entry.id === draft.editingId) ?? null)
     : task;
@@ -1286,9 +1835,14 @@ function ScheduledTaskEditorForm({
       !draft.title.trim() ||
       !draft.prompt.trim() ||
       !projects.some((project) => project.id === selectedProjectId) ||
-      selection === null
+      (draft.profileId === "" && selection === null)
     ) {
-      reportFailure("Scheduled task is incomplete", "Add a title, prompt, project, and model.");
+      reportFailure(
+        "Scheduled task is incomplete",
+        draft.profileId === ""
+          ? "Add a title, prompt, project, and model."
+          : "Add a title, prompt, and project.",
+      );
       return;
     }
     const parsedFilters = parseWebhookFilterDrafts(draft.filters);
@@ -1321,7 +1875,7 @@ function ScheduledTaskEditorForm({
     if (schedule.type === "once" && !offersOnce) {
       reportFailure(
         "Once is not available here",
-        "This environment runs an older T3 Code. Update it to schedule a one-time task, or pick another schedule.",
+        `This environment runs an older ${APP_NAME}. Update it to schedule a one-time task, or pick another schedule.`,
       );
       return;
     }
@@ -1329,12 +1883,22 @@ function ScheduledTaskEditorForm({
       reportFailure("Checkout path is required", "Enter the path of the checkout to run in.");
       return;
     }
-    const modelSelection =
-      draft.baseModelSelection !== null &&
-      draft.baseModelSelection.instanceId === selection.instanceId &&
-      draft.baseModelSelection.model === selection.model
-        ? draft.baseModelSelection
-        : selection;
+    const routing = scheduledTaskDraftRouting(draft, task, {
+      profiles,
+      providers,
+      offersThreadModes,
+      modelSelection:
+        selection !== null &&
+        draft.baseModelSelection !== null &&
+        draft.baseModelSelection.instanceId === selection.instanceId &&
+        draft.baseModelSelection.model === selection.model
+          ? draft.baseModelSelection
+          : selection,
+    });
+    if (typeof routing === "string") {
+      reportFailure("Could not save scheduled task", routing);
+      return;
+    }
     const workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy =
       draft.workspaceMode === "root"
         ? { type: "root" }
@@ -1352,11 +1916,12 @@ function ScheduledTaskEditorForm({
       enabled: draft.enabled,
       schedule,
       projectId: selectedProjectId as ProjectId,
-      threadId: draft.threadId ? (draft.threadId as ThreadId) : null,
       workspaceStrategy,
-      modelSelection,
-      runtimeMode: draft.runtimeMode,
-      interactionMode: draft.interactionMode,
+      ...routing,
+      // Tasks have no mode picker; a mode above the administrator's ceiling would fail every run.
+      runtimeMode:
+        clampManagedRuntimeMode(environment?.serverConfig?.managedPolicy, routing.runtimeMode) ??
+        routing.runtimeMode,
       creationSource: "web",
     };
     // Lock before React renders, and keep successful creates locked until the form closes.
@@ -1399,7 +1964,7 @@ function ScheduledTaskEditorForm({
                 if (!next) return;
                 setEnvironmentId(next.environmentId);
                 setDraft((current) => ({
-                  ...current,
+                  ...unbindDraftFromThread(current),
                   projectId: defaultScheduledTaskProjectId(projectsOn(next.environmentId), scope),
                   modelKey: "",
                   baseModelSelection: null,
@@ -1475,7 +2040,37 @@ function ScheduledTaskEditorForm({
 
           <ScheduledTaskDestination
             environmentId={environmentId}
+            projectId={selectedProjectId}
             threadId={draft.threadId ? (draft.threadId as ThreadId) : null}
+            threadMode={draft.threadMode}
+            profiles={agentProfiles}
+            profileId={draft.profileId}
+            agentUnavailableReason={agentUnavailableReason}
+            disabled={saving || !connected}
+            onSelect={(thread) =>
+              setDraft((current) =>
+                thread === null
+                  ? { ...unbindDraftFromThread(current), threadMode: "new_thread" }
+                  : moveDraftToThread(current, thread),
+              )
+            }
+            onThreadModeChange={
+              offersThreadModes
+                ? (threadMode) =>
+                    setDraft((current) => {
+                      const offAgent = moveDraftOffAgent(current);
+                      return {
+                        ...(threadMode === "new_thread"
+                          ? unbindDraftFromThread(offAgent)
+                          : offAgent),
+                        threadMode,
+                      };
+                    })
+                : undefined
+            }
+            onAgentChange={(profileId) =>
+              setDraft((current) => moveDraftToAgent(current, profileId, task))
+            }
           />
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -1483,7 +2078,7 @@ function ScheduledTaskEditorForm({
               <Select
                 value={selectedProjectId}
                 onValueChange={(projectId) =>
-                  setDraft((current) => ({ ...current, projectId: projectId ?? "" }))
+                  setDraft((current) => changeDraftProject(current, projectId ?? ""))
                 }
               >
                 <SelectTrigger size="sm" id="scheduled-task-project">
@@ -1554,7 +2149,10 @@ function ScheduledTaskEditorForm({
                 onChange={(event) =>
                   setDraft((current) => ({
                     ...current,
-                    existingWorktreePath: event.target.value,
+                    existingWorktreePath: resolvePastedPath(
+                      current.existingWorktreePath,
+                      event.target.value,
+                    ),
                   }))
                 }
               />
@@ -1573,24 +2171,26 @@ function ScheduledTaskEditorForm({
             />
           </Field>
 
-          <Field label="Model">
-            <div>
-              <ProviderModelPicker
-                environmentId={environmentId}
-                disabled={saving || !connected}
-                activeInstanceId={activeInstanceId}
-                model={activeModel}
-                lockedProvider={null}
-                instanceEntries={instanceEntries}
-                modelOptionsByInstance={modelOptionsByInstance}
-                isComposerOwned={false}
-                triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-                onInstanceModelChange={(instanceId, model) =>
-                  setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
-                }
-              />
-            </div>
-          </Field>
+          {draft.profileId !== "" ? null : (
+            <Field label="Model">
+              <div>
+                <ProviderModelPicker
+                  environmentId={environmentId}
+                  disabled={saving || !connected}
+                  activeInstanceId={activeInstanceId}
+                  model={activeModel}
+                  lockedProvider={null}
+                  instanceEntries={instanceEntries}
+                  modelOptionsByInstance={modelOptionsByInstance}
+                  isComposerOwned={false}
+                  triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
+                  onInstanceModelChange={(instanceId, model) =>
+                    setDraft((current) => ({ ...current, modelKey: `${instanceId}:${model}` }))
+                  }
+                />
+              </div>
+            </Field>
+          )}
 
           <div className="space-y-3">
             {task?.schedule.type === "interval" &&
@@ -1605,6 +2205,7 @@ function ScheduledTaskEditorForm({
               <Label>Schedule</Label>
               <ToggleGroup
                 aria-label="Schedule type"
+                className="max-w-full flex-wrap"
                 value={[draft.scheduleMode]}
                 onValueChange={(values) => {
                   const mode = values[0] as ScheduleMode | undefined;
@@ -1612,8 +2213,8 @@ function ScheduledTaskEditorForm({
                     mode === "fixed" ||
                     mode === "once" ||
                     mode === "interval" ||
-                    mode === "webhook" ||
-                    (mode === "kept" && draft.keptSchedule !== null)
+                    mode === "cron" ||
+                    mode === "webhook"
                   )
                     setDraft((current) => {
                       const suggested =
@@ -1638,22 +2239,41 @@ function ScheduledTaskEditorForm({
                     });
                 }}
               >
-                {draft.keptSchedule !== null ? <Toggle value="kept">Current</Toggle> : null}
                 <Toggle value="fixed">At a time</Toggle>
                 {offersOnce || draft.scheduleMode === "once" ? (
                   <Toggle value="once">Once</Toggle>
                 ) : null}
                 <Toggle value="interval">Every interval</Toggle>
-                <Toggle value="webhook">On webhook</Toggle>
+                <Toggle value="cron">Cron</Toggle>
+                <Toggle
+                  value="webhook"
+                  disabled={webhookDenial !== undefined && draft.scheduleMode !== "webhook"}
+                >
+                  On webhook
+                </Toggle>
               </ToggleGroup>
             </div>
 
-            {draft.scheduleMode === "kept" && draft.keptSchedule !== null ? (
-              <p className="text-sm text-muted-foreground">
-                {scheduleLabel(draft.keptSchedule)}. Edit it from the Agents board, or pick another
-                schedule type.
-              </p>
-            ) : draft.scheduleMode === "webhook" ? (
+            {webhookDenial !== undefined ? (
+              <ManagedNotice>
+                {draft.scheduleMode === "webhook"
+                  ? `${webhookDenial} Switch this task to a time or an interval, or turn it off, to save it.`
+                  : webhookDenial}
+              </ManagedNotice>
+            ) : null}
+            {/* A disabled task still saves, so keep its fields reachable for fixing. */}
+            {draft.scheduleMode === "cron" ? (
+              <CronScheduleFields
+                form={draft.cron}
+                timezone={draft.cronTimezone}
+                onFormChange={(cron) => setDraft((current) => ({ ...current, cron }))}
+                onTimezoneChange={(cronTimezone) =>
+                  setDraft((current) => ({ ...current, cronTimezone }))
+                }
+              />
+            ) : draft.scheduleMode === "webhook" &&
+              webhookDenial !== undefined &&
+              draft.enabled ? null : draft.scheduleMode === "webhook" ? (
               <div className="space-y-4">
                 <WebhookEndpointField environmentId={environmentId} task={liveTask} />
                 <p className="text-xs text-muted-foreground">
@@ -1661,27 +2281,6 @@ function ScheduledTaskEditorForm({
                     "Each request runs the prompt. Use {{body.path}}, {{headers.name}}, {{query.name}}, {{body}} or {{request}} in the prompt; only what it names reaches the agent."
                   }
                 </p>
-                <Field
-                  label="Skip requests older than"
-                  hint="minutes, optional"
-                  htmlFor="scheduled-task-max-age"
-                >
-                  <Input
-                    id="scheduled-task-max-age"
-                    type="number"
-                    nativeInput
-                    min={1}
-                    max={MAX_WEBHOOK_DELIVERY_AGE_MINUTES}
-                    placeholder="Run every request"
-                    value={draft.maxDeliveryAgeMinutes}
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        maxDeliveryAgeMinutes: event.target.value,
-                      }))
-                    }
-                  />
-                </Field>
                 <WebhookFiltersField
                   filters={draft.filters}
                   onChange={(filters) => setDraft((current) => ({ ...current, filters }))}
@@ -1846,6 +2445,9 @@ function ScheduledTaskEditorForm({
                   <Input
                     type="time"
                     id="scheduled-task-time"
+                    aria-describedby={
+                      runAtZone === undefined ? undefined : "scheduled-task-time-zone"
+                    }
                     nativeInput
                     className="w-32"
                     value={draft.timeOfDay}
@@ -1853,6 +2455,11 @@ function ScheduledTaskEditorForm({
                       setDraft((current) => ({ ...current, timeOfDay: event.target.value }))
                     }
                   />
+                  {runAtZone === undefined ? null : (
+                    <span id="scheduled-task-time-zone" className="text-xs text-muted-foreground">
+                      {runAtZone}
+                    </span>
+                  )}
                   <span className="text-xs text-muted-foreground">on</span>
                 </div>
                 <ToggleGroup
@@ -1919,7 +2526,14 @@ function ScheduledTaskEditorForm({
         </DialogClose>
         <Button
           size="sm"
-          disabled={!canOperate || saving || editingTaskMissing || !connected || !tasksQuery.data}
+          disabled={
+            !canOperate ||
+            saving ||
+            editingTaskMissing ||
+            !connected ||
+            !tasksQuery.data ||
+            (draft.enabled && draft.scheduleMode === "webhook" && webhookDenial !== undefined)
+          }
           onClick={() => void submit()}
         >
           {draft.editingId ? "Save task" : "Create task"}

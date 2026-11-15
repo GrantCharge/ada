@@ -29,7 +29,8 @@ import * as ServerConfig from "../../../config.ts";
 import * as ProviderRegistry from "../../../provider/ProviderRegistry.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as ThreadLaunchService from "../../../orchestration-v2/ThreadLaunchService.ts";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import * as ProjectService from "../../../project/ProjectService.ts";
@@ -39,6 +40,7 @@ import * as ThreadManagementService from "../../../orchestration-v2/ThreadManage
 import * as SourceControlRepositoryService from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const shared = {
   success: Project,
@@ -48,7 +50,7 @@ const shared = {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     ProjectService.ProjectService,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
   ],
 };
 const ProjectListTool = Tool.make("t3_project_list", {
@@ -125,8 +127,7 @@ const ProjectCloneTool = Tool.make("t3_project_clone", {
   .annotate(Tool.OpenWorld, true);
 const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   ...shared,
-  description:
-    'Launch a child chat of this thread with an explicit workspace binding, prepared before its agent starts. To save your own context instead, use native subagent tools or delegate_task without a profileId. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits (startFromOrigin:true fetches and starts from the base branch\'s remote), {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout, or {type:"root"}. Omitted workspaceStrategy means the project root, NOT the caller\'s worktree. Put the task in message; asking the agent to create its own worktree via shell does not update the thread binding. For an agent\'s work, pass profileId from t3_list_agents: the thread runs as that agent with its instructions, skills, model, and modes, and explicit modelSelection/modes override the agent\'s. Omit projectId/modelSelection/modes to inherit those settings from the calling thread (a caller outside a T3 thread must pass projectId and gets the project\'s default model). Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Set environmentId to launch on another machine (with a projectId from that machine); the returned environmentId is where the thread runs, and t3_thread_read/t3_thread_wait/t3_thread_send take the same environmentId. Unknown parameters are rejected. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling T3 thread\'s own modes, or the permission mode an outside agent was approved with. Retry with the same clientRequestId after errors or lost responses. Retain threadId and follow preparation with t3_thread_read/t3_thread_wait.',
+  description: `Launch a child chat of this thread with an explicit workspace binding, prepared before its agent starts. To save your own context instead, use native subagent tools or delegate_task without a profileId. Set workspaceStrategy to {type:"worktree",baseRef:"parent-branch",branch:"new-branch",startFromOrigin:false} for a new worktree based on local commits (startFromOrigin:true fetches and starts from the base branch's remote), {type:"existing_worktree",worktreePath:"/absolute/path",branch:"existing-branch"} to use an existing checkout, or {type:"root"}. Omitted workspaceStrategy means the project root, NOT the caller's worktree. Put the task in message; asking the agent to create its own worktree via shell does not update the thread binding. For an agent's work, pass profileId from t3_list_agents: the thread runs as that agent with its instructions, skills, model, and modes, and explicit modelSelection/modes override the agent's. Omit projectId/modelSelection/modes to inherit those settings from the calling thread (a caller outside an ${APP_NAME} thread must pass projectId and gets the project's default model). Set scratch:true instead of projectId for a thread without a project: it runs in a fresh folder of its own, outside any repository. Set environmentId to launch on another machine (with a projectId from that machine); the returned environmentId is where the thread runs, and t3_thread_read/t3_thread_wait/t3_thread_send take the same environmentId. Unknown parameters are rejected. Attachments must be pending uploads. The new thread may not run with broader runtime or interaction modes than the caller: the calling ${APP_NAME} thread's own modes, or the permission mode an outside agent was approved with. Retry with the same clientRequestId after errors or lost responses. Retain threadId and follow preparation with t3_thread_read/t3_thread_wait.`,
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpThreadReadInput.fields.environmentId,
     projectId: Schema.optional(ProjectId),
@@ -144,7 +145,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     workspaceStrategy: Schema.optional(
       OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
         description:
-          "'worktree': new checkout from `baseRef`. 'existing_worktree': bind `worktreePath`, a project worktree. 'root': project checkout, the default, not your worktree. Stack: parent branch as `baseRef`, `startFromOrigin: false`. Uncommitted edits are not copied.",
+          "'worktree': new checkout from `baseRef`. Honor a requested base. Otherwise, independent work uses the default branch as `remote/branch` (e.g. `origin/main`) with `startFromOrigin: true`; with no remote, use the local default branch. Required unpublished commits and dependent or stacked work use their local base with `startFromOrigin: false`. 'existing_worktree': bind `worktreePath`, a project worktree. 'root': project checkout, the default, not your worktree. Uncommitted edits are not copied.",
       }),
     ),
     message: Schema.optional(
@@ -177,6 +178,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     ServerConfig.ServerConfig,
     ProviderRegistry.ProviderRegistry,
     DocumentText.DocumentText,
+    Digest.Digest,
   ],
 })
   .annotate(Tool.Strict, true)

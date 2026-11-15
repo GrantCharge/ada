@@ -1,6 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - the gateway is a plain Node process outside the Effect runtime.
 import * as NodeCrypto from "node:crypto";
 
+import { ThreadTaskError } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { GATEWAY_SCOPE_VALUES, parseGatewayStatusSnapshot } from "./port.ts";
@@ -11,6 +14,7 @@ import type {
   GatewayScope,
   GatewayStatusSnapshot,
 } from "./port.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
@@ -24,6 +28,8 @@ export type GatewayBridgeStartupResult =
     };
 
 const GATEWAY_SCOPES = new Set<GatewayScope>(GATEWAY_SCOPE_VALUES);
+// Older clients send only the message, which stays an untyped failure.
+const decodeTaskError = Schema.decodeUnknownOption(ThreadTaskError);
 
 function parseGrants(value: unknown): GatewayGrants {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -263,12 +269,12 @@ export function createBridgeRuntimePort(input: {
           // open desktop app keeps the runtime role and the two never trade it back and forth.
           const nextStandby = capability("standby");
           if (nextStandby && client !== null && client !== socket && !clientStandby) {
-            socket.close(1013, "A T3 app runtime is connected; standing by.");
+            socket.close(1013, `An ${APP_NAME} app runtime is connected; standing by.`);
             return;
           }
           if (client !== null && client !== socket) {
-            rejectPending("T3 gateway client was replaced.");
-            client.close(1012, "Replaced by a newly configured T3 client runtime.");
+            rejectPending(`${APP_NAME} gateway client was replaced.`);
+            client.close(1012, `Replaced by a newly configured ${APP_NAME} client runtime.`);
           }
           grants = nextGrants;
           profiles = nextProfiles;
@@ -329,7 +335,14 @@ export function createBridgeRuntimePort(input: {
         pending.delete(response.id);
         clearRequestTimeout(request);
         if (typeof response.error !== "string") request.resolve(response.result);
-        else request.reject(new Error(response.error));
+        else {
+          request.reject(
+            Option.getOrElse(
+              decodeTaskError(response.taskError),
+              () => new Error(response.error as string),
+            ),
+          );
+        }
       } catch {
         socket.close(
           1008,
@@ -345,14 +358,14 @@ export function createBridgeRuntimePort(input: {
       client = null;
       clientExpected = AbortSignal.timeout(clientGraceMs);
       supportsStatusSnapshots = false;
-      rejectPending("T3 gateway client disconnected.");
+      rejectPending(`${APP_NAME} gateway client disconnected.`);
     });
   });
 
   const invoke = (method: keyof GatewayRuntimePort, args: ReadonlyArray<unknown>): Promise<any> => {
     if (client === null || client.readyState !== client.OPEN) {
       return Promise.reject(
-        new Error("No configured T3 client is connected to the gateway bridge."),
+        new Error(`No configured ${APP_NAME} client is connected to the gateway bridge.`),
       );
     }
     const id = nextId++;
@@ -387,7 +400,7 @@ export function createBridgeRuntimePort(input: {
         degradedReasons: [
           startupStatus.status === "starting"
             ? "Gateway bridge is still starting."
-            : "No configured T3 client is connected to the gateway bridge.",
+            : `No configured ${APP_NAME} client is connected to the gateway bridge.`,
         ],
       };
     },

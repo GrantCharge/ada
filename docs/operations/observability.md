@@ -66,11 +66,17 @@ The `TraceRecord`, `EffectTraceRecord`, and `OtlpTraceRecord` schemas live in
 `packages/shared/src/observability.ts`.
 
 SQL statement spans (named `sqlite`) and `sql.transaction` spans carry `db.connection` and
-`db.lock_wait_ms`. `db.connection` is `writer` for the main connection, which runs on the event loop,
-or `reader` for the read-only connection in a worker thread. `db.lock_wait_ms` is the part of the
+`db.lock_wait_ms`. `db.connection` is `writer` for the read-write connection or `reader` for a
+read-only one. For a database file both run in worker threads; an in-memory database has only a
+writer, on the event loop. `db.lock_wait_ms` is the part of the
 span spent waiting for that connection, behind other SQL. That wait does not block the event loop,
 so subtract it before you blame a slow span on the query. Statements inside a transaction use its
 connection and do not carry these attributes.
+
+An MCP request over HTTP has a `McpHttpServer.authenticateRequest` span that covers only admitting
+it: the credential check, the mode limit, and the device network switch. The request runs after
+it, under the `McpServer.…/<method>` span, and each tool call has its own `mcp.tool.<name>` span
+that times it. That span's attributes name the tool, never its arguments.
 
 DPoP proof failures include the safe `environment.dpop.failure_code` span
 attribute. A `time_window` failure means that a signed proof was too old or too
@@ -161,7 +167,7 @@ You do not need any extra env vars. Just run the app normally and inspect `serve
 Examples:
 
 ```bash
-npx t3
+t3
 ```
 
 ```bash
@@ -196,7 +202,7 @@ Default Grafana login:
 
 For endpoint settings and startup precedence, see the
 [user telemetry guide](../user/telemetry.md#export-diagnostics-to-your-own-receiver).
-In a worktree, use `vp run dev` instead of `npx t3` to keep state isolated.
+In a worktree, use `vp run dev` instead of `t3` to keep state isolated.
 
 ```bash
 export T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces
@@ -217,7 +223,7 @@ export T3CODE_TRACE_TIMING_ENABLED=true
 CLI:
 
 ```bash
-npx t3
+t3
 ```
 
 Monorepo web/server dev:
@@ -416,22 +422,20 @@ Counters tell you volume and failure rate:
 
 Webhooks have their own families:
 
-- `t3_webhook_deliveries_total` by `outcome` and `source` (`relay` or `direct`). Beyond what the
+- `t3_webhook_deliveries_total` by `outcome`. Beyond what the
   sender sees, `queue_full` means a task already had its limit of deliveries waiting,
   `prompt_too_long` means the filled-in prompt passed the provider limit, and `duplicate` means
-  the relay delivered a request this environment had already run.
+  the sender repeated a request this environment had already run.
 - `t3_webhook_runs_total` by `outcome` (`started`, `skipped`, `failed`) for the runs those
   deliveries start, which happen after the sender has its answer.
-- `t3_webhook_held_delay` for how long requests the relay held waited before arriving.
 
 - `t3_secret_requests_total` by `status` (`saved`, `declined`, `cancelled`, `timed_out`) for secrets
   agents asked users for, and `t3_secret_refs_consumed_total` by `result` (`used`, `rejected`) for
   tools redeeming them. Neither ever carries a value.
 
 `ScheduledTaskService.triggerWebhook` spans carry the same outcome per request, and each run
-started from a delivery is its own `ScheduledTaskService.runWebhookDelivery` trace. For a request
-the relay forwarded, the span also goes to the T3 Connect trace export as a child of the relay's
-span; requests that reach the environment directly never join a sender's trace.
+started from a delivery is its own `ScheduledTaskService.runWebhookDelivery` trace. Requests never
+join a sender's trace.
 
 Use metrics when the question is:
 

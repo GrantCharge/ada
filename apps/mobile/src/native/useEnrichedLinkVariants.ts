@@ -1,7 +1,9 @@
+import { modelChipIcon } from "../lib/contextChipIconSource";
 import { useMemo } from "react";
 import { Image } from "react-native";
 import type { LinkPillContent, MarkdownStyle } from "react-native-enriched-markdown";
 import type { ComposerContextRecord } from "@t3tools/contracts";
+import type { EnvironmentAgents } from "@t3tools/client-runtime/state/agentIdentity";
 import { contextChipAccent, contextChipPresentation } from "../lib/composerChipPresentation";
 import { CONTEXT_CHIP_ICON_SOURCES } from "../lib/contextChipIcons.generated";
 import { FONT_FAMILIES } from "../lib/fontFamilies";
@@ -17,10 +19,11 @@ import type {
 import {
   enrichedContextLinkPresentation,
   enrichedLinkVariantPattern,
-  enrichedSkillDisplayName,
+  enrichedModelReference,
   enrichedSkillReference,
   enrichedThreadLinkPresentation,
 } from "../lib/enrichedLinkPresentation";
+import { formatProviderSkillDisplayName } from "@t3tools/shared/inlineSkills";
 
 function chipCustomization(
   chip: ReturnType<typeof enrichedContextLinkPresentation>,
@@ -36,8 +39,9 @@ function chipCustomization(
 export function enrichedContextLinkCustomization(
   href: string,
   records?: ReadonlyArray<ComposerContextRecord>,
+  agents?: EnvironmentAgents,
 ) {
-  return chipCustomization(enrichedContextLinkPresentation(href, records));
+  return chipCustomization(enrichedContextLinkPresentation(href, records, agents));
 }
 
 export function enrichedThreadLinkCustomization(href: string) {
@@ -59,7 +63,7 @@ export function withChipIcon(
 
 function presentation(
   url: string,
-  props: Pick<SelectableMarkdownTextProps, "linkCustomization" | "skills" | "textStyle">,
+  props: Pick<SelectableMarkdownTextProps, "linkCustomization" | "skills" | "models" | "textStyle">,
 ): MarkdownLinkCustomization | undefined {
   const custom = props.linkCustomization?.(url);
   if (custom) return custom;
@@ -68,10 +72,22 @@ function presentation(
   const skill = enrichedSkillReference(url, props.skills);
   if (skill)
     return {
-      label: enrichedSkillDisplayName(skill),
+      label: formatProviderSkillDisplayName(skill),
       icon: CONTEXT_CHIP_ICON_SOURCES.skill,
       chip: { accent: contextChipPresentation("skill").accent, tintsIcon: true },
     };
+  const model = enrichedModelReference(url, props.models);
+  if (model) {
+    const icon = modelChipIcon(model);
+    return {
+      label: model.label,
+      icon: icon.source,
+      chip: {
+        accent: icon.accent,
+        tintsIcon: icon.tintsIcon,
+      },
+    };
+  }
   const link = resolveMarkdownLinkPresentation(url);
   if (link.kind === "file")
     return {
@@ -94,7 +110,7 @@ export function useEnrichedLinkVariants(
   props: SelectableMarkdownTextProps,
   fileHrefs: ReadonlySet<string>,
 ) {
-  const { linkCustomization, skills, textStyle, fileEmbedLabel } = props;
+  const { linkCustomization, skills, models, textStyle, fileEmbedLabel } = props;
   const theme = useUniwindTheme();
   const links = useMemo(() => {
     const byUrl = new Map<string, MarkdownLinkCustomization>();
@@ -107,11 +123,11 @@ export function useEnrichedLinkVariants(
             color: textStyle.fileTextColor,
             icon: markdownFileIconSource(resolveMarkdownFileIcon(label)),
           }
-        : presentation(url, { linkCustomization, skills, textStyle });
+        : presentation(url, { linkCustomization, skills, models, textStyle });
       if (value) byUrl.set(url, value);
     }
     return byUrl;
-  }, [urls, linkCustomization, skills, textStyle, fileHrefs, fileEmbedLabel]);
+  }, [urls, linkCustomization, skills, models, textStyle, fileHrefs, fileEmbedLabel]);
   const chipForegrounds = useMemo(
     () =>
       new Map(

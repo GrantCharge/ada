@@ -1,9 +1,11 @@
+import { MOBILE_APP_NAME } from "../../lib/mobileBranding";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtom, useAtomValue } from "@effect/atom-react";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import {
   AuthProvidersManageScope,
   AuthOrchestrationReadScope,
+  managedUpdatesDenial,
   type EnvironmentId,
   type ServerProvider,
 } from "@t3tools/contracts";
@@ -13,7 +15,7 @@ import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import { AsyncResult } from "effect/reactivity";
 import { useRef, useState } from "react";
-import { View } from "react-native";
+import { Linking, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -72,8 +74,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const [connectionExpanded, setConnectionExpanded] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const pendingRef = useRef(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  // Shown in the section of the action that produced it, beside its button.
+  const [feedback, setFeedback] = useState<{
+    readonly section: "app" | "providers";
+    readonly message: string;
+    readonly failed: boolean;
+  } | null>(null);
   const [releaseCheck, checkRelease] = useAtom(environmentReleaseCheckAtom(environmentId), {
     mode: "promiseExit",
   });
@@ -95,21 +101,30 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
   const version = config?.environment.serverVersion;
   const checkedRelease = release?.fromVersion === version ? release : null;
   const capabilities = config?.environment.capabilities;
+  const managedPolicy = config?.managedPolicy;
+  const supportUrl = managedPolicy?.supportUrl;
+  // The server refuses checks and installs; say so instead of offering them.
+  const updatesDenial = managedUpdatesDenial(managedPolicy);
 
-  async function run(label: string, action: () => Promise<void>) {
+  async function run(label: string, action: () => Promise<string | void>) {
     if (pendingRef.current) return;
     pendingRef.current = true;
     setPending(label);
-    setError(null);
-    setNotice(null);
+    setFeedback(null);
+    const section = label === "check" || label === "server" ? "app" : "providers";
     const result = await settlePromise(action);
     pendingRef.current = false;
     setPending(null);
     if (AsyncResult.isFailure(result)) {
       const cause = squashAtomCommandFailure(result);
-      setError(
-        cause instanceof Error ? cause.message : "The action could not be completed. Try again.",
-      );
+      setFeedback({
+        section,
+        message:
+          cause instanceof Error ? cause.message : "The action could not be completed. Try again.",
+        failed: true,
+      });
+    } else if (AsyncResult.isSuccess(result) && result.value !== undefined) {
+      setFeedback({ section, message: result.value, failed: false });
     }
   }
 
@@ -119,7 +134,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
       return;
     Dialog.alert(
       `Update ${environment?.environmentLabel ?? "environment"}?`,
-      `Install T3 Code ${targetVersion}. ${capabilities.serverSelfUpdate === "desktop-managed" ? "The desktop app will close and relaunch." : "The server will restart and reconnect."} Running threads may be interrupted.`,
+      `Install ${MOBILE_APP_NAME} ${targetVersion}. ${capabilities.serverSelfUpdate === "desktop-managed" ? "The desktop app will close and relaunch." : "The server will restart and reconnect."} Running threads may be interrupted.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -141,7 +156,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                 input: { targetVersion },
               });
               if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-              setNotice(`Updated to ${result.value.targetVersion}.`);
+              return `Updated to ${result.value.targetVersion}.`;
             }),
         },
       ],
@@ -221,17 +236,19 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                   : "This connection does not have permission to manage the environment."}
               </Text>
             ) : null}
-            {error ? (
-              <Text selectable className="px-2 text-sm text-danger-foreground">
-                {error}
-              </Text>
-            ) : null}
-            {notice ? <Text className="px-2 text-sm text-foreground-muted">{notice}</Text> : null}
             {config && !outdated ? (
               <>
-                <SettingsSection title="T3 Code">
+                <SettingsSection title={MOBILE_APP_NAME}>
                   <View className="gap-1 p-4">
                     <Text className="text-base text-foreground">Version {version}</Text>
+                    {managedPolicy ? (
+                      <Text className="text-sm text-foreground-muted">
+                        Managed by {managedPolicy.organization}
+                      </Text>
+                    ) : null}
+                    {updatesDenial ? (
+                      <Text className="text-sm text-foreground-muted">{updatesDenial}</Text>
+                    ) : null}
                     {running ? (
                       <Text className="text-sm text-foreground-muted">
                         {updateState.stage === "resuming"
@@ -243,7 +260,7 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                         {updateState.message}
                       </Text>
                     ) : null}
-                    {checkedRelease ? (
+                    {checkedRelease && !updatesDenial ? (
                       <Text className="text-sm text-foreground-muted">
                         {checkedRelease.targetVersion
                           ? `Version ${checkedRelease.targetVersion} is available.`
@@ -251,30 +268,42 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                       </Text>
                     ) : null}
                     {checkedRelease?.targetVersion &&
+                    !updatesDenial &&
                     !supportsEnvironmentUpdate(config.environment.capabilities) ? (
                       <Text className="text-sm text-foreground-muted">
                         {capabilities?.serverSelfUpdate === "desktop-managed"
                           ? "Update the desktop app on this machine."
-                          : "Update and restart T3 Code on this machine."}
+                          : `Update and restart ${MOBILE_APP_NAME} on this machine.`}
                       </Text>
                     ) : null}
+                    {feedback?.section === "app" ? <FeedbackText {...feedback} /> : null}
                   </View>
-                  <SettingsActionRow
-                    icon="arrow.clockwise"
-                    label="Check for updates"
-                    disabled={disabled}
-                    loading={pending === "check"}
-                    onPress={() => {
-                      if (disabled) return;
-                      const fromVersion = config.environment.serverVersion;
-                      void run("check", async () => {
-                        const exit = await checkRelease(async () => fromVersion);
-                        // `run` owns the error message, so a failed lookup rethrows to it.
-                        if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
-                      });
-                    }}
-                  />
+                  {supportUrl ? (
+                    <SettingsActionRow
+                      icon="questionmark.bubble"
+                      label={`Get help from ${managedPolicy.organization}`}
+                      onPress={() => void Linking.openURL(supportUrl).catch(() => undefined)}
+                    />
+                  ) : null}
+                  {updatesDenial ? null : (
+                    <SettingsActionRow
+                      icon="arrow.clockwise"
+                      label="Check for updates"
+                      disabled={disabled}
+                      loading={pending === "check"}
+                      onPress={() => {
+                        if (disabled) return;
+                        const fromVersion = config.environment.serverVersion;
+                        void run("check", async () => {
+                          const exit = await checkRelease(async () => fromVersion);
+                          // `run` owns the error message, so a failed lookup rethrows to it.
+                          if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
+                        });
+                      }}
+                    />
+                  )}
                   {checkedRelease?.targetVersion &&
+                  !updatesDenial &&
                   supportsEnvironmentUpdate(config.environment.capabilities) ? (
                     <SettingsActionRow
                       icon="arrow.up.circle"
@@ -301,17 +330,26 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                           input: { reloadSecrets: true },
                         });
                         if (AsyncResult.isFailure(result)) throw squashAtomCommandFailure(result);
-                        setNotice("Provider status refreshed.");
+                        return "Provider status refreshed.";
                       });
                     }}
                   />
+                  {feedback?.section === "providers" ? (
+                    <View className="px-4 pb-4">
+                      <FeedbackText {...feedback} />
+                    </View>
+                  ) : null}
                   {config.providers
                     .filter((provider) => provider.enabled)
                     .map((provider) => (
                       <View key={provider.instanceId}>
                         <View className="gap-1 p-4">
                           <View className="flex-row items-center gap-2">
-                            <ProviderIcon provider={provider.driver} size={18} />
+                            <ProviderIcon
+                              provider={provider.driver}
+                              iconUrl={provider.iconUrl}
+                              size={18}
+                            />
                             <Text className="min-w-0 flex-1 text-base font-t3-medium text-foreground">
                               {provider.displayName ?? provider.driver}
                             </Text>
@@ -372,5 +410,16 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
         )}
       </ScreenScrollView>
     </SettingsScreen>
+  );
+}
+
+function FeedbackText(props: { readonly message: string; readonly failed: boolean }) {
+  return (
+    <Text
+      selectable={props.failed}
+      className={props.failed ? "text-sm text-danger-foreground" : "text-sm text-foreground-muted"}
+    >
+      {props.message}
+    </Text>
   );
 }

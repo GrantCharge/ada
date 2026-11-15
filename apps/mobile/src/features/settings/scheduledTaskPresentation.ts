@@ -1,3 +1,6 @@
+import { scheduledTaskArchiveLabel } from "@t3tools/client-runtime/scheduled-task-archive";
+import { scheduledTaskDeletesAt, type ScheduledTask } from "@t3tools/contracts";
+
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
@@ -45,8 +48,9 @@ export function formatNextScheduledTaskRun(nextRunAt: string, now: number): stri
 
   const time = next.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   if (days === 1) return `Next run tomorrow at ${time}`;
-  if (days <= 7) {
-    return `Next run next ${next.toLocaleDateString([], { weekday: "long" })} at ${time}`;
+  // A week out repeats today's weekday, so it falls through to the date instead.
+  if (days < 7) {
+    return `Next run ${next.toLocaleDateString([], { weekday: "long" })} at ${time}`;
   }
   const date = next.toLocaleDateString([], {
     month: "short",
@@ -54,4 +58,14 @@ export function formatNextScheduledTaskRun(nextRunAt: string, now: number): stri
     ...(next.getFullYear() !== current.getFullYear() ? { year: "numeric" as const } : {}),
   });
   return `Next run ${date} at ${time}`;
+}
+
+export function formatScheduledTaskArchive(
+  task: Pick<ScheduledTask, "archivedAt" | "archiveReason">,
+): string {
+  const label = scheduledTaskArchiveLabel(task);
+  const deletesAt = scheduledTaskDeletesAt(task);
+  if (deletesAt === null) return label;
+  const date = new Date(deletesAt).toLocaleDateString([], { dateStyle: "medium" });
+  return `${label} · Deletes on ${date}`;
 }

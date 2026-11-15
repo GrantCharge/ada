@@ -53,7 +53,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
           path: yield* pathWithT3,
         }),
       ).toBe('sudo env "PATH=$PATH" t3 browser setup');
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("keeps the arguments, so root runs setup on the same T3 home", () =>
@@ -70,7 +70,7 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
       expect(
         yield* rootCommand({ node: "/opt/t3/t3", entry: "/opt/t3/t3", executable: true, args }),
       ).toBe("sudo /opt/t3/t3 browser setup --base-dir '/srv/t3 home'");
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("names this install's launcher when t3 is not on PATH", () =>
@@ -101,6 +101,36 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
         'sudo env "PATH=$PATH" t3 browser setup',
       );
 
+      // `ada` wins when it runs this install, through the desktop's `ada` shim beside `t3`.
+      const adaShim = path.join(path.dirname(shim), "ada");
+      yield* fs.writeFileString(adaShim, "#!/bin/sh\n", { mode: 0o755 });
+      // A fresh folder: PATH lookups are cached per PATH value.
+      const adaLinked = yield* fs.makeTempDirectoryScoped();
+      yield* fs.symlink(adaShim, path.join(adaLinked, "ada"));
+      expect(yield* rootCommand({ ...desktop, path: adaLinked })).toBe(
+        'sudo env "PATH=$PATH" ada browser setup',
+      );
+      // Another program's `ada` falls back to the `t3` that runs this install.
+      const foreignAda = yield* fs.makeTempDirectoryScoped();
+      yield* fs.writeFileString(path.join(foreignAda, "ada"), "#!/bin/sh\n", { mode: 0o755 });
+      expect(yield* rootCommand({ ...desktop, path: `${foreignAda}:${linked}` })).toBe(
+        'sudo env "PATH=$PATH" t3 browser setup',
+      );
+      // The install scripts link `ada` straight to the standalone executable.
+      const executable = path.join(home, "runtime/versions/1.0.0/t3");
+      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+      yield* fs.writeFileString(executable, "#!/bin/sh\n", { mode: 0o755 });
+      const scriptBin = yield* fs.makeTempDirectoryScoped();
+      yield* fs.symlink(executable, path.join(scriptBin, "ada"));
+      expect(
+        yield* rootCommand({
+          node: executable,
+          entry: executable,
+          executable: true,
+          path: scriptBin,
+        }),
+      ).toBe('sudo env "PATH=$PATH" ada browser setup');
+
       expect(
         yield* rootCommand({
           node: "/opt/t3/t3",
@@ -109,10 +139,41 @@ it.layer(NodeServices.layer)("root CLI commands", (it) => {
         }),
       ).toBe("sudo /opt/t3/t3 browser setup");
 
+      // A standalone executable started directly (systemd, no launcher) is still this install.
+      expect(
+        yield* rootCommand({
+          node: "/opt/t3/t3",
+          entry: "/opt/t3/t3",
+          executable: true,
+          path: yield* pathWithT3,
+        }),
+      ).toBe("sudo /opt/t3/t3 browser setup");
+
+      // A global npm launcher runs the downloaded executable; PATH's `t3` is that launcher.
+      const prefix = path.join(home, "npm");
+      const npmLauncher = path.join(prefix, "lib/node_modules/t3/bin/t3.mjs");
+      yield* fs.makeDirectory(path.dirname(npmLauncher), { recursive: true });
+      yield* fs.makeDirectory(path.join(prefix, "bin"));
+      yield* fs.writeFileString(npmLauncher, "", { mode: 0o755 });
+      yield* fs.writeFileString(
+        path.join(prefix, "lib/node_modules/t3/package.json"),
+        `{"name":"t3","version":"${packageJson.version}"}`,
+      );
+      yield* fs.symlink(npmLauncher, path.join(prefix, "bin/t3"));
+      expect(
+        yield* rootCommand({
+          node: "/home/theo/.t3/runtime/versions/1.0.0/t3",
+          entry: "/home/theo/.t3/runtime/versions/1.0.0/t3",
+          executable: true,
+          path: path.join(prefix, "bin"),
+          env: { T3CODE_NPM_LAUNCHER_PATH: npmLauncher },
+        }),
+      ).toBe('sudo env "PATH=$PATH" t3 browser setup');
+
       expect(
         yield* rootCommand({ ...desktop, env: { T3CODE_CLI_PATH: path.join(home, "gone") } }),
       ).toBe('sudo env "PATH=$PATH" t3 browser setup');
-    }).pipe(Effect.scoped),
+    }),
   );
 });
 
@@ -153,7 +214,7 @@ it.layer(NodeServices.layer)("host CLI commands", (it) => {
       expect((yield* hostCommand("linux", { T3CODE_CLI_PATH: shim })).command).toMatch(
         / doctor --base-dir 'C:\\Users\\Jane Doe\\\.t3'$/,
       );
-    }).pipe(Effect.scoped),
+    }),
   );
 });
 
@@ -260,29 +321,79 @@ it.layer(NodeServices.layer)("manual server installation ownership", (it) => {
     }),
   );
 
-  it.effect("leaves local, standalone, missing and unreadable installs unknown", () =>
+  it.effect("names the launcher symlink that started a downloaded runtime", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fs.makeTempDirectoryScoped();
-      for (const relative of [
-        "project/node_modules/t3/dist/bin.mjs",
-        "project/apps/server/dist/bin.mjs",
-        ".t3/runtime/0.0.45/t3",
-        "missing/dist/bin.mjs",
-      ]) {
-        const entry = path.join(root, relative);
-        if (!relative.startsWith("missing")) {
-          yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
-          yield* fs.writeFileString(entry, "");
+      const root = yield* fs.realPath(yield* fs.makeTempDirectoryScoped());
+      // The install script's launcher names ~/.t3, which here links to a home elsewhere.
+      const executable = path.join(root, "data/t3/runtime/versions/1.0.0/t3");
+      const launcher = path.join(root, "bin/t3");
+      const copy = path.join(root, "bin/t3-copy");
+      yield* fs.makeDirectory(path.dirname(executable), { recursive: true });
+      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      yield* fs.writeFileString(executable, "", { mode: 0o755 });
+      yield* fs.writeFileString(copy, "", { mode: 0o755 });
+      yield* fs.symlink(path.join(root, "data/t3"), path.join(root, ".t3"));
+      yield* fs.symlink(path.join(root, ".t3/runtime/versions/1.0.0/t3"), launcher);
+      // Earlier PATH entries hold a directory and a non-executable file named t3.
+      yield* fs.makeDirectory(path.join(root, "shadow-dir/t3"), { recursive: true });
+      yield* fs.makeDirectory(path.join(root, "shadow-file"));
+      yield* fs.writeFileString(path.join(root, "shadow-file/t3"), "");
+      const resolve = (invokedAs: string) =>
+        resolveServerInstallation.pipe(
+          Effect.provideService(HostProcess.ExecutablePath, executable),
+          Effect.provideService(HostProcess.IsExecutable, true),
+          Effect.provideService(HostProcess.InvokedAs, invokedAs),
+          Effect.provideService(HostProcess.WorkingDirectory, root),
+          Effect.provideService(HostProcess.Environment, { PATH: "shadow-dir:shadow-file:bin" }),
+          Effect.provideService(HostProcess.Platform, "linux"),
+        );
+      const baseDir = path.join(root, ".t3");
+
+      expect(yield* resolve("t3")).toEqual({ kind: "t3-launcher", launcher, baseDir });
+      expect(yield* resolve(launcher)).toEqual({ kind: "t3-launcher", launcher, baseDir });
+      expect(yield* resolve(executable)).toBeNull();
+      expect(yield* resolve(copy)).toBeNull();
+    }),
+  );
+
+  it.effect(
+    "leaves local, standalone, missing and unreadable installs unknown unless the headless unit names itself",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fs.makeTempDirectoryScoped();
+        for (const relative of [
+          "project/node_modules/t3/dist/bin.mjs",
+          "project/apps/server/dist/bin.mjs",
+          ".t3/runtime/0.0.45/t3",
+          "missing/dist/bin.mjs",
+        ]) {
+          const entry = path.join(root, relative);
+          if (!relative.startsWith("missing")) {
+            yield* fs.makeDirectory(path.dirname(entry), { recursive: true });
+            yield* fs.writeFileString(entry, "");
+          }
+          expect(
+            yield* resolveServerInstallation.pipe(
+              Effect.provideService(HostProcess.Arguments, ["node", entry]),
+              Effect.provideService(HostProcess.IsExecutable, false),
+            ),
+          ).toBeNull();
         }
         expect(
           yield* resolveServerInstallation.pipe(
-            Effect.provideService(HostProcess.Arguments, ["node", entry]),
-            Effect.provideService(HostProcess.IsExecutable, false),
+            Effect.provideService(HostProcess.Arguments, [
+              "node",
+              path.join(root, "missing/dist/bin.mjs"),
+            ]),
+            Effect.provideService(HostProcess.Environment, {
+              T3CODE_INSTALLATION: "linux-headless",
+            }),
           ),
-        ).toBeNull();
-      }
-    }),
+        ).toEqual({ kind: "linux-headless" });
+      }),
   );
 });

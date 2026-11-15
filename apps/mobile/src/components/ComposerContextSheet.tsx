@@ -1,9 +1,11 @@
+import { MOBILE_APP_NAME } from "../lib/mobileBranding";
 import { Button } from "./ui/Button";
 import * as Dialog from "./ui/Dialog";
 import { useOpenPullRequest } from "../native/useOpenPullRequest";
 import { SourceFileSurface } from "../features/files/SourceFileSurface";
 import { filePreviewKind } from "@t3tools/shared/filePreview";
 import type {
+  AgentContextRecord,
   ComposerContextRecord,
   ElementContextSource,
   EnvironmentId,
@@ -11,9 +13,11 @@ import type {
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
+import { agentChipState } from "@t3tools/client-runtime/state/agentIdentity";
+import { useEnvironmentAgents } from "../state/agents";
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { videoMimeType } from "@t3tools/shared/video";
-import { Platform, Pressable, ScrollView, View } from "react-native";
+import { Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { REVIEW_MONO_FONT_FAMILY } from "../features/review/reviewDiffRendering";
 import { ReviewCommentCard, useReviewCommentColors } from "../features/review/ReviewCommentCard";
@@ -23,13 +27,38 @@ import {
   type DraftComposerAttachment,
 } from "../lib/composerImages";
 import { contextImageGallery } from "../lib/contextImageGallery";
-import { FilePreviewModal } from "./FilePreviewModal";
-import { VideoPreviewModal } from "./VideoPreviewModal";
+import { FilePreviewModal } from "./ui/FilePreviewModal";
+import { VideoPreviewModal } from "./ui/VideoPreviewModal";
 import { ComposerContextAttachment } from "./ComposerContextAttachment";
 import { AppText as Text } from "./ui/AppText";
 import { Sheet } from "./ui/Sheet";
 import { useAppearancePreferences } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { getMobileTerminalTheme } from "../features/terminal/terminalTheme";
+
+function AgentContextFields(props: {
+  record: AgentContextRecord;
+  environmentId: EnvironmentId | undefined;
+}) {
+  const state = agentChipState(
+    props.record,
+    useEnvironmentAgents(props.environmentId),
+    props.environmentId,
+  );
+  const status = {
+    unknown: `${MOBILE_APP_NAME} agent. Mentioning it runs nothing; ask in your message to delegate to it.`,
+    unsupported: `Update ${MOBILE_APP_NAME} on this machine to mention agents.`,
+    available: `${MOBILE_APP_NAME} agent. Mentioning it runs nothing; ask in your message to delegate to it.`,
+    missing: "This agent was deleted or isn't on this machine.",
+    "read-only": "Read-only agent: it can't run work.",
+    elsewhere: "This agent runs only on other machines.",
+  }[state.status];
+  return (
+    <View className="gap-3">
+      <ContextField label="Agent" value={state.name} />
+      <ContextField label="Status" value={status} />
+    </View>
+  );
+}
 
 function ContextField(props: { label: string; value: string | null | undefined; code?: boolean }) {
   if (!props.value) return null;
@@ -193,7 +222,7 @@ export function ComposerContextSheet(props: {
       <ScrollView
         nestedScrollEnabled
         className="flex-1"
-        contentInsetAdjustmentBehavior={Platform.OS === "ios" ? "automatic" : "never"}
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{
           paddingHorizontal: 20,
           paddingTop: 12,
@@ -326,6 +355,9 @@ export function ComposerContextSheet(props: {
             ) : null}
             {record.kind === "environment" ? (
               <ContextField label="Machine" value={record.label} />
+            ) : null}
+            {record.kind === "agent" && "profileId" in record ? (
+              <AgentContextFields record={record} environmentId={props.environmentId} />
             ) : null}
             {record.kind === "skill" ? (
               <View className="gap-3">

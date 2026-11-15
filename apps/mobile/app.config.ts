@@ -1,11 +1,14 @@
 import type { ExpoConfig } from "expo/config";
 
+import { APP_NAME } from "../../packages/shared/src/branding.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 type AppVariant = "development" | "preview" | "production";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
+// Expo's TypeScript setup otherwise installs `typescript` on every start; we typecheck with tsrs.
+process.env.EXPO_NO_TYPESCRIPT_SETUP = "1";
 
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
 // This checkout builds the personal client for every EAS variant.
@@ -18,9 +21,6 @@ const runtimeVersionPolicy =
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
-// Observe must never send this personal client to Expo ingestion.
-const observeEndpointUrl = "https://observe.invalid";
-
 if (
   isIosPersonalTeamBuild &&
   (!personalTeamBundleIdentifier ||
@@ -31,11 +31,10 @@ if (
   );
 }
 
-// This fork ships as T3 Agents: every variant uses the Agents mark from
-// assets/agents/source.png (the desktop icon), told apart by name only. iOS
+// Every variant uses Pip (scripts/export-android-icons.ts). iOS
 // gets a full-bleed square because it applies its own mask; Android gets the
 // mark alone over a navy adaptive background so the launcher mask never crops it.
-const AGENTS_NAVY = "#0A1442";
+const AGENTS_NAVY = "#111925";
 const AGENTS_ASSETS = {
   appIcon: "./assets/agents/ios-icon-1024.png",
   iosIcon: "./assets/agents/ios-icon-1024.png",
@@ -46,33 +45,39 @@ const AGENTS_ASSETS = {
   androidAdaptiveBackgroundImage: undefined,
   androidSplashIcon: "./assets/agents/android-splash-icon.png",
   androidMonochromeIcon: "./assets/agents/android-icon-monochrome.png",
-  androidNotificationIcon: "./assets/agents/android-notification-icon.png",
-  androidNotificationColor: AGENTS_NAVY,
 } as const;
+// Dev builds match their in-app mark (src/components/brandAssets.ts): white Pip on the blueprint.
+const DEV_ASSETS = {
+  ...AGENTS_ASSETS,
+  appIcon: "./assets/agents/dev-ios-icon-1024.png",
+  iosIcon: "./assets/agents/dev-ios-icon-1024.png",
+  androidAdaptiveForeground: "./assets/agents/android-icon-monochrome.png",
+  androidAdaptiveBackgroundImage: "./assets/agents/android-dev-icon-background.png",
+} as const;
+
+// Apple rejects a bare "Ada" home-screen name as taken (ITMS-90129).
+const HOME_SCREEN_NAME = `${APP_NAME} Agents`;
 
 const VARIANT_CONFIG = {
   development: {
-    appName: "T3 Agents Dev",
+    appName: `${HOME_SCREEN_NAME} Dev`,
     scheme: "t3code-personal-dev",
     iosBundleIdentifier: "com.jayleaton.t3code.dev",
     androidPackage: "com.jayleaton.t3code.dev",
-    relyingParty: "clerk.t3.codes",
-    assets: AGENTS_ASSETS,
+    assets: DEV_ASSETS,
   },
   preview: {
-    appName: "T3 Agents Preview",
+    appName: `${HOME_SCREEN_NAME} Preview`,
     scheme: "t3code-personal-preview",
     iosBundleIdentifier: "com.jayleaton.t3code.preview",
     androidPackage: "com.jayleaton.t3code.preview",
-    relyingParty: "clerk.t3.codes",
     assets: AGENTS_ASSETS,
   },
   production: {
-    appName: "T3 Agents",
+    appName: HOME_SCREEN_NAME,
     scheme: "t3code-personal",
     iosBundleIdentifier: "com.jayleaton.t3code",
     androidPackage: "com.jayleaton.t3code",
-    relyingParty: "clerk.t3.codes",
     assets: AGENTS_ASSETS,
   },
 } as const;
@@ -101,12 +106,16 @@ const dmSansFonts = {
   bold: "@expo-google-fonts/dm-sans/700Bold/DMSans_700Bold.ttf",
 } as const;
 
+const notificationsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
+  "expo-notifications",
+  { mode: APP_VARIANT === "development" ? "development" : "production" },
+];
+
 const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
   "expo-widgets",
   {
     bundleIdentifier: `${iosBundleIdentifier}.widgets`,
     groupIdentifier: `group.${iosBundleIdentifier}`,
-    enablePushNotifications: true,
     // Frequent updates need the iOS entitlement to avoid early throttling.
     frequentUpdates: true,
     enableAndroid: true,
@@ -114,7 +123,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       {
         name: "SubscriptionUsage",
         displayName: "Subscription usage",
-        description: "Subscription quotas from your connected T3 Code environments.",
+        description: "Subscription quotas from your connected environments.",
         ios: {
           configuration: {
             title: "Subscription usage",
@@ -161,14 +170,6 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
           initialLayout: "./src/widgets/SubscriptionUsage.android.tsx",
         },
       },
-      {
-        name: "AgentActivity",
-        displayName: "Agent Activity",
-        description: "Shows the current state of active agents.",
-        // Live Activity companion; there is no Android presentation for it.
-        android: null,
-        ios: { supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"] },
-      },
     ],
   },
 ];
@@ -204,7 +205,7 @@ const config: ExpoConfig = {
   slug: "t3-code-personal",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.2.0",
+  version: repoEnv.T3CODE_MOBILE_VERSION ?? "2.3.0",
   runtimeVersion: {
     // Skip costly fingerprinting on dev launches; preview and production OTAs require matching native projects.
     policy: runtimeVersionPolicy,
@@ -237,9 +238,8 @@ const config: ExpoConfig = {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
       },
-      NSLocalNetworkUsageDescription:
-        "Allow T3 Agents to connect to T3 Code servers on your local network or tailnet.",
-      NSPhotoLibraryAddUsageDescription: "Allow T3 Agents to save images to your photo library.",
+      NSLocalNetworkUsageDescription: `Allow ${APP_NAME} to connect to your environments on your local network or tailnet.`,
+      NSPhotoLibraryAddUsageDescription: `Allow ${APP_NAME} to save images to your photo library.`,
       // System picture in picture needs background audio outside the app.
       UIBackgroundModes: ["audio"],
       ITSAppUsesNonExemptEncryption: false,
@@ -277,7 +277,6 @@ const config: ExpoConfig = {
   },
   plugins: [
     "expo-asset",
-    "react-native-pdf-jsi",
     [
       "expo-font",
       {
@@ -307,14 +306,8 @@ const config: ExpoConfig = {
     ...(isIosPersonalTeamBuild
       ? [sharingPlugin]
       : ["./plugins/withShareExtensionDisplayName.cjs", sharingPlugin]),
-    [
-      "expo-notifications",
-      {
-        icon: variant.assets.androidNotificationIcon,
-        color: variant.assets.androidNotificationColor,
-        mode: APP_VARIANT === "development" ? "development" : "production",
-      },
-    ],
+    // Personal Teams cannot sign the push entitlement.
+    ...(isIosPersonalTeamBuild ? [] : [notificationsPlugin]),
     "expo-web-browser",
     [
       "expo-quick-actions",
@@ -333,8 +326,8 @@ const config: ExpoConfig = {
     [
       "expo-audio",
       {
-        microphonePermission: "Allow T3 Agents to use your microphone for voice input.",
-        recordAudioAndroid: false,
+        microphonePermission: `Allow ${APP_NAME} to use your microphone for voice input.`,
+        recordAudioAndroid: true,
         enableBackgroundPlayback: false,
         enableBackgroundRecording: false,
       },
@@ -342,13 +335,20 @@ const config: ExpoConfig = {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow T3 Agents to access your camera so you can scan pairing QR codes.",
+        cameraPermission: `Allow ${APP_NAME} to access your camera so you can scan pairing QR codes.`,
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
       },
     ],
-    ["expo-image-picker", { photosPermission: false, microphonePermission: false }],
+    [
+      "expo-image-picker",
+      {
+        photosPermission: false,
+        // `false` makes this plugin add RECORD_AUDIO to blockedPermissions, breaking Android dictation.
+        microphonePermission: `Allow ${APP_NAME} to use your microphone for voice input.`,
+      },
+    ],
     [
       "expo-splash-screen",
       {
@@ -400,24 +400,21 @@ const config: ExpoConfig = {
     "./plugins/withAndroidModernPopupMenu.cjs",
     "./plugins/withAndroidModernAlertDialog.cjs",
     "./plugins/withAndroidPredictiveBackCompat.cjs",
+    // MainActivity mods run in reverse order; extend the tablet-orientation override.
+    "./plugins/withAndroidWindowDisplayMetrics.cjs",
     "./plugins/withAndroidTabletOrientation.cjs",
     ...(isIosPersonalTeamBuild ? ["./plugins/withoutIosPersonalTeamCapabilities.cjs"] : []),
   ],
   extra: {
     eas: {
       projectId: "263247b1-0330-46c5-ac6a-7efcba44c359",
-      observe: { endpointUrl: observeEndpointUrl },
     },
     appVariant: APP_VARIANT,
     personalClient: isPersonalClient,
+    secretsFeatureEnabled: ["1", "true"].includes(
+      process.env.T3CODE_FEATURE_SECRETS?.trim().toLowerCase() ?? "",
+    ),
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
-    relay: { url: null },
-    clerk: { publishableKey: null, jwtTemplate: null },
-    observability: {
-      tracesUrl: repoEnv.EXPO_PUBLIC_OTLP_TRACES_URL ?? "https://api.axiom.co/v1/traces",
-      tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
-      tracesToken: repoEnv.EXPO_PUBLIC_OTLP_TRACES_TOKEN ?? null,
-    },
   },
   owner: "jayleaton",
   experiments: {

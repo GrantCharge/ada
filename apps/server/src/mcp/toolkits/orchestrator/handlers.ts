@@ -1,17 +1,40 @@
 import * as RemoteThreads from "../../agents/remoteThreads.ts";
-import { OrchestratorMcpFailure } from "@t3tools/contracts";
+import { type EnvironmentId, OrchestratorMcpFailure } from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
 
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as RemoteDelegation from "../../../peer/RemoteDelegation.ts";
 import * as TailnetDevices from "../../../peer/TailnetDevices.ts";
+import { callerLinkOrigin } from "../../linkOrigin.ts";
 import { readCaller } from "../../threadAccess.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../../OrchestratorMcpService.ts";
 import * as ThreadMetadataMcpService from "../../ThreadMetadataMcpService.ts";
+
+/**
+ * Revoking cuts a machine off everywhere, so it comes from the user or a chat on this machine:
+ * never through a link or an outside client, which may be acting from the machine it would cut.
+ */
+const assertMayRevoke = Effect.fn("mcp.assertMayRevoke")(function* (environmentId: EnvironmentId) {
+  const caller = yield* readCaller();
+  if (environmentId === caller.scope.environmentId) {
+    return yield* new OrchestratorMcpFailure({
+      code: "invalid_request",
+      message: "This machine cannot revoke itself.",
+    });
+  }
+  if (caller.scope.client !== undefined || callerLinkOrigin(caller) !== undefined) {
+    return yield* new OrchestratorMcpFailure({
+      code: "capability_denied",
+      message:
+        "Only the user, or a chat on this machine, can revoke a machine. Ask them to revoke it in Settings, Connections.",
+    });
+  }
+});
 
 export const layer = McpToolAccess.toLayer(
   OrchestratorToolkit,
@@ -88,7 +111,9 @@ export const layer = McpToolAccess.toLayer(
                 (cause) =>
                   new OrchestratorMcpFailure({
                     code:
-                      cause.reason === "unsupported" ? "invalid_request" : "orchestration_error",
+                      cause.reason === "unsupported" || cause.reason === "unmatched"
+                        ? "invalid_request"
+                        : "orchestration_error",
                     message: cause.message,
                   }),
               ),
@@ -115,7 +140,16 @@ export const layer = McpToolAccess.toLayer(
           { refused: "schedule tasks in this environment" },
         ),
         McpToolAccess.writes(
-          ({ scheduledTaskId, prompt, title, schedule, enabled, bindToCurrentThread, profileId }) =>
+          ({
+            scheduledTaskId,
+            prompt,
+            title,
+            schedule,
+            enabled,
+            bindToCurrentThread,
+            profileId,
+            freshSession,
+          }) =>
             Effect.gen(function* () {
               if (scheduledTaskId === undefined) return yield* Effect.die("unreachable");
               const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -128,6 +162,7 @@ export const layer = McpToolAccess.toLayer(
                 enabled,
                 bindToCurrentThread,
                 profileId,
+                freshSession,
               });
             }),
         ),
@@ -169,6 +204,16 @@ export const layer = McpToolAccess.toLayer(
       ),
       t3_thread_read: McpToolAccess.reads((input) =>
         Effect.gen(function* () {
+          if (
+            input.tail === true &&
+            (input.beforePosition !== undefined || input.afterPosition !== undefined)
+          ) {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message:
+                "tail reads the newest items, so it cannot be combined with beforePosition or afterPosition. Omit tail.",
+            });
+          }
           const remote = yield* remoteTarget(input.environmentId);
           if (remote !== undefined) return yield* RemoteThreads.readThread(remote, input);
           const scope = yield* McpInvocationContext.McpInvocationContext;
@@ -185,16 +230,25 @@ export const layer = McpToolAccess.toLayer(
             return yield* service.update(scope, input);
           }),
       ),
-      t3_thread_send: McpToolAccess.writesThreads(
-        (input) => [input.threadId],
-        (input) =>
+      t3_thread_send: McpToolAccess.afterForwarding(
+        McpToolAccess.writesThreads(
+          (input) => [input.threadId],
+          (input) =>
+            Effect.gen(function* () {
+              const scope = yield* McpInvocationContext.McpInvocationContext;
+              const remote = yield* remoteTarget(input.environmentId);
+              if (remote !== undefined)
+                return yield* RemoteThreads.sendToThread(remote, scope, input);
+              const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+              return yield* service.sendToThread(scope, input);
+            }),
+        ),
+        // There the thread's parent is here, so only this side can make a follow-up a task.
+        (input, environmentId, sent) =>
           Effect.gen(function* () {
             const scope = yield* McpInvocationContext.McpInvocationContext;
-            const remote = yield* remoteTarget(input.environmentId);
-            if (remote !== undefined)
-              return yield* RemoteThreads.sendToThread(remote, scope, input);
-            const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-            return yield* service.sendToThread(scope, input);
+            const remote = yield* RemoteDelegation.RemoteDelegation;
+            return yield* remote.followUp(scope, environmentId, input, sent);
           }),
       ),
       t3_thread_wait: McpToolAccess.reads((input) =>
@@ -241,19 +295,25 @@ export const layer = McpToolAccess.toLayer(
       // an environment setting too.
       t3_environment_device_access: McpToolAccess.writesEnvironment(({ environmentId, access }) =>
         Effect.gen(function* () {
+          if (access === "revoked") yield* assertMayRevoke(environmentId);
+          const caller = yield* McpInvocationContext.McpInvocationContext;
           const devices = yield* TailnetDevices.TailnetDevices;
-          const entry = yield* devices.setAccess(environmentId, access).pipe(
-            Effect.mapError(
-              (error) =>
-                new OrchestratorMcpFailure({
-                  code:
-                    error.reason === "unknown_device" || error.reason === "self"
-                      ? "invalid_request"
-                      : "orchestration_error",
-                  message: error.message,
-                }),
-            ),
-          );
+          const entry = yield* devices
+            .setAccess(environmentId, access, "agent", caller.client?.peerEnvironmentId)
+            .pipe(
+              Effect.mapError(
+                (error) =>
+                  new OrchestratorMcpFailure({
+                    code:
+                      error.reason === "unknown_device" || error.reason === "self"
+                        ? "invalid_request"
+                        : error.reason === "forbidden"
+                          ? "capability_denied"
+                          : "orchestration_error",
+                    message: error.message,
+                  }),
+              ),
+            );
           return { environmentId: entry.environmentId, access: entry.access };
         }),
       ),

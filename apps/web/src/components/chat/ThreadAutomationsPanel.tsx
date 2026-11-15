@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
 import { useNavigate } from "@tanstack/react-router";
-import { CalendarClockIcon, PencilIcon, PlayIcon, Settings2Icon } from "lucide-react";
+import { CalendarClockIcon, PencilIcon, PlayIcon, PlusIcon, Settings2Icon } from "lucide-react";
 import { useState } from "react";
 import {
   AuthOrchestrationOperateScope,
@@ -16,7 +16,9 @@ import {
 
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { cn } from "../../lib/utils";
-import { ScheduledRelativeLabel, scheduleLabel } from "../settings/ScheduledTasksSettings";
+import { ScheduledRelativeLabel } from "../settings/ScheduledTasksSettings";
+import { isScheduledTaskArchived } from "@t3tools/client-runtime/scheduled-task-archive";
+import { scheduleLabel } from "../settings/scheduledTasksSettings.logic";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -37,11 +39,13 @@ const STATUS_DOT_CLASS: Record<ScheduledTask["lastRunStatus"], string> = {
   failed: "bg-destructive",
 };
 
-function taskScheduleLine(task: ScheduledTask) {
+function taskScheduleLine(task: ScheduledTask, timeZone: string | undefined) {
   return (
     <>
-      {scheduleLabel(task.schedule)}
-      {task.enabled && task.nextRunAt !== null ? (
+      {scheduleLabel(task.schedule, timeZone, task.nextRunAt)}
+      {task.blockedByPolicy !== undefined ? (
+        ` · ${task.blockedByPolicy}`
+      ) : task.enabled && task.nextRunAt !== null ? (
         <>
           {" · next "}
           <ScheduledRelativeLabel value={task.nextRunAt} />
@@ -62,6 +66,9 @@ export function ThreadAutomationsPanel(props: {
   const canOperate = useAtomValue(
     serverEnvironment.runScheduledTaskNow.permissionAtom(props.environmentId),
   );
+  const canCreate = useAtomValue(
+    serverEnvironment.upsertScheduledTask.permissionAtom(props.environmentId),
+  );
   const tasksQuery = useEnvironmentQuery(
     serverEnvironment.scheduledTasksLive({ environmentId: props.environmentId, input: {} }),
   );
@@ -75,7 +82,7 @@ export function ThreadAutomationsPanel(props: {
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
 
   const boundTasks = (tasksQuery.data?.tasks ?? []).filter(
-    (task) => task.threadId === props.threadId,
+    (task) => task.threadId === props.threadId && !isScheduledTaskArchived(task),
   );
 
   if (tasksQuery.error === null && boundTasks.length === 0) return null;
@@ -130,30 +137,54 @@ export function ThreadAutomationsPanel(props: {
       title="Automations"
       data-thread-automations-panel
       actions={
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <ThreadDetailsControl
-                size="icon-xs"
-                variant="ghost"
-                part="icon"
-                aria-label="Manage scheduled tasks"
-                onClick={() =>
-                  void navigate({
-                    to: "/settings/scheduled-tasks",
-                    search: { environmentId: props.environmentId },
-                  })
-                }
-              >
-                <Settings2Icon className="size-3.5" />
-              </ThreadDetailsControl>
-            }
-          />
-          <TooltipPopup>Manage scheduled tasks</TooltipPopup>
-        </Tooltip>
+        <>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ThreadDetailsControl
+                  size="icon-xs"
+                  variant="ghost"
+                  part="icon"
+                  aria-label="New automation"
+                  disabled={!canCreate}
+                  onClick={() =>
+                    void navigate({
+                      to: "/settings/scheduled-tasks",
+                      search: { environmentId: props.environmentId, threadId: props.threadId },
+                    })
+                  }
+                >
+                  <PlusIcon className="size-3.5" />
+                </ThreadDetailsControl>
+              }
+            />
+            <TooltipPopup>New automation for this thread</TooltipPopup>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <ThreadDetailsControl
+                  size="icon-xs"
+                  variant="ghost"
+                  part="icon"
+                  aria-label="Manage scheduled tasks"
+                  onClick={() =>
+                    void navigate({
+                      to: "/settings/scheduled-tasks",
+                      search: { environmentId: props.environmentId },
+                    })
+                  }
+                >
+                  <Settings2Icon className="size-3.5" />
+                </ThreadDetailsControl>
+              }
+            />
+            <TooltipPopup>Manage scheduled tasks</TooltipPopup>
+          </Tooltip>
+        </>
       }
     >
-      <ul className="m-0 list-none p-0">
+      <ul className="m-0 max-h-[13.5rem] list-none overflow-y-auto p-0">
         {boundTasks.map((task) => (
           <li
             key={task.id}
@@ -177,11 +208,15 @@ export function ThreadAutomationsPanel(props: {
                 <span className="block truncate text-sm font-medium text-foreground/80">
                   {task.title}
                 </span>
-                <p className="truncate text-2xs text-muted-foreground">{taskScheduleLine(task)}</p>
+                <p className="truncate text-2xs text-muted-foreground">
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone)}
+                </p>
               </TooltipTrigger>
               <TooltipPopup side="left">
                 <p className="font-medium">{task.title}</p>
-                <p className="text-muted-foreground">{taskScheduleLine(task)}</p>
+                <p className="text-muted-foreground">
+                  {taskScheduleLine(task, tasksQuery.data?.timeZone)}
+                </p>
               </TooltipPopup>
             </Tooltip>
             <Tooltip>

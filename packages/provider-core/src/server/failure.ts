@@ -16,6 +16,7 @@ import * as Schema from "effect/Schema";
 
 import * as IdAllocator from "./IdAllocator.ts";
 import type { ProviderAdapterFailureReason } from "./ProviderAdapter.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export class ContextHandoffBudgetError extends Schema.TaggedError<ContextHandoffBudgetError>()(
   "ContextHandoffBudgetError",
@@ -50,7 +51,7 @@ export class ProviderSessionStoppedError extends Schema.TaggedError<ProviderSess
   { detail: Schema.String },
 ) {
   override get message(): string {
-    return `T3 Code stopped the provider session: ${this.detail} Retry the turn.`;
+    return `${APP_NAME} stopped the provider session: ${this.detail} Retry the turn.`;
   }
 }
 
@@ -74,6 +75,14 @@ const PROVIDER_FAILURE_CATEGORIES: Partial<
     guidance: "Retry the turn; if it keeps failing, check the provider and server logs.",
   },
 };
+
+// codex_protocol::protocol::validate_thread_goal_objective
+const CODEX_GOAL_VALIDATION_MESSAGE =
+  /^goal objective must (?:not be empty|be at most \d{1,6} characters)$/u;
+
+// codex_config::ConstraintError::InvalidValue for a managed requirements.toml or cloud policy.
+const CODEX_ACCESS_REQUIREMENT_REJECTION =
+  /invalid value for `(approval_policy|sandbox_mode)`: `([A-Za-z]{1,32})` is not in the allowed set /u;
 
 const PROVIDER_FAILURE_REASONS: Record<ProviderAdapterFailureReason, string> = {
   previous_turn_active: "the previous turn is still running",
@@ -121,14 +130,46 @@ function curatedCauseMessages(cause: unknown): {
         case "ClaudeAppendSystemPromptMissingValueError":
         case "ClaudeSettingsLaunchArgError":
         case "ClaudeMcpRegistrationTimeoutError":
+        case "ClaudeCodeRootRefusalError":
         case "CursorModelUnavailableError":
         case "ProviderSessionStoppedError":
+        case "CodexGoalObjectiveTooLongError":
         case "ProviderSetupError":
+        case "ProviderAdapterThreadInUseError":
+        case "ProviderCompactionUnsupportedError":
           return { known: stringField(cause, "message"), category: categoryMessage() };
+        case "CodexAppServerRequestError": {
+          // Only Codex's fixed-shape goal validation and managed-requirements
+          // text is actionable and safe to show; other request error text stays hidden.
+          const rejection = stringField(cause, "message");
+          if (
+            (cause as Record<string, unknown>).method === "thread/goal/set" &&
+            rejection !== undefined &&
+            CODEX_GOAL_VALIDATION_MESSAGE.test(rejection)
+          ) {
+            return { known: `Codex rejected the goal: ${rejection}.`, category: categoryMessage() };
+          }
+          const access =
+            rejection === undefined ? null : CODEX_ACCESS_REQUIREMENT_REJECTION.exec(rejection);
+          if (access !== null) {
+            return {
+              known: `Codex's managed requirements do not allow \`${access[1]}\` \`${access[2]}\`, which this thread's access mode uses. Switch the thread to an access mode the policy allows.`,
+              category: categoryMessage(),
+            };
+          }
+          break;
+        }
+        case "AcpProcessExitedError": {
+          const exit = `provider process exited${processExitStatus(cause)}`;
+          const stage = category === undefined ? `The ${exit}` : `${category.summary}: the ${exit}`;
+          return {
+            known: `${stage}. Check the server logs for the provider's output, then retry the turn.`,
+            category: categoryMessage(),
+          };
+        }
         case "ContextHandoffDeliveryUncertainError":
           return {
-            known:
-              "T3 could not confirm whether conversation history reached the provider. Retry the turn to recover the session.",
+            known: `${APP_NAME} could not confirm whether conversation history reached the provider. Retry the turn to recover the session.`,
             category: categoryMessage(),
           };
         case "ProviderAdapterProtocolError": {
@@ -153,6 +194,15 @@ function curatedCauseMessages(cause: unknown): {
     }
   }
   return { known: undefined, category: categoryMessage() };
+}
+
+// Only the structured status; stderr and the spawner cause can carry provider output.
+function processExitStatus(exited: object): string {
+  const { signal, code } = exited as Record<string, unknown>;
+  if (typeof signal === "string" && /^SIG[A-Z0-9]{1,16}$/u.test(signal)) {
+    return ` after signal ${signal}`;
+  }
+  return typeof code === "number" && Number.isSafeInteger(code) ? ` with code ${code}` : "";
 }
 
 /**

@@ -1,4 +1,5 @@
 import { AgentLibrarySync } from "../hooks/useAgentLibrary";
+import { NetworkMembersSync } from "../state/NetworkMembersSync";
 import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import {
@@ -11,20 +12,18 @@ import {
   useNavigate,
   useRouter,
 } from "@tanstack/react-router";
-import { Check, Copy } from "lucide";
+import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { APP_DISPLAY_NAME, APP_VERSION } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
-import { GuestShareDialogHost } from "../components/chat/GuestShareControls";
+import { UseInAnotherAppDialogHost } from "../components/mcp/UseInAnotherAppDialog";
 import { AddProjectToMachineDialogHost } from "../components/AddProjectToMachineDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { DevReplayHost } from "../components/DevReplayHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
-import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
-import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
@@ -32,15 +31,14 @@ import { DesktopWebLinkCoordinator } from "../components/desktop/DesktopWebLinkC
 import { RunningThreadKeepAlive } from "../components/desktop/RunningThreadKeepAlive";
 import { ReopenClosedViewShortcut } from "../components/ReopenClosedViewShortcut";
 import { ProjectCloneToastCoordinator } from "../components/ProjectCloneToastCoordinator";
+import { ConnectOnlyNoticeCoordinator } from "../components/ConnectOnlyNoticeCoordinator";
 import { ChatGptWelcomeCoordinator } from "../components/settings/ChatGptWelcomeCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { Button } from "../components/ui/button";
-import { MorphIcon } from "~/components/MorphIcon";
 import { StandalonePage, StandalonePageHeader } from "../components/ui/standalone-page";
 import { AnchoredToastProvider, ToastProvider } from "../components/ui/toast";
 import { isElectron } from "../env";
-import { cn } from "../lib/utils";
 import { useClientSettings } from "../hooks/useSettings";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -50,7 +48,6 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { configureClientTracing } from "../observability/clientTracing";
 import { resolveInitialServerAuthGateState } from "../environments/primary";
-import { GUEST_PAGE_PATH } from "../guestPage";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { useHostedPromptLinkLanding } from "../components/promptLinks/HostedPromptLinkLanding";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
@@ -59,20 +56,11 @@ import { primaryServerConfigAtom, primaryServerWelcomeAtom } from "../state/serv
 import { readProject } from "../state/entities";
 
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
+import { isChunkLoadError } from "../lib/chunkReloadGuard";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
-    // Guest links open on the owner's tunnel host in a browser with no T3 session, and must
-    // not trigger pairing or an environment connection.
-    if (location.pathname === GUEST_PAGE_PATH) {
-      return {
-        authGateState: {
-          status: "guest",
-        } as const,
-      };
-    }
-
     if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
       return {
         authGateState: {
@@ -154,9 +142,7 @@ function RootRouteBranch() {
     authGateState.status === "hosted-static",
   );
 
-  if (pathname === GUEST_PAGE_PATH) return <Outlet />;
-
-  if (pathname === "/pair" || pathname === "/connect" || pathname === "/connect-agent") {
+  if (pathname === "/pair" || pathname === "/connect-agent") {
     return <Outlet />;
   }
 
@@ -165,28 +151,38 @@ function RootRouteBranch() {
     return hostedPromptLinkLanding;
   }
 
-  if (pathname === "/welcome") {
-    return (
-      <>
-        <CustomSnoozeDialogHost />
-        <GuestShareDialogHost />
-        <CommandPalette>
-          <AppSidebarLayout>
-            <Outlet />
-          </AppSidebarLayout>
-        </CommandPalette>
-      </>
-    );
-  }
-
+  const isWelcome = pathname === "/welcome";
   if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
     return <Outlet />;
   }
 
+  // Settings can reopen /welcome mid-session, so it mounts everything the app does except the
+  // first-run gate and the event router, whose first navigation would leave the page.
+  const appHosts = (
+    <>
+      {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
+      {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
+        <DesktopWebLinkCoordinator />
+      ) : null}
+      {isElectron ? <RunningThreadKeepAlive /> : null}
+      <SshPasswordPromptDialog />
+      <SnapShotCoordinator />
+      <ReopenClosedViewShortcut />
+      <ConfirmDialogHost />
+      <CustomSnoozeDialogHost />
+      <ProjectCloneToastCoordinator />
+      <ConnectOnlyNoticeCoordinator />
+      <AddProjectToMachineDialogHost />
+      <UseInAnotherAppDialogHost />
+      {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
+    </>
+  );
   const appShell = (
     <CommandPalette>
       <AgentLibrarySync />
-      <AppSidebarLayout>
+      <NetworkMembersSync />
+      {/* Setup starts with an empty workspace, so the Welcome page has no thread list. */}
+      <AppSidebarLayout showSidebar={!isWelcome}>
         <Outlet />
       </AppSidebarLayout>
     </CommandPalette>
@@ -195,33 +191,25 @@ function RootRouteBranch() {
   return (
     <>
       <ChatGptWelcomeCoordinator />
-      <FirstRunGate
-        enabled={primaryEnvironmentAuthenticated}
-        hostedStatic={authGateState.status === "hosted-static"}
-      >
-        {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
-        {primaryEnvironmentAuthenticated || localEnvironmentDisabled ? (
-          <DesktopWebLinkCoordinator />
-        ) : null}
-        {isElectron ? <RunningThreadKeepAlive /> : null}
-        <RelayClientInstallDialog />
-        <ConnectOnboardingDialog />
-        <SshPasswordPromptDialog />
-        <SnapShotCoordinator />
-        <ReopenClosedViewShortcut />
-        <ConfirmDialogHost />
-        <CustomSnoozeDialogHost />
-        <GuestShareDialogHost />
-        <ProjectCloneToastCoordinator />
-        <AddProjectToMachineDialogHost />
-        {import.meta.env.DEV && primaryEnvironmentAuthenticated ? <DevReplayHost /> : null}
-        {primaryEnvironmentAuthenticated ? (
-          <EventRouter skipInitialBootstrapNavigation={returningFromWelcome} />
-        ) : null}
-        {appShell}
-        {/* Keep the theme editor above the router so drafts survive navigation. */}
-        <ThemeEditorHost />
-      </FirstRunGate>
+      {isWelcome ? (
+        <>
+          {appHosts}
+          {appShell}
+        </>
+      ) : (
+        <FirstRunGate
+          enabled={primaryEnvironmentAuthenticated}
+          hostedStatic={authGateState.status === "hosted-static"}
+        >
+          {appHosts}
+          {primaryEnvironmentAuthenticated ? (
+            <EventRouter skipInitialBootstrapNavigation={returningFromWelcome} />
+          ) : null}
+          {appShell}
+        </FirstRunGate>
+      )}
+      {/* Above both shells and the router, so drafts survive navigation, including to /welcome. */}
+      <ThemeEditorHost />
     </>
   );
 }
@@ -238,7 +226,12 @@ function RootRouteErrorView({ error }: ErrorComponentProps) {
       <StandalonePageHeader title="Something went wrong." description={message} />
 
       <div className="mt-5 flex flex-wrap gap-2">
-        <Button size="sm" onClick={() => void router.invalidate()}>
+        <Button
+          size="sm"
+          onClick={() =>
+            isChunkLoadError(error) ? window.location.reload() : void router.invalidate()
+          }
+        >
           Try again
         </Button>
         <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
@@ -262,7 +255,7 @@ function CopyErrorButton({ report }: { report: string }) {
 
   return (
     <Button size="sm" variant="outline" onClick={() => copyToClipboard(report)}>
-      <MorphIcon className={cn(isCopied && "text-success")} icon={isCopied ? Check : Copy} />
+      {isCopied ? <CheckIcon className="text-success" /> : <CopyIcon />}
       {isCopied ? "Copied" : "Copy error"}
     </Button>
   );

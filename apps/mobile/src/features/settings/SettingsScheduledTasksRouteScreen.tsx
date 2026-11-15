@@ -2,6 +2,8 @@ import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
+  clampManagedRuntimeMode,
+  managedCapabilityDenial,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
 import { readEnvironmentScope } from "../../state/session";
@@ -9,13 +11,15 @@ import type {
   EnvironmentId,
   ProjectId,
   ScheduledTask,
+  ScheduledTaskThreadMode,
   ScheduledTaskUpsertInput,
 } from "@t3tools/contracts";
 import {
-  MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   MAX_WEBHOOK_FILTERS,
   resolveEnvironmentMachineKind,
+  scheduledTaskThreadMode,
 } from "@t3tools/contracts";
+import { useSelectWorkspaceDetail } from "../layout/workspace/useSelectWorkspaceDetail";
 import type { MenuAction } from "@react-native-menu/menu";
 import { DateTimePicker } from "@expo/ui/community/datetime-picker";
 import {
@@ -23,15 +27,24 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { resolvePastedPath } from "@t3tools/shared/path";
 import {
   DEFAULT_WEBHOOK_PROMPT,
   emptyWebhookFilterDraft,
-  parseMaxDeliveryAge,
   parseWebhookFilterDrafts,
   removeWebhookFilterDraft,
   WEBHOOK_FILTER_OPS,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
+import { scheduleTimeZoneLabel } from "@t3tools/client-runtime/scheduled-task-time-zone";
+import {
+  describeSchedule as describeRepeatSchedule,
+  localTimeZone,
+  repeatFormToCron,
+  WEEKDAY_NAMES,
+  type RepeatForm,
+  type RepeatPreset,
+} from "@t3tools/client-runtime/scheduled-task-cron";
 import { useRef, useState, type ReactNode } from "react";
 import { useFocusEffect, useNavigation, usePreventRemove } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -48,53 +61,63 @@ import {
 import { Menu } from "../../components/ui/Menu";
 import type { ComposerEditorSelection } from "../../components/ComposerEditor";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
-import { SegmentedControl } from "../../components/ui/SegmentedControl";
+import { ListFilterMenu } from "../layout/workspace/ListFilterMenu";
+import { agentModelLabel, useEnvironmentAgents } from "../../state/agents";
 import { ThemedSwitch } from "../../components/ui/ThemedSwitch";
 import { webhookAddress } from "@t3tools/client-runtime/webhook-address";
 import { tryCopyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { usePreparedConnection } from "../../state/session";
 import { buildModelOptions } from "../../lib/modelOptions";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
+import { withImplicitFastModeSelection } from "../../lib/providerOptions";
 import { useProjects, useEnvironmentServerConfig } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { resolveNewTaskBranchLabel } from "../threads/new-task-context-presentation";
 import { useVoiceInputController } from "../voice-input/useVoiceInputController";
 import { ScheduledTaskPromptField } from "./components/ScheduledTaskPromptField";
-import {
-  AndroidSettingsEnvironmentFilter,
-  SettingsEnvironmentFilterHeader,
-} from "./components/SettingsEnvironmentFilterHeader";
+import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 import {
+  changeDraftProject,
   editDraft,
+  moveDraftOffAgent,
   parseIntervalMinutes,
+  schedulableAgentProfiles,
   scheduledTaskDefaultModel,
+  scheduledTaskDraftRouting,
   scheduleFromDraft,
+  unbindDraftFromThread,
+  type ScheduleDraft,
   type ScheduledTaskDraft as Draft,
 } from "./scheduledTaskDraft";
 import { settingsTargetsForProject } from "./settings-environment-filter.logic";
-import { useScheduledTaskEditor } from "./scheduled-task-editor";
+import { useScheduledTaskDestinationLabel, useScheduledTaskEditor } from "./scheduled-task-editor";
 import {
   discardScheduledTaskEditor,
   markScheduledTaskEditorSaved,
-  scheduledTaskEditorSessionAtom,
 } from "./scheduled-task-editor-state";
-import { appAtomRegistry } from "../../state/atom-registry";
 import {
   formatNextScheduledTaskRun,
+  formatScheduledTaskArchive,
   formatScheduledTaskInterval,
 } from "./scheduledTaskPresentation";
+import {
+  SCHEDULED_TASK_FILTERS,
+  scheduledTaskMatchesFilter,
+  scheduledTaskRestoreNeedsEditor,
+  type ScheduledTaskFilter,
+} from "@t3tools/client-runtime/scheduled-task-archive";
 
 type ScheduledTaskRoutes = {
   SettingsScheduledTaskNew: undefined;
   SettingsScheduledTaskEdit: undefined;
   SettingsScheduledTaskModel: undefined;
   SettingsScheduledTaskBranch: undefined;
+  SettingsScheduledTaskThread: undefined;
+  SettingsScheduledTaskAgent: undefined;
 };
 
 const DAYS = [
@@ -107,9 +130,36 @@ const DAYS = [
   { index: 0, label: "Sun" },
 ] as const;
 
-function describeSchedule(task: Pick<ScheduledTask, "schedule">): string {
+const THREAD_MODE_LABELS: Record<ScheduledTaskThreadMode, string> = {
+  new_thread: "New thread each run",
+  continue: "One thread, same conversation",
+  fresh_session: "One thread, fresh session",
+};
+const AGENT_DESTINATION_LABEL = "An agent's own thread";
+
+const SCHEDULE_MODE_LABELS: Record<ScheduleDraft["mode"], string> = {
+  fixed_time: "At a time",
+  once: "Once",
+  interval: "Interval",
+  cron: "Cron",
+  webhook: "On webhook",
+};
+const SCHEDULE_MODES = Object.keys(SCHEDULE_MODE_LABELS) as ReadonlyArray<ScheduleDraft["mode"]>;
+
+const REPEAT_PRESET_LABELS: Record<RepeatPreset, string> = {
+  daily: "Every day",
+  weekdays: "Weekdays",
+  weekly: "Every week",
+  hourly: "Every hour",
+  custom: "Custom cron",
+};
+
+function describeSchedule(
+  task: Pick<ScheduledTask, "schedule"> & Partial<Pick<ScheduledTask, "nextRunAt">>,
+  timeZone?: string,
+): string {
   if (task.schedule.type === "cron") {
-    return `Cron ${task.schedule.expression} (${task.schedule.timezone})`;
+    return describeRepeatSchedule(task.schedule, (iso) => iso, localTimeZone(), formatTime);
   }
   if (task.schedule.type === "webhook") return "On webhook";
   if (task.schedule.type === "once") {
@@ -118,7 +168,8 @@ function describeSchedule(task: Pick<ScheduledTask, "schedule">): string {
   }
   if (task.schedule.type === "interval") return formatScheduledTaskInterval(task.schedule.everyMs);
   const days = task.schedule.weekdays?.length ? repeatLabel(task.schedule.weekdays) : "Every day";
-  return `${days} at ${formatTime(task.schedule.timeOfDay)}`;
+  const zone = scheduleTimeZoneLabel(timeZone, task.nextRunAt);
+  return `${days} at ${formatTime(task.schedule.timeOfDay)}${zone === undefined ? "" : ` ${zone}`}`;
 }
 
 function formatTime(value: string): string {
@@ -336,6 +387,112 @@ function WebhookFilterRows(props: {
   );
 }
 
+function CronScheduleFields(props: {
+  readonly repeat: RepeatForm;
+  readonly timezone: string;
+  readonly disabled: boolean;
+  readonly onChange: (patch: { repeat: RepeatForm } | { timezone: string }) => void;
+}) {
+  const [timePickerOpen, setTimePickerOpen] = useState(false);
+  const { repeat } = props;
+  const setRepeat = (patch: Partial<RepeatForm>) =>
+    props.onChange({ repeat: { ...repeat, ...patch } });
+  return (
+    <>
+      <SelectRow
+        label="Repeat"
+        value={REPEAT_PRESET_LABELS[repeat.preset]}
+        borderTop
+        actions={(Object.keys(REPEAT_PRESET_LABELS) as RepeatPreset[]).map((preset) => ({
+          id: preset,
+          title: REPEAT_PRESET_LABELS[preset],
+          state: repeat.preset === preset ? ("on" as const) : undefined,
+        }))}
+        onSelect={(id) => {
+          const preset = (Object.keys(REPEAT_PRESET_LABELS) as RepeatPreset[]).find(
+            (entry) => entry === id,
+          );
+          if (!preset || preset === repeat.preset) return;
+          setTimePickerOpen(false);
+          // Custom starts from the current pattern so it can be tweaked.
+          setRepeat(
+            preset === "custom"
+              ? { preset, expression: repeatFormToCron(repeat) }
+              : { preset, time: preset === "hourly" ? `00:${repeat.time.slice(3)}` : repeat.time },
+          );
+        }}
+      />
+      {repeat.preset === "custom" ? (
+        <FormField
+          label="Cron expression"
+          value={repeat.expression}
+          placeholder="0 7 * * 1-5"
+          disabled={props.disabled}
+          borderTop
+          onChange={(expression) => setRepeat({ expression })}
+        />
+      ) : repeat.preset === "hourly" ? (
+        <FormField
+          label="Minutes past the hour"
+          value={repeat.time.slice(3)}
+          keyboardType="number-pad"
+          disabled={props.disabled}
+          borderTop
+          onChange={(minute) => setRepeat({ time: `00:${minute}` })}
+        />
+      ) : (
+        <>
+          {repeat.preset === "weekly" ? (
+            <SelectRow
+              label="Day"
+              value={WEEKDAY_NAMES[repeat.weekday] ?? ""}
+              borderTop
+              actions={WEEKDAY_NAMES.map((name, index) => ({
+                id: String(index),
+                title: name,
+                state: repeat.weekday === index ? ("on" as const) : undefined,
+              }))}
+              onSelect={(id) => {
+                const weekday = Number(id);
+                if (Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)
+                  setRepeat({ weekday });
+              }}
+            />
+          ) : null}
+          <PickerRow
+            label="Time"
+            value={formatTime(repeat.time)}
+            borderTop
+            disabled={props.disabled}
+            onPress={() => setTimePickerOpen((open) => !open)}
+          />
+          {timePickerOpen ? (
+            <DateTimePicker
+              value={timePickerValue(repeat.time)}
+              mode="time"
+              display={Platform.OS === "ios" ? "spinner" : "default"}
+              onDismiss={() => setTimePickerOpen(false)}
+              onValueChange={(_, selected) =>
+                setRepeat({
+                  time: `${String(selected.getHours()).padStart(2, "0")}:${String(selected.getMinutes()).padStart(2, "0")}`,
+                })
+              }
+            />
+          ) : null}
+        </>
+      )}
+      <FormField
+        label="Time zone"
+        value={props.timezone}
+        placeholder={localTimeZone()}
+        disabled={props.disabled}
+        borderTop
+        onChange={(timezone) => props.onChange({ timezone })}
+      />
+    </>
+  );
+}
+
 function PickerRow(props: {
   readonly label: string;
   readonly value: string;
@@ -400,6 +557,8 @@ export function SettingsScheduledTasksRouteScreen() {
   const { startEditor, resetEditor } = useScheduledTaskEditor();
   const navigation = useNavigation<NativeStackNavigationProp<ScheduledTaskRoutes>>();
   const insets = useSafeAreaInsets();
+  const environmentMenu = useSettingsEnvironmentMenu();
+  const [filter, setFilter] = useState<ScheduledTaskFilter>("all");
   const newTask = () => {
     if (visibleEnvironments.length === 0) return;
     resetEditor();
@@ -407,81 +566,83 @@ export function SettingsScheduledTasksRouteScreen() {
   };
 
   return (
-    <>
-      <SettingsEnvironmentFilterHeader
-        trailingItems={[
-          withNativeGlassHeaderItem({
-            type: "button",
-            label: "",
-            accessibilityLabel: "New task",
-            icon: { type: "sfSymbol", name: "plus" } as const,
-            disabled: visibleEnvironments.length === 0,
-            onPress: newTask,
-          }),
-        ]}
-      />
-      <SettingsScreen
-        title="Scheduled tasks"
-        trailing={
-          <View className="flex-row items-center">
-            <AndroidSettingsEnvironmentFilter />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="New task"
-              accessibilityState={{ disabled: visibleEnvironments.length === 0 }}
-              disabled={visibleEnvironments.length === 0}
-              onPress={newTask}
-              className="size-11 items-center justify-center rounded-full disabled:opacity-50"
-            >
-              <SymbolView name="plus" size={22} tintColorClassName="accent-icon" />
-            </Pressable>
-          </View>
-        }
+    <SettingsScreen
+      title="Scheduled tasks"
+      actions={[
+        {
+          accessibilityLabel: "New task",
+          icon: "plus",
+          disabled: visibleEnvironments.length === 0,
+          onPress: newTask,
+        },
+      ]}
+      menus={[environmentMenu]}
+    >
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        className="flex-1"
+        contentContainerClassName="gap-5 px-5 pt-4"
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="on-drag"
-          contentInsetAdjustmentBehavior="automatic"
-          showsVerticalScrollIndicator={false}
-          className="flex-1"
-          contentContainerClassName="gap-5 px-5 pt-4"
-          contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
-        >
-          {visibleEnvironments.length > 0 ? (
-            visibleEnvironments.map((environment) => (
-              <EnvironmentTasks
-                key={environment.environmentId}
-                environment={environment}
-                now={now}
-                projectIds={
-                  selectedProjectKey === null
-                    ? null
-                    : (selectedGroup?.members
-                        .filter(
-                          (member) => member.project.environmentId === environment.environmentId,
-                        )
-                        .map((member) => member.project.id) ?? [])
-                }
-                onEdit={(task) => {
-                  startEditor({
-                    environmentId: environment.environmentId,
-                    environmentLabel: environment.label,
-                    draft: editDraft(task),
-                  });
-                  navigation.navigate("SettingsScheduledTaskEdit");
-                }}
-              />
-            ))
-          ) : (
-            <Text className="px-2 text-base text-foreground-muted">
-              {availableTargets.length === 0
-                ? "Connect an environment to view and create scheduled tasks."
-                : "No environments match these filters. Change the filter above."}
-            </Text>
-          )}
-        </ScrollView>
-      </SettingsScreen>
-    </>
+        <View className="flex-row">
+          <ListFilterMenu
+            label={
+              filter === "all"
+                ? "All tasks"
+                : (SCHEDULED_TASK_FILTERS.find((option) => option.value === filter)?.label ??
+                  "All tasks")
+            }
+            accessibilityLabel="Filter scheduled tasks"
+            active={filter !== "all"}
+            actions={SCHEDULED_TASK_FILTERS.map((option) => ({
+              id: option.value,
+              title: option.label,
+              state: option.value === filter ? ("on" as const) : undefined,
+            }))}
+            onSelect={(id) => {
+              const option = SCHEDULED_TASK_FILTERS.find((entry) => entry.value === id);
+              if (option) setFilter(option.value);
+            }}
+          />
+        </View>
+        {visibleEnvironments.length > 0 ? (
+          visibleEnvironments.map((environment) => (
+            <EnvironmentTasks
+              key={environment.environmentId}
+              filter={filter}
+              environment={environment}
+              now={now}
+              projectIds={
+                selectedProjectKey === null
+                  ? null
+                  : (selectedGroup?.members
+                      .filter(
+                        (member) => member.project.environmentId === environment.environmentId,
+                      )
+                      .map((member) => member.project.id) ?? [])
+              }
+              onEdit={(task) => {
+                startEditor({
+                  environmentId: environment.environmentId,
+                  environmentLabel: environment.label,
+                  draft: editDraft(task),
+                });
+                navigation.navigate("SettingsScheduledTaskEdit");
+              }}
+            />
+          ))
+        ) : (
+          <Text className="px-2 text-base text-foreground-muted">
+            {availableTargets.length === 0
+              ? "Connect an environment to view and create scheduled tasks."
+              : "No environments match these filters. Change the filter above."}
+          </Text>
+        )}
+      </ScrollView>
+    </SettingsScreen>
   );
 }
 
@@ -528,8 +689,6 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
   const voiceInput = useVoiceInputController({
     ownerKey,
     label: editor?.draft.title.trim() || title,
-    subscribeToDraftChanges: (onChange) =>
-      appAtomRegistry.subscribe(scheduledTaskEditorSessionAtom, onChange),
     selection,
     readDraftMessage: () => {
       const current = readEditor();
@@ -567,24 +726,6 @@ function SettingsScheduledTaskEditorScreen({ title }: { readonly title: string }
   });
   return (
     <SettingsScreen title={title}>
-      {Platform.OS === "ios" ? (
-        <NativeStackScreenOptions
-          options={{
-            headerBackVisible: false,
-            gestureEnabled: !preventRemove,
-            // Native Back pops before removal guards; a bar action lets the guard run first.
-            unstable_headerLeftItems: () => [
-              withNativeGlassHeaderItem({
-                type: "button",
-                label: "",
-                accessibilityLabel: "Back",
-                icon: { type: "sfSymbol", name: "chevron.backward" },
-                onPress: () => navigation.goBack(),
-              }),
-            ],
-          }}
-        />
-      ) : null}
       <ScrollView
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
@@ -692,7 +833,10 @@ function TaskForm({
     )
     .sort((left, right) => Number(right.pinnedAt != null) - Number(left.pinnedAt != null));
   const config = useEnvironmentServerConfig(environmentId);
+  const destinationLabel = useScheduledTaskDestinationLabel(environmentId, draft.threadId);
   const modelOptions = buildModelOptions(config, null, undefined, draft.projectId);
+  // Existing webhook tasks keep the option so they can still switch to a timer.
+  const webhookDenial = managedCapabilityDenial(config?.managedPolicy, "webhookTasks");
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
   );
@@ -707,6 +851,7 @@ function TaskForm({
     draft.task !== null &&
     tasks.data !== null &&
     !tasks.data.tasks.some((task) => task.id === draft.task?.id);
+  const runAtZone = scheduleTimeZoneLabel(tasks.data?.timeZone);
   const environmentUnavailable = !availableTargets.some(
     (target) => target.environmentId === environmentId,
   );
@@ -720,6 +865,15 @@ function TaskForm({
   const offersOnce =
     config?.environment.capabilities.oneTimeSchedules === true ||
     draft.task?.schedule.type === "once";
+  const offersThreadModes = config?.environment.capabilities.scheduledTaskThreadModes === true;
+  const agents = useEnvironmentAgents(environmentId);
+  const agentProfiles = agents.status === "ready" ? agents.profiles : [];
+  const runnableAgents = schedulableAgentProfiles(agentProfiles, environmentId);
+  const agentProfile =
+    draft.profileId === null
+      ? undefined
+      : agentProfiles.find((profile) => profile.profileId === draft.profileId);
+  const offersAgents = offersThreadModes && (runnableAgents.length > 0 || draft.profileId !== null);
   const save = async () => {
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
@@ -737,20 +891,10 @@ function TaskForm({
         ? { ...draft.schedule, signature: liveTask.schedule.signature }
         : draft.schedule,
     );
-    if (
-      draft.schedule.mode === "webhook" &&
-      parseMaxDeliveryAge(draft.schedule.maxDeliveryAgeMinutes) === undefined
-    ) {
-      Dialog.alert(
-        "Invalid age limit",
-        `Enter whole minutes from 1 to ${MAX_WEBHOOK_DELIVERY_AGE_MINUTES}, or leave it blank.`,
-      );
-      return;
-    }
     if (draft.schedule.mode === "once" && !offersOnce) {
       Dialog.alert(
         "Once is not available here",
-        "This environment runs an older T3 Code. Update it to schedule a one-time task, or pick another schedule.",
+        "This environment runs an older version. Update it to schedule a one-time task, or pick another schedule.",
       );
       return;
     }
@@ -770,14 +914,22 @@ function TaskForm({
       !draft.title.trim() ||
       !draft.prompt.trim() ||
       !draft.projectId ||
-      !draft.modelSelection ||
       !schedule ||
       (draft.workspace === "existing_worktree" && !draft.checkoutPath.trim())
     ) {
       Dialog.alert(
         "Incomplete task",
-        "Add a name, prompt, project, model, valid schedule, and checkout path if needed.",
+        "Add a name, prompt, project, valid schedule, and checkout path if needed.",
       );
+      return;
+    }
+    const routing = scheduledTaskDraftRouting(draft, {
+      profiles: agentProfiles,
+      providers: config?.providers ?? [],
+      offersThreadModes,
+    });
+    if (typeof routing === "string") {
+      Dialog.alert(draft.profileId === null ? "Incomplete task" : "Agent unavailable", routing);
       return;
     }
     if (!projects.some((project) => project.id === draft.projectId)) {
@@ -789,10 +941,13 @@ function TaskForm({
       title: draft.title.trim(),
       prompt: draft.prompt.trim(),
       projectId: draft.projectId,
-      modelSelection: draft.modelSelection,
       schedule,
       enabled: draft.enabled,
-      threadId: draft.task?.threadId ?? null,
+      ...routing,
+      modelSelection: withImplicitFastModeSelection(
+        routing.modelSelection,
+        config?.providers ?? [],
+      ),
       workspaceStrategy:
         draft.workspace === "root"
           ? { type: "root" }
@@ -803,8 +958,12 @@ function TaskForm({
                 baseRef: draft.baseRef.trim() || "main",
                 startFromOrigin: draft.startFromOrigin,
               },
-      runtimeMode: draft.runtimeMode,
-      interactionMode: draft.task?.interactionMode ?? "default",
+      // A mode above the administrator's ceiling is refused; agents keep their own.
+      runtimeMode:
+        draft.profileId === null
+          ? (clampManagedRuntimeMode(config?.managedPolicy, routing.runtimeMode) ??
+            routing.runtimeMode)
+          : routing.runtimeMode,
       creationSource: draft.task?.creationSource ?? "mobile",
     };
     submissionPending.current = true;
@@ -902,8 +1061,7 @@ function TaskForm({
                     draft.modelSelection.instanceId,
                   ));
               setDraft({
-                ...draft,
-                projectId: project.id,
+                ...changeDraftProject(draft, project.id),
                 modelSelection: keepsExplicitModel
                   ? draft.modelSelection
                   : scheduledTaskDefaultModel(config, project),
@@ -915,17 +1073,97 @@ function TaskForm({
             label="Model"
             borderTop
             value={
-              modelOptions.find(
-                (option) =>
-                  option.selection.instanceId === draft.modelSelection?.instanceId &&
-                  option.selection.model === draft.modelSelection?.model,
-              )?.label ??
-              draft.modelSelection?.model ??
-              (modelOptions.length ? "Choose model" : "No models available")
+              draft.profileId !== null
+                ? ((agentProfile && agentModelLabel(agentProfile)) ?? "Set by the agent")
+                : (modelOptions.find(
+                    (option) =>
+                      option.selection.instanceId === draft.modelSelection?.instanceId &&
+                      option.selection.model === draft.modelSelection?.model,
+                  )?.label ??
+                  draft.modelSelection?.model ??
+                  (modelOptions.length ? "Choose model" : "No models available"))
             }
             onPress={() => navigation.navigate("SettingsScheduledTaskModel")}
-            disabled={saving || dictationPending || environmentUnavailable}
+            disabled={
+              draft.profileId !== null || saving || dictationPending || environmentUnavailable
+            }
           />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Destination"
+          footer={
+            draft.profileId !== null
+              ? "Runs continue in the agent's own thread, with its model and modes. The first run starts the thread."
+              : draft.threadMode === "new_thread"
+                ? "Each run starts a new thread."
+                : `${
+                    draft.threadMode === "continue"
+                      ? "Runs continue one conversation."
+                      : "Runs share one thread, each in a fresh session without earlier runs' context."
+                  }${
+                    draft.threadId === null ? " The first run starts the thread." : ""
+                  } Deleting it also deletes this task.`
+          }
+        >
+          {offersThreadModes ? (
+            <SelectRow
+              label="Runs go to"
+              value={
+                draft.profileId !== null
+                  ? AGENT_DESTINATION_LABEL
+                  : THREAD_MODE_LABELS[draft.threadMode]
+              }
+              actions={[
+                ...(Object.keys(THREAD_MODE_LABELS) as ScheduledTaskThreadMode[]).map((mode) => ({
+                  id: mode,
+                  title: THREAD_MODE_LABELS[mode],
+                  state:
+                    draft.profileId === null && draft.threadMode === mode
+                      ? ("on" as const)
+                      : undefined,
+                })),
+                ...(offersAgents
+                  ? [
+                      {
+                        id: "agent",
+                        title: AGENT_DESTINATION_LABEL,
+                        state: draft.profileId !== null ? ("on" as const) : undefined,
+                      },
+                    ]
+                  : []),
+              ]}
+              onSelect={(id) => {
+                if (id === "agent") {
+                  if (draft.profileId === null) navigation.navigate("SettingsScheduledTaskAgent");
+                } else if (id === "new_thread")
+                  setDraft({ ...unbindDraftFromThread(moveDraftOffAgent(draft)), threadMode: id });
+                else if (id === "continue" || id === "fresh_session")
+                  setDraft({ ...moveDraftOffAgent(draft), threadMode: id });
+              }}
+            />
+          ) : null}
+          {draft.profileId !== null ? (
+            <PickerRow
+              label="Agent"
+              borderTop
+              value={agentProfile?.name ?? "Unavailable agent"}
+              onPress={() => navigation.navigate("SettingsScheduledTaskAgent")}
+              disabled={saving || dictationPending || environmentUnavailable}
+            />
+          ) : !offersThreadModes || draft.threadMode !== "new_thread" ? (
+            <PickerRow
+              label="Thread"
+              borderTop={offersThreadModes}
+              value={
+                draft.threadId === null && draft.threadMode !== "new_thread"
+                  ? "Started by the first run"
+                  : destinationLabel
+              }
+              onPress={() => navigation.navigate("SettingsScheduledTaskThread")}
+              disabled={!draft.projectId || saving || dictationPending || environmentUnavailable}
+            />
+          ) : null}
         </SettingsSection>
 
         <SettingsSection title="Workspace">
@@ -979,57 +1217,72 @@ function TaskForm({
               disabled={saving}
               value={draft.checkoutPath}
               borderTop
-              onChange={(checkoutPath) => setDraft({ ...draft, checkoutPath })}
+              onChange={(checkoutPath) =>
+                setDraft({
+                  ...draft,
+                  checkoutPath: resolvePastedPath(draft.checkoutPath, checkoutPath),
+                })
+              }
             />
           ) : null}
         </SettingsSection>
 
         <SettingsSection title="Schedule">
-          <View className="px-4 py-3">
-            <SegmentedControl
-              variant="card"
-              options={[
-                ...(draft.schedule.kept ? [{ value: "kept" as const, label: "Current" }] : []),
-                { value: "fixed_time" as const, label: "At a time" },
-                // Older servers reject one-time schedules on save.
-                ...(offersOnce || draft.schedule.mode === "once"
-                  ? [{ value: "once" as const, label: "Once" }]
-                  : []),
-                { value: "interval" as const, label: "Interval" },
-                { value: "webhook" as const, label: "On webhook" },
-              ]}
-              selected={draft.schedule.mode}
-              onSelect={(mode) => {
-                setTimePickerOpen(false);
-                setRunAtPicker(null);
-                setDraft({
-                  ...draft,
-                  prompt:
-                    mode === "webhook" && !draft.prompt.trim()
-                      ? DEFAULT_WEBHOOK_PROMPT
-                      : draft.prompt,
-                  schedule: {
-                    ...draft.schedule,
-                    mode,
-                    runAt:
-                      mode === "once" && !draft.schedule.runAt
-                        ? new Date(Math.ceil(Date.now() / 3_600_000) * 3_600_000).toISOString()
-                        : draft.schedule.runAt,
-                  },
-                });
-              }}
+          <SelectRow
+            label="Type"
+            value={SCHEDULE_MODE_LABELS[draft.schedule.mode]}
+            actions={[
+              "fixed_time" as const,
+              // Older servers reject one-time schedules on save.
+              ...(offersOnce || draft.schedule.mode === "once" ? ["once" as const] : []),
+              "interval" as const,
+              "cron" as const,
+              ...(webhookDenial === undefined || draft.schedule.mode === "webhook"
+                ? ["webhook" as const]
+                : []),
+            ].map((mode) => ({
+              id: mode,
+              title: SCHEDULE_MODE_LABELS[mode],
+              state: draft.schedule.mode === mode ? ("on" as const) : undefined,
+            }))}
+            onSelect={(id) => {
+              const mode = SCHEDULE_MODES.find((entry) => entry === id);
+              if (mode === undefined) return;
+              setTimePickerOpen(false);
+              setRunAtPicker(null);
+              setDraft({
+                ...draft,
+                prompt:
+                  mode === "webhook" && !draft.prompt.trim()
+                    ? DEFAULT_WEBHOOK_PROMPT
+                    : draft.prompt,
+                schedule: {
+                  ...draft.schedule,
+                  mode,
+                  runAt:
+                    mode === "once" && !draft.schedule.runAt
+                      ? new Date(Math.ceil(Date.now() / 3_600_000) * 3_600_000).toISOString()
+                      : draft.schedule.runAt,
+                },
+              });
+            }}
+          />
+          {draft.schedule.mode === "cron" ? (
+            <CronScheduleFields
+              repeat={draft.schedule.repeat}
+              timezone={draft.schedule.timezone}
+              disabled={saving}
+              onChange={(patch) =>
+                setDraft({ ...draft, schedule: { ...draft.schedule, ...patch } })
+              }
             />
-          </View>
-          {draft.schedule.mode === "kept" && draft.schedule.kept ? (
-            <Text className="border-t border-border-subtle px-4 py-3 text-base text-foreground-muted">
-              {describeSchedule({ schedule: draft.schedule.kept })}. Edit it from the Agents board,
-              or pick another schedule type.
-            </Text>
           ) : draft.schedule.mode === "fixed_time" ? (
             <>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={`Time, ${formatTime(draft.schedule.timeOfDay)}`}
+                accessibilityLabel={`Time, ${formatTime(draft.schedule.timeOfDay)}${
+                  runAtZone ? ` ${runAtZone}` : ""
+                }`}
                 onPress={() => setTimePickerOpen((open) => !open)}
                 className="min-h-14 flex-row items-center gap-3 border-t border-border-subtle px-4 py-3 active:opacity-70"
               >
@@ -1041,6 +1294,7 @@ function TaskForm({
                   className="min-w-0 flex-1 text-right text-foreground-muted"
                 >
                   {formatTime(draft.schedule.timeOfDay)}
+                  {runAtZone ? ` ${runAtZone}` : ""}
                 </Text>
                 <SymbolView
                   name="chevron.right"
@@ -1102,6 +1356,10 @@ function TaskForm({
                 }}
               />
             </>
+          ) : draft.schedule.mode === "webhook" && webhookDenial !== undefined && draft.enabled ? (
+            <Text className="border-t border-border-subtle px-4 py-3 text-sm text-foreground-muted">
+              {`${webhookDenial} Switch the task to a timer, or turn it off, to save it.`}
+            </Text>
           ) : draft.schedule.mode === "once" ? (
             (["date", "time"] as const).map((field) => {
               const runAt = new Date(draft.schedule.runAt);
@@ -1161,17 +1419,6 @@ function TaskForm({
                 }
                 signatureConfigured={draft.schedule.signature !== null}
                 disabled={!canOperate || saving || environmentUnavailable}
-              />
-              <FormField
-                label="Skip requests older than (minutes)"
-                value={draft.schedule.maxDeliveryAgeMinutes}
-                placeholder="Run every request"
-                keyboardType="number-pad"
-                disabled={saving}
-                borderTop
-                onChange={(maxDeliveryAgeMinutes) =>
-                  setDraft({ ...draft, schedule: { ...draft.schedule, maxDeliveryAgeMinutes } })
-                }
               />
               <WebhookFilterRows
                 filters={draft.schedule.filters}
@@ -1265,7 +1512,14 @@ function TaskForm({
         tone="primary"
         fullWidth
         loading={saving}
-        disabled={!canOperate || dictationPending || taskMissing || environmentUnavailable}
+        disabled={
+          !canOperate ||
+          dictationPending ||
+          taskMissing ||
+          environmentUnavailable ||
+          // The server refuses an enabled webhook task under this policy.
+          (draft.enabled && draft.schedule.mode === "webhook" && webhookDenial !== undefined)
+        }
         onPress={() => void save()}
         label={saving ? "Saving…" : draft.task ? "Save changes" : "Create task"}
       />
@@ -1362,11 +1616,13 @@ function WebhookScheduleDetails({
 }
 
 function EnvironmentTasks({
+  filter,
   environment,
   now,
   projectIds,
   onEdit,
 }: {
+  readonly filter: ScheduledTaskFilter;
   readonly environment: SettingsTarget;
   readonly now: number;
   readonly projectIds: readonly ProjectId[] | null;
@@ -1377,7 +1633,9 @@ function EnvironmentTasks({
     serverEnvironment.scheduledTasksLive({ environmentId, input: {} }),
   );
   const visibleTasks = tasks.data?.tasks.filter(
-    (task) => projectIds === null || projectIds.includes(task.projectId),
+    (task) =>
+      (projectIds === null || projectIds.includes(task.projectId)) &&
+      scheduledTaskMatchesFilter(task, filter),
   );
   const canOperate = useAtomValue(
     serverEnvironment.upsertScheduledTask.permissionAtom(environmentId),
@@ -1394,21 +1652,29 @@ function EnvironmentTasks({
     label: "scheduled task delete",
     reportFailure: false,
   });
+  const selectDetail = useSelectWorkspaceDetail();
   const failure = (title: string, result: AtomCommandResult<unknown, unknown>) => {
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       Dialog.alert(title, String(squashAtomCommandFailure(result)));
     }
   };
 
-  const act = async (task: ScheduledTask, action: "run" | "toggle" | "delete") => {
+  const act = async (task: ScheduledTask, action: "run" | "toggle" | "restore" | "delete") => {
     if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
+    if (action === "restore" && scheduledTaskRestoreNeedsEditor(task, now)) {
+      onEdit(task);
+      return;
+    }
     const result =
       action === "run"
         ? await runNow({ environmentId, input: { id: task.id } })
-        : action === "toggle"
+        : action === "toggle" || action === "restore"
           ? await setEnabled({ environmentId, input: { id: task.id, enabled: !task.enabled } })
           : await remove({ environmentId, input: { id: task.id } });
-    failure(`Could not ${action === "toggle" ? "update" : action} task`, result);
+    failure(
+      `Could not ${action === "toggle" || action === "restore" ? "update" : action} task`,
+      result,
+    );
   };
 
   return (
@@ -1430,7 +1696,13 @@ function EnvironmentTasks({
         <Text className="p-4 text-base text-foreground-muted">Loading tasks…</Text>
       ) : visibleTasks?.length === 0 ? (
         <Text className="p-4 text-base text-foreground-muted">
-          {projectIds === null ? "No scheduled tasks yet." : "No tasks in this project."}
+          {filter === "archived"
+            ? "No archived tasks."
+            : projectIds !== null
+              ? "No tasks in this project."
+              : filter === "all"
+                ? "No scheduled tasks yet."
+                : "No matching tasks."}
         </Text>
       ) : (
         visibleTasks?.map((task, index) => (
@@ -1454,13 +1726,20 @@ function EnvironmentTasks({
                 {task.title}
               </Text>
               <Text className="text-sm text-foreground-muted" numberOfLines={2}>
-                {describeSchedule(task)}
-                {!task.enabled
-                  ? " · Paused"
-                  : task.nextRunAt
-                    ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
-                    : ""}
+                {describeSchedule(task, tasks.data?.timeZone)}
+                {task.archivedAt != null
+                  ? ` · ${formatScheduledTaskArchive(task)}`
+                  : !task.enabled
+                    ? " · Paused"
+                    : task.nextRunAt
+                      ? ` · ${formatNextScheduledTaskRun(task.nextRunAt, now)}`
+                      : ""}
               </Text>
+              {task.blockedByPolicy ? (
+                <Text className="text-sm text-foreground-muted" numberOfLines={2}>
+                  {task.blockedByPolicy}
+                </Text>
+              ) : null}
               {task.lastRunError ? (
                 <Text className="text-sm text-danger-foreground" numberOfLines={2}>
                   Last run failed: {task.lastRunError}
@@ -1470,12 +1749,17 @@ function EnvironmentTasks({
             <Menu
               actions={[
                 { id: "edit", title: "Edit" },
-                {
-                  id: "toggle",
-                  title: task.enabled ? "Pause" : "Resume",
-                  attributes: { disabled: !canOperate },
-                },
-                ...(task.schedule.type === "webhook"
+                ...(task.threadId !== null && scheduledTaskThreadMode(task) !== "new_thread"
+                  ? [{ id: "thread", title: "Open thread" }]
+                  : []),
+                task.archivedAt != null
+                  ? { id: "restore", title: "Restore", attributes: { disabled: !canOperate } }
+                  : {
+                      id: "toggle",
+                      title: task.enabled ? "Pause" : "Resume",
+                      attributes: { disabled: !canOperate },
+                    },
+                ...(task.schedule.type === "webhook" || task.archivedAt != null
                   ? []
                   : [{ id: "run", title: "Run now", attributes: { disabled: !canOperate } }]),
                 {
@@ -1488,6 +1772,14 @@ function EnvironmentTasks({
                 const action = nativeEvent.event;
                 if (action === "edit") {
                   onEdit(task);
+                } else if (action === "thread" && task.threadId !== null) {
+                  selectDetail({
+                    name: "Thread",
+                    params: {
+                      environmentId: String(environmentId),
+                      threadId: String(task.threadId),
+                    },
+                  });
                 } else if (action === "delete") {
                   Dialog.alert("Delete task?", task.title, [
                     { text: "Cancel", style: "cancel" },
@@ -1497,7 +1789,7 @@ function EnvironmentTasks({
                       onPress: () => void act(task, "delete"),
                     },
                   ]);
-                } else if (action === "toggle" || action === "run") {
+                } else if (action === "toggle" || action === "restore" || action === "run") {
                   void act(task, action);
                 }
               }}

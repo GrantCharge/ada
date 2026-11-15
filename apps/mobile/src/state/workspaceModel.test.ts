@@ -1,4 +1,7 @@
-import type { EnvironmentShellSummary } from "@t3tools/client-runtime/state/shell";
+import {
+  EMPTY_SHELL_STATE,
+  type EnvironmentShellSummary,
+} from "@t3tools/client-runtime/state/shell";
 import {
   BearerConnectionProfile,
   BearerConnectionTarget,
@@ -7,7 +10,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 
-import { projectWorkspaceState } from "./workspaceModel";
+import { isEnvironmentShellPending, projectWorkspaceState } from "./workspaceModel";
 import { projectEnvironmentConnectionSummary as projectWorkspaceEnvironment } from "@t3tools/client-runtime/state/presentation";
 import type { EnvironmentPresentation } from "./environments";
 
@@ -21,7 +24,6 @@ function environment(
     environmentId: ENVIRONMENT_ID,
     label: "Julius's MacBook Pro",
     displayUrl: "https://environment.example.test",
-    relayManaged: false,
     entry: {
       target: new BearerConnectionTarget({
         environmentId: ENVIRONMENT_ID,
@@ -74,6 +76,15 @@ describe("mobile workspace projection", () => {
     expect(state.connectionState).toBe("offline");
     expect(state.networkStatus).toBe("offline");
     expect(state.hasReadyEnvironment).toBe(false);
+  });
+
+  it("waits for shell cache initialization and synchronization, but not completed reads", () => {
+    expect(isEnvironmentShellPending(EMPTY_SHELL_STATE)).toBe(true);
+    expect(isEnvironmentShellPending({ ...EMPTY_SHELL_STATE, status: "synchronizing" })).toBe(true);
+    expect(isEnvironmentShellPending({ ...EMPTY_SHELL_STATE, status: "cached" })).toBe(false);
+    expect(
+      isEnvironmentShellPending({ ...EMPTY_SHELL_STATE, error: Option.some("Cache failed.") }),
+    ).toBe(false);
   });
 
   it("keeps retained snapshots visible while reconnecting without claiming readiness", () => {

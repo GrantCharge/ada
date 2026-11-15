@@ -3,7 +3,9 @@ import {
   CheckpointScopeId,
   CommandId,
   MessageId,
+  ModelSelection,
   NodeId,
+  NonNegativeInt,
   ProviderSessionId,
   RunAttemptId,
   ProviderApprovalDecision,
@@ -41,6 +43,12 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     revokeMcpCredential: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
+    type: Schema.Literal("provider-session.apply-model-selection"),
+    providerSessionId: ProviderSessionId,
+    providerThreadId: ProviderThreadId,
+    modelSelection: ModelSelection,
+  }),
+  Schema.Struct({
     type: Schema.Literal("provider-turn.start"),
     runId: RunId,
   }),
@@ -57,6 +65,8 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
     messageId: MessageId,
+    modelSelection: Schema.optional(ModelSelection),
+    steerFollowUpAfterRunOrdinal: Schema.optional(NonNegativeInt),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.restart"),
@@ -128,6 +138,17 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     /** The settle time applied, or for an un-settle the one reversed. */
     settledAt: Schema.DateTimeUtcFromString,
   }),
+  /**
+   * Carries the same change to children on other environments of `threadIds`, the chats the local
+   * walk changed or passed through. Without `environmentId` it plans one effect per environment.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread-settlement.remote"),
+    action: Schema.Literals(["settle", "unsettle"]),
+    settledAt: Schema.DateTimeUtcFromString,
+    threadIds: Schema.Array(ThreadId),
+    environmentId: Schema.optional(Schema.String),
+  }),
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
 
@@ -143,9 +164,11 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "thread-title.generate",
   "delegated-tasks.stop",
   "thread-settlement.cascade",
+  "thread-settlement.remote",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const PROCESS_BOUND_EFFECT_TYPES = [
+  "provider-session.apply-model-selection",
   "provider-turn.start",
   "provider-turn.interrupt",
   "provider-turn.steer",
@@ -234,8 +257,11 @@ export interface EffectOutboxV2Shape {
   readonly claimNext: (input: {
     readonly workerId: string;
     readonly excludeRestartContinuations?: boolean;
+    readonly maxRunningTitleGenerations?: number;
   }) => Effect.Effect<Option.Option<OrchestrationEffectV2>, EffectOutboxError>;
-  readonly nextClaimableAt: Effect.Effect<Option.Option<DateTime.Utc>, EffectOutboxError>;
+  readonly nextClaimableAt: (input?: {
+    readonly maxRunningTitleGenerations?: number;
+  }) => Effect.Effect<Option.Option<DateTime.Utc>, EffectOutboxError>;
   readonly succeed: (input: {
     readonly effectId: string;
     readonly workerId: string;
@@ -252,6 +278,11 @@ export interface EffectOutboxV2Shape {
     readonly error: string;
   }) => Effect.Effect<boolean, EffectOutboxError>;
   readonly pruneSettled: Effect.Effect<number, EffectOutboxError>;
+  /** Makes failed effects of a type created since `createdAfter` pending again, with fresh attempts. */
+  readonly requeueFailed: (input: {
+    readonly effectType: OrchestrationEffectRequestV2["type"];
+    readonly createdAfter: DateTime.Utc;
+  }) => Effect.Effect<number, EffectOutboxError>;
 }
 
 export class EffectOutboxV2 extends Context.Service<EffectOutboxV2, EffectOutboxV2Shape>()(
@@ -324,6 +355,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
     const claimableCandidatePredicate = (
       availableBefore?: string,
       excludeRestartContinuations = false,
+      maxRunningTitleGenerations?: number,
     ) =>
       sql`
         ${
@@ -348,18 +380,32 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
                 }
               )
             )
+            -- Title generation and remote settlement wait on slow peers, so each has its own lane.
             AND (
               (
-                candidate.effect_type = 'thread-title.generate'
-                AND active.effect_type = 'thread-title.generate'
+                candidate.effect_type IN ('thread-title.generate', 'thread-settlement.remote')
+                AND active.effect_type = candidate.effect_type
               )
               OR
               (
-                candidate.effect_type != 'thread-title.generate'
-                AND active.effect_type != 'thread-title.generate'
+                candidate.effect_type NOT IN ('thread-title.generate', 'thread-settlement.remote')
+                AND active.effect_type NOT IN ('thread-title.generate', 'thread-settlement.remote')
               )
             )
         )
+        AND ${
+          maxRunningTitleGenerations === undefined
+            ? sql`1 = 1`
+            : sql`(
+                candidate.effect_type != 'thread-title.generate'
+                OR (
+                  SELECT COUNT(*)
+                  FROM orchestration_v2_effect_outbox AS running_title
+                  WHERE running_title.status = 'running'
+                    AND running_title.effect_type = 'thread-title.generate'
+                ) < ${maxRunningTitleGenerations}
+              )`
+        }
       `;
 
     const cancellationSignal = (effectId: string) => {
@@ -529,7 +575,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
       ),
       // The worker polls for the next effect even when there is no work to claim.
       claimNext: Effect.fnUntraced(
-        function* ({ workerId, excludeRestartContinuations = false }) {
+        function* ({ workerId, excludeRestartContinuations = false, maxRunningTitleGenerations }) {
           const now = yield* DateTime.now;
           const nowIso = DateTime.formatIso(now);
           // Idle claims return empty; tracing their full SQL on every poll overwhelms useful traces.
@@ -544,7 +590,11 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             WHERE effect_id = (
               SELECT candidate.effect_id
               FROM orchestration_v2_effect_outbox AS candidate
-              WHERE ${claimableCandidatePredicate(nowIso, excludeRestartContinuations)}
+              WHERE ${claimableCandidatePredicate(
+                nowIso,
+                excludeRestartContinuations,
+                maxRunningTitleGenerations,
+              )}
                 AND ${excludeRestartContinuations ? sql`candidate.effect_type != 'provider-runtime.continue'` : sql`1 = 1`}
               ORDER BY candidate.available_at ASC, candidate.created_at ASC, candidate.effect_id ASC
               LIMIT 1
@@ -559,23 +609,26 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
         },
         Effect.mapError((cause) => new EffectOutboxError({ operation: "claim", cause })),
       ),
-      nextClaimableAt: Effect.gen(function* () {
-        const rows = yield* sql<{ readonly available_at: string | null }>`
-          SELECT MIN(candidate.available_at) AS available_at
-          FROM orchestration_v2_effect_outbox AS candidate
-          WHERE ${claimableCandidatePredicate()}
-        `.pipe(NodeSqliteClient.readOnly, Effect.withTracerEnabled(false));
-        const availableAt = rows[0]?.available_at;
-        if (availableAt === undefined || availableAt === null) return Option.none();
-        const parsed = DateTime.make(availableAt);
-        if (Option.isNone(parsed)) {
-          return yield* new EffectOutboxError({
-            operation: "next-claimable",
-            cause: `Invalid available_at timestamp: ${availableAt}`,
-          });
-        }
-        return parsed;
-      }).pipe(
+      nextClaimableAt: Effect.fnUntraced(
+        function* ({
+          maxRunningTitleGenerations,
+        }: { readonly maxRunningTitleGenerations?: number } = {}) {
+          const rows = yield* sql<{ readonly available_at: string | null }>`
+            SELECT MIN(candidate.available_at) AS available_at
+            FROM orchestration_v2_effect_outbox AS candidate
+            WHERE ${claimableCandidatePredicate(undefined, false, maxRunningTitleGenerations)}
+          `.pipe(NodeSqliteClient.readOnly, Effect.withTracerEnabled(false));
+          const availableAt = rows[0]?.available_at;
+          if (availableAt === undefined || availableAt === null) return Option.none();
+          const parsed = DateTime.make(availableAt);
+          if (Option.isNone(parsed)) {
+            return yield* new EffectOutboxError({
+              operation: "next-claimable",
+              cause: `Invalid available_at timestamp: ${availableAt}`,
+            });
+          }
+          return parsed;
+        },
         Effect.mapError((cause) =>
           isEffectOutboxError(cause)
             ? cause
@@ -674,6 +727,28 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
               (cause) => new EffectOutboxError({ operation: "fail", effectId, cause }),
             ),
           ),
+      ),
+      requeueFailed: Effect.fn("EffectOutbox.requeueFailed")(
+        function* ({ effectType, createdAfter }) {
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const rows = yield* sql<{ readonly effect_id: string }>`
+            UPDATE orchestration_v2_effect_outbox
+            SET
+              status = 'pending',
+              attempt_count = 0,
+              available_at = ${now},
+              lease_owner = NULL,
+              completed_at = NULL,
+              updated_at = ${now}
+            WHERE effect_type = ${effectType}
+              AND status = 'failed'
+              AND created_at >= ${DateTime.formatIso(createdAfter)}
+            RETURNING effect_id
+          `;
+          if (rows.length > 0) yield* notifyAvailable(rows.length);
+          return rows.length;
+        },
+        Effect.mapError((cause) => new EffectOutboxError({ operation: "requeue-failed", cause })),
       ),
       pruneSettled: Effect.gen(function* () {
         const cutoff = DateTime.formatIso(

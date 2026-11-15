@@ -66,6 +66,8 @@ describe("searchSettings", () => {
     ]);
     expect(searchSettings("claude", ITEMS).map((item) => item.id)).toEqual(["providers"]);
     expect(searchSettings("long lines", ITEMS).map((item) => item.id)).toEqual(["word-wrap"]);
+    const spanish = (message: string) => (message === "Word wrap" ? "Ajuste de línea" : message);
+    expect(searchSettings("ajuste", ITEMS, spanish).map((item) => item.id)).toEqual(["word-wrap"]);
     for (const query of ["fallback", "fallback agent", "fallback model"]) {
       expect(searchSettings(query)[0]).toMatchObject({
         id: "fallback-model",
@@ -78,6 +80,13 @@ describe("searchSettings", () => {
   it("hides the Secrets page from nav and search while the secrets feature is disabled", () => {
     expect(SETTINGS_NAV_GROUPS.flatMap((group) => group.paths)).not.toContain("/settings/secrets");
     expect(searchSettings("1password").map((item) => item.to)).not.toContain("/settings/secrets");
+  });
+
+  it("finds the Scheduled tasks page", () => {
+    expect(searchSettings("scheduled tasks")[0]).toMatchObject({
+      id: "scheduled-tasks",
+      to: "/settings/scheduled-tasks",
+    });
   });
 
   it("matches normalized title substrings", () => {
@@ -115,10 +124,8 @@ describe("searchSettings", () => {
 
   it("hides settings whose controls are unavailable", () => {
     const available = filterAvailableSettingsSearchItems({
-      hasCloudPublicConfig: false,
       hasEnvironment: false,
       hasProviderSettingsEnvironment: false,
-      hasMacProviderSettingsEnvironment: false,
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
@@ -128,49 +135,56 @@ describe("searchSettings", () => {
       "follow-change-request-templates",
       "git-fetch-interval",
       "network-access",
-      "publish-agent-activity",
       "provider-health-check-interval",
-      "cursor-keychain-usage",
       "source-control-writer-model",
       "review-guide-model",
       "review-guide-instructions",
       "source-control-writing-style",
-      "t3-connect",
-      "hold-webhooks-while-offline",
       "tailscale-https",
       "wsl-backend",
       "auto-settle-inactive-threads",
       "auto-settle-merged-threads",
       "days-before-auto-settle",
-      "linked-environments",
     ]);
     expect(available.map((item) => item.id).filter((id) => gatedIds.has(id))).toEqual([]);
   });
 
-  it("finds linked environments on a remote host without local maintenance access", () => {
+  it("finds Machines on a remote host without local maintenance access", () => {
+    const results = (query: string) =>
+      searchSettings(
+        query,
+        filterAvailableSettingsSearchItems({
+          hasEnvironment: true,
+          hasProviderSettingsEnvironment: true,
+          canManageLocalBackend: false,
+          localEnvironmentDisabled: true,
+          isWslSettingsRowVisible: false,
+          hasThreadAutoSettlement: false,
+        }),
+      );
+    for (const query of ["linked environments", "tailscale network", "pause agent links"]) {
+      expect(results(query)).toContainEqual(
+        expect.objectContaining({ id: "machines", to: "/settings/connections" }),
+      );
+    }
+  });
+
+  it("finds the Welcome page only where a primary computer can open it", () => {
     const availability = {
-      hasCloudPublicConfig: false,
       hasEnvironment: true,
       hasProviderSettingsEnvironment: true,
-      hasMacProviderSettingsEnvironment: false,
       canManageLocalBackend: false,
-      localEnvironmentDisabled: true,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: false,
     };
-    const results = (hasPeerLinkHost: boolean) =>
+    const ids = (hasPrimaryEnvironment: boolean) =>
       searchSettings(
-        "linked environments",
-        filterAvailableSettingsSearchItems({ ...availability, hasPeerLinkHost }),
-      );
-    expect(results(false).map((item) => item.id)).not.toContain("linked-environments");
-    expect(results(true)).toContainEqual(
-      expect.objectContaining({
-        id: "linked-environments",
-        to: "/settings/connections",
-        targetId: "linked-environments",
-      }),
-    );
+        "welcome page",
+        filterAvailableSettingsSearchItems({ ...availability, hasPrimaryEnvironment }),
+      ).map((item) => item.id);
+    // Hosted web reaches remote computers but has no primary one to set up.
+    expect(ids(false)).not.toContain("welcome-page");
+    expect(ids(true)).toContain("welcome-page");
   });
 
   it("finds keybinding commands by label, command id, and default key", () => {
@@ -189,6 +203,21 @@ describe("searchSettings", () => {
       targetId: "keybindings",
     });
     expect(searchSettings("sidebar.toggle")[0]?.targetId).toBeUndefined();
+  });
+
+  it("finds rows by the titles shown on their pages", () => {
+    for (const [title, id] of [
+      ["Automatic worktree cleanup", "storage-worktrees"],
+      ["Delete settled worktrees", "storage-worktrees"],
+      ["Delete old browser artifacts", "storage-artifacts"],
+      ["Delete old rotated logs", "storage-artifacts"],
+      ["Custom search URL", "browser-search-engine"],
+      ["Native sessions", "providers"],
+      ["CODEX_HOME path", "providers"],
+      ["Shadow home path", "providers"],
+    ] as const) {
+      expect(searchSettings(title)[0]?.id, title).toBe(id);
+    }
   });
 
   it("keeps catalog result ids unique", () => {
@@ -219,10 +248,13 @@ describe("settings search targets", () => {
     expect(isSettingsSearchScopeAvailable(fallback.scope, "environment")).toBe(true);
     expect(isSettingsSearchScopeAvailable(fallback.scope, "all")).toBe(true);
     expect(isSettingsSearchScopeAvailable(fallback.scope, "project")).toBe(false);
-    const streaming = getSettingsSearchTargetScope("response-streaming")!;
-    expect(streaming.scope).toBe("project-defaults");
-    expect(isSettingsSearchScopeAvailable(streaming.scope, "project")).toBe(true);
-    for (const id of ["legacy-plan-mode", "legacy-context-window-indicator", "boring-sidebar"]) {
+    for (const id of ["response-streaming", "speech-project-dictionary"]) {
+      expect(getSettingsSearchTargetScope(id)?.scope).toBe("project-defaults");
+    }
+    for (const scope of ["all", "environment", "project"] as const) {
+      expect(isSettingsSearchScopeAvailable("project-defaults", scope)).toBe(true);
+    }
+    for (const id of ["tool-call-visibility", "boring-sidebar"]) {
       expect(getSettingsSearchTargetScope(id)!.scope).toBeNull();
     }
   });
@@ -246,10 +278,8 @@ describe("auto-settlement search availability", () => {
     const availability = getThreadAutoSettlementSearchAvailability(environments);
     expect(availability.eligibleEnvironmentIds).toEqual([capable.environmentId]);
     const items = filterAvailableSettingsSearchItems({
-      hasCloudPublicConfig: false,
       hasEnvironment: true,
       hasProviderSettingsEnvironment: true,
-      hasMacProviderSettingsEnvironment: false,
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: availability.eligibleEnvironmentIds.length > 0,
@@ -283,10 +313,8 @@ describe("auto-settlement search availability", () => {
       isTargetAvailable: false,
     });
     const items = filterAvailableSettingsSearchItems({
-      hasCloudPublicConfig: false,
       hasEnvironment: true,
       hasProviderSettingsEnvironment: true,
-      hasMacProviderSettingsEnvironment: false,
       canManageLocalBackend: false,
       isWslSettingsRowVisible: false,
       hasThreadAutoSettlement: true,
@@ -387,7 +415,7 @@ describe("movedSettingsPath", () => {
   it("leaves current pages alone", () => {
     expect(movedSettingsPath("/settings/general", "time-format")).toBeNull();
     expect(movedSettingsPath("/settings/projects", "project-defaults")).toBeNull();
-    expect(movedSettingsPath("/settings/connections", "remote-environments")).toBeNull();
+    expect(movedSettingsPath("/settings/connections", "machines")).toBeNull();
     expect(movedSettingsPath("/settings/connections", "network-access")).toBeNull();
     expect(movedSettingsPath("/settings/appearance", "theme")).toBeNull();
   });

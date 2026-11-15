@@ -25,6 +25,7 @@ import { primaryServerConfigAtom, primaryServerWelcomeAtom } from "../../state/s
 import { environmentShell } from "../../state/shell";
 import { environmentThreadShells } from "../../state/threads";
 import { Button } from "../ui/button";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /** Pending blocks all rendering, including EventRouter welcome navigation. */
 
@@ -96,7 +97,7 @@ export function FirstRunGate({
   }));
   const { decision, stalled } = gateState;
   const settingsReadFailed = hydrationStatus === "failed" || hydrationStatus === "retrying";
-  // The server's sole cwd-bootstrap project/thread still counts as fresh so npx t3 users see onboarding.
+  // The server's sole cwd-bootstrap project/thread still counts as fresh so CLI users see onboarding.
   const serverCwd = serverConfig?.cwd ?? null;
   const primaryEnvironmentId = serverConfig?.environment.environmentId ?? null;
   const workspaceFresh =
@@ -197,7 +198,7 @@ function FirstRunRecovery({
         <p className="mt-2 text-sm text-muted-foreground">
           {settingsReadFailed
             ? "Your saved settings could not be loaded."
-            : "T3 Agents could not confirm this workspace."}
+            : `${APP_NAME} could not confirm this workspace.`}
         </p>
         <Button
           className="mt-5"

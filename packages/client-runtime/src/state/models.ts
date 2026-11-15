@@ -16,7 +16,7 @@ import type {
   RunId,
   ThreadId,
 } from "@t3tools/contracts";
-import { isSubagentThread } from "@t3tools/contracts";
+import { isListedThread, isSubagentThread } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
 import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
@@ -90,6 +90,12 @@ export interface ThreadRunSummary {
    * generating while the server settles it.
    */
   readonly turnEnded?: boolean;
+  /**
+   * Set while the run is open but its provider has not started a turn, so the
+   * provider is still launching and nothing is generating. Clients show it
+   * instead of "Thinking".
+   */
+  readonly providerStartingLabel?: string;
   readonly sourcePlanRef?: {
     readonly threadId: ThreadId;
     readonly planId: PlanId;
@@ -166,6 +172,7 @@ export interface EnvironmentThreadShell {
   readonly latestUserAuthoredMessageAt?: string | null;
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
+  readonly pendingUserInputAt?: string | null;
   readonly pendingSubagentRequest?: PendingSubagentRequest | null;
   /** Guest messages waiting for the owner to send or dismiss. */
   readonly pendingGuestMessageCount?: number;
@@ -206,6 +213,19 @@ export interface EnvironmentThreadShell {
   readonly source: OrchestrationV2ThreadShell;
 }
 
+/**
+ * An open thread with a row of its own. Subagents and side chats live in their parent's view;
+ * a delegated child chat keeps its provider's subagent lineage but is listed.
+ */
+export function isOpenListedThread(
+  thread: Pick<
+    EnvironmentThreadShell,
+    "archivedAt" | "lineage" | "parentThreadId" | "parentRelationship"
+  >,
+): boolean {
+  return thread.archivedAt === null && isListedThread(thread);
+}
+
 function iso(value: DateTime.Utc): string {
   return DateTime.formatIso(value);
 }
@@ -233,12 +253,7 @@ function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary 
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
     thread.status !== "failed";
   // A provider-native subagent works without runs; its activity status still counts.
-  if (
-    thread.latestRunId === null &&
-    thread.activeProviderThreadId === null &&
-    thread.activityRunStatus == null &&
-    !parkAtIdle
-  ) {
+  if (thread.latestRunId === null && thread.activityRunStatus == null && !parkAtIdle) {
     return null;
   }
   const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
@@ -323,6 +338,10 @@ export function presentThreadShell(
       thread.pendingRuntimeRequest.kind !== "auth_refresh",
     // Async questions count too, so a thread with any open question leaves Working.
     hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
+    pendingUserInputAt:
+      thread.pendingRuntimeRequest?.kind === "user_input"
+        ? iso(thread.pendingRuntimeRequest.createdAt)
+        : null,
     pendingSubagentRequest,
     pendingGuestMessageCount: thread.pendingGuestMessageCount ?? 0,
     hasActionableProposedPlan: thread.hasActionableProposedPlan,

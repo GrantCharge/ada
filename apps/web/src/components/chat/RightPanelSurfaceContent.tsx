@@ -24,6 +24,7 @@ import { PullRequestDetailPanel } from "../pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "../pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "../pullRequest/PullRequestsUnavailableState";
 import { ThreadPullRequestsPanel } from "../pullRequest/ThreadPullRequestsPanel";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const PreviewPanel = lazy(() =>
   import("../preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
@@ -50,6 +51,7 @@ interface RightPanelPullRequestProps {
 }
 
 interface RightPanelFileProps {
+  readonly projectId?: ProjectId | undefined;
   readonly projectName: string | null;
   readonly workspaceRoot: string | undefined;
   readonly availableEditors: ReadonlyArray<EditorId>;
@@ -123,7 +125,7 @@ export function RightPanelSurfaceContent(props: {
         return (
           <PullRequestsUnavailableState
             title="Pull requests unavailable"
-            error="Update this environment's T3 Agents server to browse pull requests."
+            error={`Update this environment's ${APP_NAME} server to browse pull requests.`}
           />
         );
       }
@@ -149,6 +151,10 @@ export function RightPanelSurfaceContent(props: {
             number: surface.number,
           }}
           initialTab={surface.detailTab ?? "summary"}
+          revealUrl={surface.revealUrl}
+          onRevealSettled={(revealUrl) => {
+            useRightPanelStore.getState().settlePullRequestReveal(threadRef, surface.id, revealUrl);
+          }}
           onTabChange={(tab) => {
             useRightPanelStore.getState().setPullRequestDetailTab(threadRef, surface.id, tab);
           }}
@@ -209,6 +215,7 @@ export function RightPanelSurfaceContent(props: {
             environmentId={props.environmentId}
             cwd={files.workspaceRoot ?? ""}
             projectName={files.projectName ?? ""}
+            projectId={files.projectId}
             threadRef={threadRef}
             composerDraftTarget={props.composerDraftTarget}
             keybindings={props.keybindings}

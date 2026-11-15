@@ -1,4 +1,7 @@
-import type { ProjectionRecordField } from "../orchestration-v2/ProjectionStore.ts";
+import type {
+  ProjectionRecordField,
+  ProjectionRecordFilter,
+} from "../orchestration-v2/ProjectionStore.ts";
 import {
   CommandId,
   OrchestratorMcpFailure,
@@ -9,7 +12,7 @@ import {
   ThreadId,
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
@@ -18,6 +21,7 @@ import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.t
 import * as ThreadTaskService from "../threadTask/ThreadTaskService.ts";
 import { resolveInteractionMode, resolveRuntimeMode } from "./delegatedTaskModes.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
  * Threads an agent starts over MCP are `mcp:<uuid>`, and agents often paste the
@@ -49,7 +53,9 @@ export const unavailable = () =>
 export const dispatchFailure = (
   error: OrchestratorV2Error | ThreadManagement.ThreadManagementProviderInstanceDisabledError,
 ) =>
-  error._tag === "ThreadManagementProviderInstanceDisabledError"
+  error._tag === "ThreadManagementProviderInstanceDisabledError" ||
+  error._tag === "OrchestratorRuntimeModeAboveCeilingError" ||
+  error._tag === "OrchestratorProviderSelectionBusyError"
     ? new OrchestratorMcpFailure({ code: "invalid_request", message: error.message })
     : (error._tag === "OrchestratorDispatchError" ||
           error._tag === "OrchestratorCommandRejectedError") &&
@@ -164,7 +170,7 @@ export const resolveProjectId = (context: Caller, projectId: ProjectId | undefin
       : Effect.fail(
           new OrchestratorMcpFailure({
             code: "target_required",
-            message: "Pass projectId: this MCP client is not running inside a T3 thread.",
+            message: `Pass projectId: this MCP client is not running inside an ${APP_NAME} thread.`,
           }),
         );
 
@@ -176,13 +182,13 @@ const resolveThreadId = (context: Caller, threadId: ThreadId | undefined) =>
       : Effect.fail(
           new OrchestratorMcpFailure({
             code: "target_required",
-            message: "Pass threadId: this MCP client is not running inside a T3 thread.",
+            message: `Pass threadId: this MCP client is not running inside an ${APP_NAME} thread.`,
           }),
         );
 
 export const readThread = Effect.fn("mcp.readThread")(function* <
   K extends ProjectionRecordField = never,
->(threadId?: ThreadId, fields: ReadonlyArray<K> = []) {
+>(threadId?: ThreadId, fields: ReadonlyArray<K> = [], filter?: ProjectionRecordFilter) {
   const context = yield* readCaller();
   const targetId = yield* resolveThreadId(context, threadId);
   const shell = yield* context.threads.getThreadShell(targetId).pipe(Effect.mapError(unavailable));
@@ -192,6 +198,7 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
   const projection = yield* context.threads
     .getProjectThreadRecords({ projectId: shell.projectId, threadId: targetId }, fields, {
       turnItemTypes: ["user_input_request"],
+      ...filter,
     })
     .pipe(
       Effect.mapError((error) =>
@@ -207,8 +214,8 @@ export const readThread = Effect.fn("mcp.readThread")(function* <
 });
 
 export const newCommandId = Effect.fn("mcp.newCommandId")(function* () {
-  const crypto = yield* Crypto.Crypto;
-  return CommandId.make(`mcp:${yield* crypto.randomUUIDv4().pipe(Effect.orDie)}`);
+  const random = yield* SecureRandom.SecureRandom;
+  return CommandId.make(`mcp:${yield* random.uuidV4()}`);
 });
 
 /**

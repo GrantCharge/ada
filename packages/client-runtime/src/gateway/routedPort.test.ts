@@ -97,9 +97,10 @@ describe("answerGatewayPortCall", () => {
         received.push(args);
         return {};
       },
+      listEnvironments: async () => [environment("a")],
     } as unknown as GatewayRuntimePort;
     const request = { action: "read", input: {} };
-    await answerGatewayPortCall(port, new Set(["a"]), "threadTask", [
+    await answerGatewayPortCall(port, { a: ["read"] }, "threadTask", [
       "a",
       request,
       { environmentId: "a", threadId: "owner" },
@@ -113,7 +114,7 @@ describe("answerGatewayPortCall", () => {
       ...fakePort("app", calls),
       listEnvironments: async () => [environment("a"), environment("b"), environment("c")],
     } as GatewayRuntimePort;
-    const granted = new Set(["a", "b"]);
+    const granted = { a: ["read", "create", "send", "artifact"], b: ["read"] } as const;
 
     expect(
       (
@@ -132,7 +133,7 @@ describe("answerGatewayPortCall", () => {
       ]),
     ).rejects.toThrow("not granted for c");
     await expect(answerGatewayPortCall(port, granted, "toString", ["a"])).rejects.toThrow(
-      "Unknown T3 Agents call",
+      "Unknown Ada gateway call",
     );
     expect(calls).toEqual(["app:listProjects:a"]);
   });

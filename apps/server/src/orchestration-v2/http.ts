@@ -18,7 +18,6 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { traceLocalHandlerWork } from "../cloud/traceRelayRequest.ts";
 import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import {
@@ -31,9 +30,15 @@ import {
 } from "./threadHistoryPaging.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import { loadSubscriberShellSnapshot } from "./ShellStream.ts";
+import {
+  loadShellUnlessResumable,
+  loadSubscriberShellSnapshot,
+  projectIdentitiesDigest,
+} from "./ShellStream.ts";
 import { boundedSnapshotResponseFields } from "./ThreadStream.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
+
+const isInvalidThreadHistoryCursorError = Schema.is(InvalidThreadHistoryCursorError);
 
 const isThreadTranscriptTooLargeError = Schema.is(
   ThreadManagementService.ThreadTranscriptTooLargeError,
@@ -92,9 +97,26 @@ export const layer = HttpApiBuilder.group(
           options,
         });
         const projects = yield* enrichProjectShells(snapshot.projects);
-        return { ...snapshot, projects };
+        return { ...snapshot, projects, projectIdentities: projectIdentitiesDigest(projects) };
       },
     );
+
+    // A client that holds rows names their cursor; a small answer tells it to keep them.
+    const answerShellSnapshot = Effect.fn("http.orchestration.answerShellSnapshot")((query: {
+      readonly omitIdleSubagents?: string;
+      readonly omitOlderSettled?: string;
+      readonly resumeFrom?: string;
+    }) => {
+      const resumeFrom = query.resumeFrom === undefined ? Number.NaN : Number(query.resumeFrom);
+      return loadShellUnlessResumable({
+        events: applicationEvents,
+        resumeFrom: Number.isSafeInteger(resumeFrom) && resumeFrom >= 0 ? resumeFrom : undefined,
+        loadSnapshot: loadShellSnapshot({
+          omitIdleSubagents: query.omitIdleSubagents === "1",
+          omitOlderSettled: query.omitOlderSettled === "1",
+        }),
+      });
+    });
 
     const loadThreadSnapshot = Effect.fn("http.orchestration.loadThreadSnapshot")(function* (
       threadId: Parameters<typeof threadManagement.getThreadSnapshot>[0],
@@ -164,11 +186,7 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.shellSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* loadShellSnapshot({
-            omitIdleSubagents: args.query.omitIdleSubagents === "1",
-            omitOlderSettled: args.query.omitOlderSettled === "1",
-          }).pipe(
-            traceLocalHandlerWork,
+          return yield* answerShellSnapshot(args.query).pipe(
             Effect.catch((cause) =>
               failEnvironmentInternal("orchestration_snapshot_failed", cause),
             ),
@@ -183,7 +201,7 @@ export const layer = HttpApiBuilder.group(
           const snapshot = yield* loadThreadSnapshot(
             args.params.threadId,
             "orchestration_thread_snapshot_failed",
-          ).pipe(traceLocalHandlerWork);
+          );
           return {
             snapshotSequence: snapshot.snapshotSequence,
             projection: snapshot.projection,
@@ -197,7 +215,6 @@ export const layer = HttpApiBuilder.group(
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* threadManagement.getThreadTranscript(args.params.threadId).pipe(
             Effect.provideService(ServerEnvironment.ServerEnvironmentIdentity, environment),
-            traceLocalHandlerWork,
             Effect.catch(
               Effect.fnUntraced(function* (error) {
                 if (isThreadTranscriptTooLargeError(error)) {
@@ -225,7 +242,7 @@ export const layer = HttpApiBuilder.group(
             undefined,
             undefined,
             args.query.deferWork === "1",
-          ).pipe(traceLocalHandlerWork);
+          );
           const bounded = buildBoundedThreadProjection({
             projection: snapshot.projection,
             snapshotSequence: snapshot.snapshotSequence,
@@ -246,12 +263,10 @@ export const layer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadHistoryPage")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          const decoded = yield* Effect.try(() =>
-            decodeThreadHistoryCursor(args.query.cursor),
-          ).pipe(Effect.result);
+          const decoded = Result.try(() => decodeThreadHistoryCursor(args.query.cursor));
           if (Result.isFailure(decoded)) {
-            const cause = decoded.failure.cause;
-            if (cause instanceof InvalidThreadHistoryCursorError)
+            const cause = decoded.failure;
+            if (isInvalidThreadHistoryCursorError(cause))
               return yield* failEnvironmentInvalidRequest("invalid_history_cursor");
             return yield* failEnvironmentInternal("orchestration_thread_history_failed", cause);
           }
@@ -271,7 +286,6 @@ export const layer = HttpApiBuilder.group(
               Effect.map((page) =>
                 args.query.compactIds === "1" ? { ...page, idTable: true as const } : page,
               ),
-              traceLocalHandlerWork,
               Effect.catch(
                 Effect.fnUntraced(function* (cause) {
                   if (isThreadNotFound(cause))

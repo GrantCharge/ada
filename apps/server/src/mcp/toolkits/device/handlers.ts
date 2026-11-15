@@ -4,6 +4,7 @@ import {
   type DeviceHostSummary,
   type DeviceId,
   type DevicePlatform,
+  type DeviceServiceState,
   type DeviceSummary,
   DeviceToolUnavailableError,
   LOCAL_DEVICE_HOST_ID,
@@ -15,6 +16,7 @@ import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { DeviceScreenshotToolkit, DeviceStandardToolkit, DeviceToolkit } from "./tools.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 function agentDeviceTargetArgs(device: DeviceSummary): ReadonlyArray<string> {
   return device.platform === "ios"
@@ -40,7 +42,7 @@ export function agentDeviceQuickStart(
   const platformNotes =
     host?.kind === "simlock"
       ? [
-          "This device is leased from a Simlock pool (alpha in T3 Code). The lease returns it to the pool, wiped, when it ends, so call device_close with shutdown: true when you are done. It starts with no apps installed.",
+          `This device is leased from a Simlock pool (alpha in ${APP_NAME}). The lease returns it to the pool, wiped, when it ends, so call device_close with shutdown: true when you are done. It starts with no apps installed.`,
           host.installDirectory
             ? `agent-device accepts install for this lease only when run from ${host.installDirectory}.`
             : "",
@@ -76,7 +78,7 @@ export function agentDeviceQuickStart(
     "Each device_open returns its own command; opening another device does not retarget this one.",
     ...(target === ""
       ? [
-          "The command is removed when the device closes or T3 Code restarts. If it is missing, call device_open again.",
+          `The command is removed when the device closes or ${APP_NAME} restarts. If it is missing, call device_open again.`,
         ]
       : []),
     platformNotes,
@@ -143,9 +145,19 @@ const mapLocateErrors = <A, R>(
     }),
   );
 
+const failedHosts = <H extends { readonly id: DeviceHostId }>(
+  state: { readonly hostStatuses: DeviceServiceState["hostStatuses"] },
+  hosts: ReadonlyArray<H>,
+) =>
+  hosts.flatMap((host) => {
+    const status = state.hostStatuses[host.id];
+    return status?.status === "failed" && status.detail ? [{ host, detail: status.detail }] : [];
+  });
+
 const pickDevice = Effect.fn("handlers.pickDevice")(function* (
   state: {
     readonly hosts: ReadonlyArray<DeviceHostSummary>;
+    readonly hostStatuses: DeviceServiceState["hostStatuses"];
     readonly devices: ReadonlyArray<DeviceSummary>;
   },
   input: {
@@ -159,8 +171,19 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
     const devices = yield* DeviceService.DeviceService;
     const located = yield* devices.locateDevice({ deviceId, hostId }).pipe(mapLocateErrors);
     if (Option.isSome(located)) return located.value;
+    const target =
+      hostId === undefined
+        ? undefined
+        : (state.hosts.find((host) => host.id === hostId) ?? { id: hostId });
+    const failures = failedHosts(state, target === undefined ? state.hosts : [target]).map(
+      ({ host, detail }) => `${hostName(host)} failed to start: ${detail}`,
+    );
     return yield* new DeviceToolUnavailableError({
-      reason: `No device ${deviceId} on ${hostId === undefined ? "any host" : hostName(state.hosts.find((host) => host.id === hostId) ?? { id: hostId })}. Call device_list for current ids.`,
+      reason: [
+        `No device ${deviceId} on ${target === undefined ? "any host" : hostName(target)}.`,
+        ...failures,
+        "Call device_list for current ids.",
+      ].join(" "),
     });
   }
   const hostId = input.hostId ?? LOCAL_DEVICE_HOST_ID;
@@ -170,11 +193,14 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
       (input.platform === undefined || device.platform === input.platform),
   );
   if (candidates.length === 0) {
+    const [failure] = failedHosts(state, [{ id: hostId }]);
     return yield* new DeviceToolUnavailableError({
       reason:
-        input.platform === undefined
-          ? "No simulators or emulators were found. Call device_list to see why."
-          : `No ${input.platform} devices were found on host ${hostId}. Call device_list to see why.`,
+        failure !== undefined
+          ? failure.detail
+          : input.platform === undefined
+            ? "No simulators or emulators were found. Call device_list to see why."
+            : `No ${input.platform} devices were found on host ${hostId}. Call device_list to see why.`,
     });
   }
   const platforms = new Set(candidates.map((device) => device.platform));

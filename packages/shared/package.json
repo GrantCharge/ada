@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./branding": {
+      "types": "./src/branding.ts",
+      "import": "./src/branding.ts"
+    },
+    "./pullRequestAnchor": {
+      "types": "./src/pullRequestAnchor.ts",
+      "import": "./src/pullRequestAnchor.ts"
+    },
     "./changedFileKind": {
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"
@@ -23,6 +31,10 @@
       "types": "./src/delimitedPreview.ts",
       "import": "./src/delimitedPreview.ts"
     },
+    "./socketFrameParts": {
+      "types": "./src/socketFrameParts.ts",
+      "import": "./src/socketFrameParts.ts"
+    },
     "./composerPullRequestMatches": {
       "types": "./src/composerPullRequestMatches.ts",
       "import": "./src/composerPullRequestMatches.ts"
@@ -30,6 +42,10 @@
     "./themePalettes": {
       "types": "./src/themePalettes.ts",
       "import": "./src/themePalettes.ts"
+    },
+    "./themeCss": {
+      "types": "./src/themeCss.ts",
+      "import": "./src/themeCss.ts"
     },
     "./themePreview": {
       "types": "./src/themePreview.ts",
@@ -42,10 +58,6 @@
     "./projectFavicon": {
       "types": "./src/projectFavicon.ts",
       "import": "./src/projectFavicon.ts"
-    },
-    "./mobileSourceMaps": {
-      "types": "./src/mobileSourceMaps.ts",
-      "import": "./src/mobileSourceMaps.ts"
     },
     "./model": {
       "types": "./src/model.ts",
@@ -94,6 +106,10 @@
     "./shell": {
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
+    },
+    "./envTrampoline": {
+      "types": "./src/envTrampoline.ts",
+      "import": "./src/envTrampoline.ts"
     },
     "./semver": {
       "types": "./src/semver.ts",
@@ -183,10 +199,6 @@
       "types": "./src/remote.ts",
       "import": "./src/remote.ts"
     },
-    "./relaySigning": {
-      "types": "./src/relaySigning.ts",
-      "import": "./src/relaySigning.ts"
-    },
     "./dpop": {
       "types": "./src/dpop.ts",
       "import": "./src/dpop.ts"
@@ -198,22 +210,6 @@
     "./dpopCommon": {
       "types": "./src/dpopCommon.ts",
       "import": "./src/dpopCommon.ts"
-    },
-    "./telemetryId": {
-      "types": "./src/telemetryId.ts",
-      "import": "./src/telemetryId.ts"
-    },
-    "./relayAuth": {
-      "types": "./src/relayAuth.ts",
-      "import": "./src/relayAuth.ts"
-    },
-    "./relayUrl": {
-      "types": "./src/relayUrl.ts",
-      "import": "./src/relayUrl.ts"
-    },
-    "./relayJwt": {
-      "types": "./src/relayJwt.ts",
-      "import": "./src/relayJwt.ts"
     },
     "./oauthScope": {
       "types": "./src/oauthScope.ts",
@@ -231,10 +227,6 @@
       "types": "./src/cliArgs.ts",
       "import": "./src/cliArgs.ts"
     },
-    "./connectAuth": {
-      "types": "./src/connectAuth.ts",
-      "import": "./src/connectAuth.ts"
-    },
     "./symlink": {
       "types": "./src/symlink.ts",
       "import": "./src/symlink.ts"
@@ -246,6 +238,10 @@
     "./keybindings": {
       "types": "./src/keybindings.ts",
       "import": "./src/keybindings.ts"
+    },
+    "./keybindingMatching": {
+      "types": "./src/keybindingMatching.ts",
+      "import": "./src/keybindingMatching.ts"
     },
     "./threadTranscript": {
       "types": "./src/threadTranscript.ts",
@@ -262,6 +258,14 @@
     "./composerTrigger": {
       "types": "./src/composerTrigger.ts",
       "import": "./src/composerTrigger.ts"
+    },
+    "./triagePrompt": {
+      "types": "./src/triagePrompt.ts",
+      "import": "./src/triagePrompt.ts"
+    },
+    "./pullRequestComposerTrigger": {
+      "types": "./src/pullRequestComposerTrigger.ts",
+      "import": "./src/pullRequestComposerTrigger.ts"
     },
     "./composerInlineTokens": {
       "types": "./src/composerInlineTokens.ts",
@@ -294,14 +298,6 @@
     "./terminalLabels": {
       "types": "./src/terminalLabels.ts",
       "import": "./src/terminalLabels.ts"
-    },
-    "./relayClient": {
-      "types": "./src/relayClient.ts",
-      "import": "./src/relayClient.ts"
-    },
-    "./relayTracing": {
-      "types": "./src/relayTracing.ts",
-      "import": "./src/relayTracing.ts"
     },
     "./preview": {
       "types": "./src/preview.ts",
@@ -347,6 +343,10 @@
       "types": "./src/AgentTempDir.ts",
       "import": "./src/AgentTempDir.ts"
     },
+    "./managedPolicyFile": {
+      "types": "./src/managedPolicyFile.ts",
+      "import": "./src/managedPolicyFile.ts"
+    },
     "./HostProcess": {
       "types": "./src/HostProcess.ts",
       "import": "./src/HostProcess.ts"
@@ -358,6 +358,10 @@
     "./testing/symlinks": {
       "types": "./src/testing/symlinks.ts",
       "import": "./src/testing/symlinks.ts"
+    },
+    "./databaseMigrationLog": {
+      "types": "./src/databaseMigrationLog.ts",
+      "import": "./src/databaseMigrationLog.ts"
     },
     "./httpReadiness": {
       "types": "./src/httpReadiness.ts",
@@ -463,13 +467,25 @@
       "types": "./src/markdownGithubAlerts.ts",
       "import": "./src/markdownGithubAlerts.ts"
     },
+    "./agentIcons": {
+      "types": "./src/agentIcons.ts",
+      "import": "./src/agentIcons.ts"
+    },
     "./agentPresets": {
       "types": "./src/agentPresets/agentPresets.ts",
       "import": "./src/agentPresets/agentPresets.ts"
     },
+    "./agentPresetSkillFiles": {
+      "types": "./src/agentPresets/agentPresetSkillFiles.ts",
+      "import": "./src/agentPresets/agentPresetSkillFiles.ts"
+    },
     "./markdownFrontmatter": {
       "types": "./src/markdownFrontmatter.ts",
       "import": "./src/markdownFrontmatter.ts"
+    },
+    "./markdownTaskList": {
+      "types": "./src/markdownTaskList.ts",
+      "import": "./src/markdownTaskList.ts"
     },
     "./markdownListIndentation": {
       "types": "./src/markdownListIndentation.ts",
@@ -534,10 +550,14 @@
     "./cloneUrl": {
       "types": "./src/cloneUrl.ts",
       "import": "./src/cloneUrl.ts"
+    },
+    "./speech": {
+      "types": "./src/speech.ts",
+      "import": "./src/speech.ts"
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "effect-tsgo tsrs --noEmit",
     "test": "vp test run --config ../../vite.config.ts --dir ."
   },
   "dependencies": {
@@ -545,7 +565,7 @@
     "@noble/hashes": "catalog:",
     "@t3tools/contracts": "workspace:*",
     "effect": "catalog:",
-    "jose": "catalog:",
+    "ffi-rs": "1.3.2",
     "mdast-util-directive": "catalog:",
     "mdast-util-to-hast": "^13.2.1",
     "micromark-extension-directive": "catalog:",

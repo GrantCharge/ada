@@ -88,7 +88,7 @@ export function presentConnectionState(
         error: state.lastFailure?.message ?? null,
         traceId: state.lastFailure?.traceId ?? null,
         ...(state.lastFailure ? { failureReason: state.lastFailure.reason } : {}),
-        // A T3 Connect sign-in failure has hop "relay" or "device" and is fixed by signing in.
+        // Only the host refusing the credential is fixed by pairing again.
         ...(state.lastFailure?.reason === "authentication" && state.lastFailure.hop === "server"
           ? { needsPairing: true as const }
           : {}),
@@ -134,6 +134,21 @@ export function lastSeenLabel(lastConnectedAt: number, now: number): string {
   return `last seen ${format.format(lastConnectedAt)}`;
 }
 
+/** "Offline · last seen 2 h ago" from a roster's `lastSeenAt`, or "Offline" when it is unknown. */
+export function offlineSinceLabel(lastSeenAt: number | null, now: number): string {
+  if (lastSeenAt === null) return "Offline";
+  const minutes = Math.floor(Math.max(0, now - lastSeenAt) / 60_000);
+  const ago =
+    minutes < 1
+      ? "just now"
+      : minutes < 60
+        ? `${minutes} min ago`
+        : minutes < 24 * 60
+          ? `${Math.floor(minutes / 60)} h ago`
+          : `${Math.floor(minutes / (24 * 60))} d ago`;
+  return `Offline · last seen ${ago}`;
+}
+
 export function connectionStatusTitle(connection: EnvironmentConnectionPresentation): string {
   if (connection.phase === "reconnecting" && connection.error) {
     return "Failed to connect. Reconnecting...";
@@ -142,12 +157,11 @@ export function connectionStatusTitle(connection: EnvironmentConnectionPresentat
 }
 
 /**
- * SSH connections ride a local forward that disappears with the client, so they have no stable
- * address.
+ * The route this device is connected over comes first, then the other saved routes. SSH routes
+ * ride a local forward that disappears with the client, so they have no stable address.
  */
 export function environmentMcpUrl(input: {
   readonly entry: ConnectionCatalogEntry;
-  readonly relayHttpBaseUrl?: string | undefined;
   readonly connectedTarget?: ConnectionTarget | null | undefined;
 }): string | null {
   const connectedRouteId = input.connectedTarget ? connectionRouteId(input.connectedTarget) : null;
@@ -156,10 +170,7 @@ export function environmentMcpUrl(input: {
     (route) => connectionRouteId(route.target) === connectedRouteId,
   );
   for (const route of connectedRoute ? [connectedRoute, ...routes] : routes) {
-    const httpBaseUrl =
-      route.target._tag === "RelayConnectionTarget"
-        ? (input.relayHttpBaseUrl ?? null)
-        : routeHttpBaseUrl(route);
+    const httpBaseUrl = routeHttpBaseUrl(route);
     const mcpUrl = httpBaseUrl === null ? null : mcpUrlFromBase(httpBaseUrl);
     if (mcpUrl !== null) return mcpUrl;
   }
@@ -183,8 +194,6 @@ export function connectionCatalogDisplayUrl(entry: ConnectionCatalogEntry): stri
   switch (entry.target._tag) {
     case "PrimaryConnectionTarget":
       return entry.target.httpBaseUrl;
-    case "RelayConnectionTarget":
-      return null;
     case "BearerConnectionTarget":
       return Option.isSome(entry.profile) && entry.profile.value._tag === "BearerConnectionProfile"
         ? entry.profile.value.httpBaseUrl

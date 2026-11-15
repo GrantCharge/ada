@@ -20,7 +20,7 @@ import {
   NonNegativeInt,
   ProjectId,
 } from "@t3tools/contracts";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 
@@ -57,7 +57,7 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
   ],
 })
   .annotate(Tool.Title, "Organize a thread")
@@ -71,7 +71,7 @@ const commandTool = {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
-    Crypto.Crypto,
+    SecureRandom.SecureRandom,
   ],
 };
 const queueEntry = Schema.Struct({
@@ -117,6 +117,7 @@ const question = Schema.Struct({
       label: Schema.String,
       description: Schema.String,
       value: Schema.optional(Schema.String),
+      preview: Schema.optional(Schema.String),
     }),
   ),
   multiSelect: Schema.optional(Schema.Boolean),
@@ -199,6 +200,7 @@ const ThreadSearchTool = Tool.make("t3_thread_search", {
     projectId: Schema.optional(ProjectId),
   }),
   success: Schema.Struct({
+    currentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
     matches: Schema.Array(
       Schema.Struct({
         threadId: OrchestrationThreadSearchMatch.fields.threadId,
@@ -222,7 +224,10 @@ const ScheduledTaskRunTool = Tool.make("run_scheduled_task_now", {
     "Run one scheduled task now. Needs a full-access or default caller. Returns its thread, or null if not started. Success means started, not finished.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
-    taskId: ScheduledTaskId,
+    scheduledTaskId: Schema.optional(ScheduledTaskId),
+    taskId: Schema.optional(
+      ScheduledTaskId.annotate({ description: "Older name for scheduledTaskId." }),
+    ),
   }),
   success: Schema.Struct({
     taskId: ScheduledTaskId,

@@ -1,4 +1,5 @@
 import { AgentGatewayStatus } from "./AgentGatewayStatus";
+import { ServerAgentGatewayStatus } from "./ServerAgentGatewayStatus";
 import { AgentRunDragArea, LinkableAgentCard, SortableAgentThreads } from "./SortableAgentThreads";
 import { useClientSettings } from "../../hooks/useSettings";
 import { visibleAgentProviders } from "./agentModelCatalog";
@@ -6,24 +7,18 @@ import { ThreadCard } from "./ThreadCard";
 import { useAgentThreadContextMenu, useAgentThreadSettleAction } from "./useAgentThreadContextMenu";
 import * as Schema from "effect/Schema";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
-import { Menu, MenuTrigger, MenuPopup, MenuItem } from "../ui/menu";
-import { AgentIcon } from "./AgentIcon";
+import { AgentRailTile, AgentRailTileBody, agentRailTileClass } from "./AgentRailTile";
 import { Link, Outlet, useLocation, useNavigate, type LinkProps } from "@tanstack/react-router";
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
 import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import {
   PlusIcon,
-  MoreHorizontalIcon,
-  ArrowLeftIcon,
-  ArrowRightIcon,
   SettingsIcon,
-  PencilIcon,
-  Trash2Icon,
   SearchIcon,
   XIcon,
-  LayoutGridIcon,
+  UsersRoundIcon,
   CalendarClockIcon,
   ChartNoAxesColumnIcon,
 } from "lucide-react";
@@ -66,6 +61,8 @@ import { useToggleWorkspaceView } from "../sidebar/mainAppLocation";
 import { BrandMark } from "../BrandMark";
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
+import { Button } from "../ui/button";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const agentFilterSchema = Schema.NullOr(Schema.String);
 const agentOrderSchema = Schema.Array(Schema.String);
@@ -157,6 +154,16 @@ function AgentThreadList({
   );
 }
 
+/** The rail's short labels ("New", "All", "Scheduled") spell out in full on hover. */
+function RailTooltip({ label, children }: { label: string; children: ReactElement }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={children} />
+      <TooltipPopup side="right">{label}</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function TopbarIconLink({
   label,
   children,
@@ -189,14 +196,18 @@ export function AgentsBoard() {
   const orderedProfiles = profiles.toSorted(
     (a, b) => (ranks.get(a.profileId) ?? order.length) - (ranks.get(b.profileId) ?? order.length),
   );
-  const moveAgent = (index: number, direction: -1 | 1) => {
+  /** Swaps two neighbouring agents in the saved order. */
+  const swapAgents = (first: string, second: string | undefined) => {
+    if (second === undefined) return;
     const ids = orderedProfiles.map((profile) => profile.profileId);
-    const target = index + direction;
-    if (target < 0 || target >= ids.length) return;
-    [ids[index], ids[target]] = [ids[target]!, ids[index]!];
+    const a = ids.indexOf(first);
+    const b = ids.indexOf(second);
+    if (a < 0 || b < 0) return;
+    [ids[a], ids[b]] = [second, first];
     setOrder(ids);
   };
   const { environments } = useEnvironments();
+  const machineLabels = new Map(environments.map((env) => [env.environmentId, env.label]));
   const providersByEnvironment = useEnvironmentProviders();
   const navigate = useNavigate();
   const toggleWorkspaceView = useToggleWorkspaceView();
@@ -214,8 +225,7 @@ export function AgentsBoard() {
   const [query, setQuery] = useState("");
   const [savedFilter, setFilter] = useLocalStorage("t3code:agents:filter", null, agentFilterSchema);
   const filter = profiles.some((profile) => profile.profileId === savedFilter) ? savedFilter : null;
-  const [showFilters, setShowFilters] = useState(false);
-  const { attachWorkspace, paneStyle, profilesHandlers, threadsHandlers } = useAgentsPaneWidths();
+  const { attachWorkspace, paneStyle, threadsHandlers } = useAgentsPaneWidths();
   const selected = useLocation({
     select: (location) => location.pathname.split("/").filter(Boolean).length > 1,
   });
@@ -254,12 +264,11 @@ export function AgentsBoard() {
     (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
   );
   return (
-    <div className="agents-page" data-thread-selected={selected} data-show-filters={showFilters}>
+    <div className="agents-page" data-thread-selected={selected}>
       <header className="agents-topbar">
         <Link to="/" className="agents-brand">
           <BrandMark className="size-4" />
-          <strong>T3</strong>
-          <span>/ agents</span>
+          <strong>{APP_NAME}</strong>
         </Link>
         <nav aria-label="Workspace view">
           <span aria-current="page">Agents</span>
@@ -294,7 +303,11 @@ export function AgentsBoard() {
             </button>
           )}
         </div>
-        <AgentGatewayStatus />
+        {window.desktopBridge?.getMcpGatewayLaunchConfig?.() ? (
+          <AgentGatewayStatus />
+        ) : (
+          <ServerAgentGatewayStatus />
+        )}
         <div className="agents-topbar-actions">
           <div className="agents-topbar-group">
             <button
@@ -343,157 +356,97 @@ export function AgentsBoard() {
         aria-label="Agents workspace"
         style={paneStyle}
       >
-        <aside className="agents-filters" aria-label="Agent filters">
-          <header className="agents-filters-heading">
-            <h2>Agents</h2>
+        <aside className="agents-filters" aria-label="Agents">
+          <RailTooltip label="New agent">
             <button
-              className="agent-primary agents-new-agent"
+              type="button"
+              className={agentRailTileClass}
+              aria-label="New agent"
               disabled={!available}
               onClick={() => setEditor({ step: "start", presets: null })}
             >
-              <PlusIcon size={14} />
-              New agent
+              <AgentRailTileBody
+                icon={
+                  <span className="flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                    <PlusIcon className="size-4" />
+                  </span>
+                }
+                label="New"
+                count={0}
+              />
             </button>
-          </header>
-          <button
-            className="agent-filter"
-            aria-pressed={filter === null}
-            onClick={() => {
-              setFilter(null);
-              setShowFilters(false);
-            }}
-          >
-            <LayoutGridIcon size={22} />
-            <span className="agent-filter-body">
-              <span className="agent-filter-name">All</span>
-            </span>
-            <span className="agent-filter-count">{activeCount(allThreads)}</span>
-          </button>
-          {orderedProfiles.map((profile, index) => (
-            <div
-              key={profile.profileId}
-              className="agent-filter-row"
-              style={
-                {
-                  "--agent-color": agentColorFor(profile, profiles),
-                } as CSSProperties
-              }
-            >
+          </RailTooltip>
+          <nav className="agents-rail-list" aria-label="Agent filters">
+            <RailTooltip label="All agents">
               <button
-                className="agent-filter"
-                aria-pressed={filter === profile.profileId}
-                onClick={() => {
-                  setFilter(profile.profileId);
-                  setShowFilters(false);
-                }}
+                type="button"
+                className={agentRailTileClass}
+                aria-current={filter === null ? "true" : undefined}
+                aria-label={`All agents, ${activeCount(allThreads)} active`}
+                onClick={() => setFilter(null)}
               >
-                <AgentIcon icon={profile.icon} />
-                <span className="agent-filter-body">
-                  <span className="agent-filter-name">{profile.name}</span>
-                  {profile.description && (
-                    <span className="agent-filter-description">{profile.description}</span>
-                  )}
-                  {(profile.providerLabel || profile.modelLabel) && (
-                    <span className="agent-filter-model">
-                      {profile.providerLabel && profile.modelLabel
-                        ? `${profile.providerLabel} · ${profile.modelLabel}`
-                        : (profile.providerLabel ?? profile.modelLabel)}
-                    </span>
-                  )}
-                </span>
-                <span className="agent-filter-count">
-                  {activeCount(groups.get(profile.profileId) ?? [])}
-                </span>
+                <AgentRailTileBody
+                  icon={<UsersRoundIcon className="size-5 text-muted-foreground" />}
+                  label="All"
+                  count={activeCount(allThreads)}
+                />
               </button>
-              <Menu>
-                <MenuTrigger
-                  render={<button type="button" className="agent-icon-button" />}
-                  aria-label={`Options for ${profile.name}`}
-                >
-                  <MoreHorizontalIcon size={14} />
-                </MenuTrigger>
-                <MenuPopup align="end">
-                  <MenuItem
-                    disabled={!available}
-                    onClick={() => setEditor({ step: "edit", profile })}
-                  >
-                    <PencilIcon />
-                    Edit agent
-                  </MenuItem>
-                  {scheduledSupported && (
-                    <MenuItem
-                      disabled={!available || profile.runtimeMode === "read-only"}
-                      onClick={() =>
-                        navigate({ to: "/agents/scheduled", search: { agent: profile.profileId } })
-                      }
-                    >
-                      <CalendarClockIcon />
-                      Schedule task
-                    </MenuItem>
-                  )}
-                  <MenuItem disabled={index === 0} onClick={() => moveAgent(index, -1)}>
-                    <ArrowLeftIcon />
-                    Move up
-                  </MenuItem>
-                  <MenuItem
-                    disabled={index === orderedProfiles.length - 1}
-                    onClick={() => moveAgent(index, 1)}
-                  >
-                    <ArrowRightIcon />
-                    Move down
-                  </MenuItem>
-                  <MenuItem
-                    disabled={!available}
-                    onClick={() => {
+            </RailTooltip>
+            {orderedProfiles.map((profile, index) => {
+              const previous = orderedProfiles[index - 1]?.profileId;
+              const next = orderedProfiles[index + 1]?.profileId;
+              return (
+                <AgentRailTile
+                  key={profile.profileId}
+                  profile={profile}
+                  color={agentColorFor(profile, profiles)}
+                  activeCount={activeCount(groups.get(profile.profileId) ?? [])}
+                  selected={filter === profile.profileId}
+                  machineLabels={machineLabels}
+                  onSelect={() => setFilter(profile.profileId)}
+                  actions={{
+                    editDisabled: !available,
+                    scheduleDisabled: scheduledSupported
+                      ? !available || profile.runtimeMode === "read-only"
+                      : null,
+                    moveUpDisabled: previous === undefined,
+                    moveDownDisabled: next === undefined,
+                    onEdit: () => setEditor({ step: "edit", profile }),
+                    onSchedule: () =>
+                      navigate({
+                        to: "/agents/scheduled",
+                        search: { agent: profile.profileId },
+                      }),
+                    onMoveUp: () => swapAgents(profile.profileId, previous),
+                    onMoveDown: () => swapAgents(profile.profileId, next),
+                    onDelete: () => {
                       setDeleting(profile);
                       setDeleteError("");
-                    }}
-                  >
-                    <Trash2Icon />
-                    Delete agent
-                  </MenuItem>
-                </MenuPopup>
-              </Menu>
-            </div>
-          ))}
-          {profiles.length === 0 && (
-            <p className="agent-empty">No agents yet. Create an agent to start a chat.</p>
-          )}
+                    },
+                  }}
+                />
+              );
+            })}
+          </nav>
           {scheduledSupported && (
-            <footer className="agents-filters-footer">
+            <RailTooltip label="Scheduled tasks">
               <Link
                 to="/agents/scheduled"
-                className="agent-filter"
+                className={agentRailTileClass}
+                aria-label="Scheduled tasks"
                 activeProps={{ "aria-current": "page" }}
-                onClick={() => setShowFilters(false)}
               >
-                <CalendarClockIcon size={22} />
-                <span className="agent-filter-body">
-                  <span className="agent-filter-name">Scheduled tasks</span>
-                </span>
-                <span className="agent-filter-count">
-                  {scheduledTasks.filter(({ task }) => task.enabled).length}
-                </span>
+                <AgentRailTileBody
+                  icon={<CalendarClockIcon className="size-5 text-muted-foreground" />}
+                  label="Scheduled"
+                  count={scheduledTasks.filter(({ task }) => task.enabled).length}
+                />
               </Link>
-            </footer>
+            </RailTooltip>
           )}
         </aside>
-        <div className="agents-pane-resize" data-pane="profiles">
-          <RightPanelResizeHandle handlers={profilesHandlers} />
-        </div>
         <section className="agents-threads" aria-label="Threads">
           <header>
-            <button
-              className="agent-mobile-filters agent-icon-button"
-              onClick={() => setShowFilters(true)}
-            >
-              <ArrowLeftIcon size={14} /> Agents
-            </button>
-            {scheduledSupported && (
-              <Link to="/agents/scheduled" className="agent-mobile-filters agent-icon-button">
-                <CalendarClockIcon size={14} /> Scheduled
-              </Link>
-            )}
             <div className="agents-threads-heading">
               <h2>
                 Threads
@@ -503,20 +456,24 @@ export function AgentsBoard() {
               </h2>
               <p>Active & unread</p>
             </div>
-            <button
+            <Button
               type="button"
-              className="agent-primary agents-new-chat"
+              size="sm"
               aria-haspopup="dialog"
               disabled={!available || orderedProfiles.length === 0}
               onClick={() => setNewChatOpen(true)}
             >
-              <PlusIcon size={14} />
+              <PlusIcon />
               New chat
-            </button>
+            </Button>
           </header>
           {visible.length === 0 && pinned.length === 0 && (
             <p role="status" className="agent-empty">
-              {query ? "No chats match your search." : "No threads here yet."}
+              {query
+                ? "No chats match your search."
+                : profiles.length === 0
+                  ? "No agents yet. Create an agent to start a chat."
+                  : "No threads here yet."}
             </p>
           )}
           <AgentThreadList
@@ -587,7 +544,9 @@ export function AgentsBoard() {
             if (presetSkills.length === 0)
               return updateSettings({ mcpGatewayProfiles: [...profiles, profile] });
             if (presetSkills.some((skill) => skill.resources.length) && !skillResourcesAvailable)
-              throw new Error("Update T3 Code on this machine to add this preset’s skill files.");
+              throw new Error(
+                `Update ${APP_NAME} on this machine to add this preset’s skill files.`,
+              );
             const added = addPresetSkills(skills, presetSkills, {
               now: profile.createdAt,
               makeId: randomUUID,
@@ -636,13 +595,20 @@ export function AgentsBoard() {
                     disabled={busy}
                     onClick={async () => {
                       setBusy(true);
-                      const deleted = await updateSettings({
-                        mcpGatewayProfiles: profiles.filter(
-                          (p) => p.profileId !== deleting.profileId,
-                        ),
-                      }).finally(() => setBusy(false));
-                      if (deleted) setDeleting(null);
-                      else setDeleteError("Could not delete the agent. Try again.");
+                      try {
+                        const deleted = await updateSettings({
+                          mcpGatewayProfiles: profiles.filter(
+                            (p) => p.profileId !== deleting.profileId,
+                          ),
+                        });
+                        if (deleted) setDeleting(null);
+                        else setDeleteError("Could not delete the agent. Try again.");
+                      } catch (cause) {
+                        setDeleteError(
+                          cause instanceof Error ? cause.message : "Could not delete the agent.",
+                        );
+                      }
+                      setBusy(false);
                     }}
                   >
                     {busy ? "Deleting…" : "Delete agent"}

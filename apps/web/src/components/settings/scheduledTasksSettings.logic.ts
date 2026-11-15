@@ -1,24 +1,37 @@
-import { isWebhookDedupeTemplate } from "@t3tools/contracts";
+import { isWebhookDedupeTemplate, scheduledTaskDeletesAt } from "@t3tools/contracts";
+import { isScheduledTaskArchived } from "@t3tools/client-runtime/scheduled-task-archive";
 import {
   EnvironmentId,
-  MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
   type ProjectId,
   ScheduledTaskId,
   type ScheduledTask,
   type ScheduledTaskSchedule,
+  type ScheduledTaskThreadMode,
   type ScheduledTaskUpsertSchedule,
+  scheduledTaskThreadMode,
+  type McpGatewayProfile,
   type ModelSelection,
   type RuntimeMode,
+  type ServerProvider,
   type ProviderInteractionMode,
   type ServerSettings,
+  ThreadId,
 } from "@t3tools/contracts";
 import {
-  parseMaxDeliveryAge,
   parseWebhookFilterDrafts,
   webhookFilterDrafts,
   webhookFilterDraftsChanged,
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
+import { scheduleTimeZoneLabel } from "@t3tools/client-runtime/scheduled-task-time-zone";
+import {
+  cronToRepeatForm,
+  describeSchedule,
+  localTimeZone,
+  repeatFormToCron,
+  type RepeatForm,
+} from "@t3tools/client-runtime/scheduled-task-cron";
+import { resolveScheduledTaskProfileRouting } from "@t3tools/client-runtime/gateway";
 
 import {
   resolveProjectSettings,
@@ -27,6 +40,45 @@ import {
 import type { ProviderInstanceEntry } from "../../providerInstances";
 
 import type { ResolvedSettingsScope } from "./settingsScope";
+
+export const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+
+const ONCE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+
+export function scheduleLabel(
+  schedule: ScheduledTaskSchedule,
+  timeZone?: string,
+  runAt?: string | null,
+): string {
+  if (schedule.type === "cron") return describeSchedule(schedule, (iso) => iso);
+  if (schedule.type === "webhook") return "On webhook";
+  if (schedule.type === "once") return `Once, ${ONCE_FORMATTER.format(new Date(schedule.runAt))}`;
+  if (schedule.type === "interval") {
+    const minutes = schedule.everyMs / 60_000;
+    return Number.isInteger(minutes)
+      ? `Every ${minutes} min`
+      : `Every ${Math.round(schedule.everyMs / 1000)} sec`;
+  }
+  const weekdays = schedule.weekdays ?? [];
+  const days =
+    weekdays.length === 0
+      ? "Daily"
+      : weekdays.length === 5 && weekdays.every((day) => day >= 1 && day <= 5)
+        ? "Weekdays"
+        : weekdays.map((day) => WEEKDAY_LABELS[day]).join(", ");
+  const zone = scheduleTimeZoneLabel(timeZone, runAt);
+  return `${days} at ${schedule.timeOfDay}${zone === undefined ? "" : ` ${zone}`}`;
+}
+
+export function scheduledTaskDeletesLabel(task: Pick<ScheduledTask, "archivedAt">): string | null {
+  const deletesAt = scheduledTaskDeletesAt(task);
+  return deletesAt === null ? null : `Deletes on ${DATE_FORMATTER.format(new Date(deletesAt))}`;
+}
 
 export function matchesScheduledTaskScope(
   scope: ResolvedSettingsScope,
@@ -58,6 +110,7 @@ export function newScheduledTaskEnvironment<T extends { readonly environmentId: 
   return scopeDefault ?? connected[0] ?? null;
 }
 
+/** `taskId` opens that task's editor; `threadId` opens a new task bound to that thread. */
 export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
   return {
     ...(typeof raw.environmentId === "string" && raw.environmentId.trim()
@@ -66,13 +119,13 @@ export function validateScheduledTasksSearch(raw: Record<string, unknown>) {
     ...(typeof raw.taskId === "string" && raw.taskId.trim()
       ? { taskId: ScheduledTaskId.make(raw.taskId) }
       : {}),
+    ...(typeof raw.threadId === "string" && raw.threadId.trim()
+      ? { threadId: ThreadId.make(raw.threadId) }
+      : {}),
   };
 }
 
-/** "kept" leaves a cron schedule (set from the Agents board or MCP) unchanged. */
-export type ScheduleMode = "fixed" | "once" | "interval" | "webhook" | "kept";
-/** Schedules the dialog cannot edit but must round-trip untouched. */
-export type KeptSchedule = Extract<ScheduledTaskSchedule, { type: "cron" }>;
+export type ScheduleMode = "fixed" | "once" | "interval" | "webhook" | "cron";
 export type WorkspaceMode = "root" | "worktree" | "existing_worktree";
 
 export interface DraftState {
@@ -88,9 +141,13 @@ export interface DraftState {
   /** The stored ISO run time, sent back unchanged when the field was not edited. */
   readonly savedRunAt: string;
   readonly weekdays: ReadonlySet<number>;
-  readonly keptSchedule: KeptSchedule | null;
+  readonly cron: RepeatForm;
+  readonly cronTimezone: string;
   readonly projectId: string;
   readonly threadId: string;
+  /** The agent whose thread runs go to; empty for a plain thread task. */
+  readonly profileId: string;
+  readonly threadMode: ScheduledTaskThreadMode;
   readonly workspaceMode: WorkspaceMode;
   readonly baseRef: string;
   readonly startFromOrigin: boolean;
@@ -106,7 +163,6 @@ export interface DraftState {
   readonly signaturePrefix: string;
   /** Write-only: empty keeps the secret already stored on the server. */
   readonly signatureSecret: string;
-  readonly maxDeliveryAgeMinutes: string;
   readonly replayKey: string;
   readonly coalesceKey: string;
   readonly coalesceWindowSeconds: string;
@@ -127,7 +183,19 @@ export function toDateTimeLocalValue(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+export const DEFAULT_CRON_FORM: RepeatForm = {
+  preset: "daily",
+  time: "07:00",
+  weekday: 1,
+  expression: "0 7 * * *",
+};
+
 export function scheduleDraftErrors(draft: DraftState) {
+  if (draft.scheduleMode === "cron") {
+    return repeatFormToCron(draft.cron) === ""
+      ? [{ title: "Invalid schedule", description: "Enter a cron expression." }]
+      : [];
+  }
   if (draft.scheduleMode === "once") {
     const runAt = new Date(draft.runAt);
     if (Number.isNaN(runAt.getTime()))
@@ -140,13 +208,6 @@ export function scheduleDraftErrors(draft: DraftState) {
     return [];
   }
   if (draft.scheduleMode !== "webhook") return [];
-  if (parseMaxDeliveryAge(draft.maxDeliveryAgeMinutes) === undefined)
-    return [
-      {
-        title: "Invalid age limit",
-        description: `Enter whole minutes from 1 to ${MAX_WEBHOOK_DELIVERY_AGE_MINUTES}, or leave it blank.`,
-      },
-    ];
   const errors: Array<{ title: string; description: string }> = [];
   for (const [label, value] of [
     ["Duplicate request key", draft.replayKey],
@@ -186,8 +247,14 @@ export function webhookDeliveryLabel(delivery: {
 }
 
 export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedule | null {
-  if (draft.scheduleMode === "kept") return draft.keptSchedule;
   if (scheduleDraftErrors(draft).length > 0) return null;
+  if (draft.scheduleMode === "cron") {
+    return {
+      type: "cron",
+      expression: repeatFormToCron(draft.cron),
+      timezone: draft.cronTimezone.trim() || localTimeZone(),
+    };
+  }
   if (draft.scheduleMode === "once") {
     const saved = draft.savedRunAt ? new Date(draft.savedRunAt) : null;
     if (saved !== null && toDateTimeLocalValue(saved) === draft.runAt)
@@ -207,13 +274,11 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
     };
   }
   if (draft.scheduleMode === "webhook") {
-    const maxDeliveryAgeMinutes = parseMaxDeliveryAge(draft.maxDeliveryAgeMinutes);
     const replayKey = draft.replayKey.trim();
     const coalesceKey = draft.coalesceKey.trim();
     const coalesceWindowSeconds = draft.coalesceWindowSeconds.trim()
       ? Number(draft.coalesceWindowSeconds)
       : undefined;
-    if (maxDeliveryAgeMinutes === undefined) return null;
     const parsedFilters = parseWebhookFilterDrafts(draft.filters);
     if (!("filters" in parsedFilters)) return null;
     const secret = draft.signatureSecret.trim();
@@ -227,7 +292,6 @@ export function scheduleFromDraft(draft: DraftState): ScheduledTaskUpsertSchedul
             ...(secret ? { secret } : {}),
           }
         : null,
-      maxDeliveryAgeMinutes,
       ...(replayKey || coalesceKey || coalesceWindowSeconds !== undefined
         ? {
             dedupe: {
@@ -266,18 +330,22 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     editingId: task.id,
     title: task.title,
     prompt: task.prompt,
-    enabled: task.enabled,
-    scheduleMode:
-      schedule.type === "fixed_time" ? "fixed" : schedule.type === "cron" ? "kept" : schedule.type,
+    // Saving restores an archived task, so it opens ready to run again.
+    enabled: task.enabled || isScheduledTaskArchived(task),
+    scheduleMode: schedule.type === "fixed_time" ? "fixed" : schedule.type,
     intervalMinutes:
       schedule.type === "interval" ? String(Math.max(1, schedule.everyMs / 60_000)) : "15",
-    timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay : "09:00",
+    // A time input shows nothing for an unpadded hour such as 9:05, which agents may save.
+    timeOfDay: schedule.type === "fixed_time" ? schedule.timeOfDay.padStart(5, "0") : "09:00",
     runAt: schedule.type === "once" ? toDateTimeLocalValue(new Date(schedule.runAt)) : "",
     savedRunAt: schedule.type === "once" ? schedule.runAt : "",
     weekdays,
-    keptSchedule: schedule.type === "cron" ? schedule : null,
+    cron: schedule.type === "cron" ? cronToRepeatForm(schedule.expression) : DEFAULT_CRON_FORM,
+    cronTimezone: schedule.type === "cron" ? schedule.timezone : localTimeZone(),
     projectId: task.projectId,
     threadId: task.threadId ?? "",
+    profileId: task.profileId ?? "",
+    threadMode: scheduledTaskThreadMode(task),
     workspaceMode: task.workspaceStrategy.type,
     baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
     startFromOrigin:
@@ -307,13 +375,107 @@ export function taskToDraft(task: ScheduledTask): DraftState {
       schedule.type === "webhook" && schedule.dedupe?.coalesceWindowSeconds !== undefined
         ? String(schedule.dedupe.coalesceWindowSeconds)
         : "",
-    maxDeliveryAgeMinutes:
-      schedule.type === "webhook" && schedule.maxDeliveryAgeMinutes != null
-        ? String(schedule.maxDeliveryAgeMinutes)
-        : "",
     filters,
     savedFilters: filters,
   };
+}
+
+export function moveDraftToThread(
+  draft: DraftState,
+  thread: { readonly id: ThreadId; readonly projectId: ProjectId },
+): DraftState {
+  return {
+    ...draft,
+    threadId: thread.id,
+    projectId: thread.projectId,
+    threadMode: draft.threadMode === "new_thread" ? "continue" : draft.threadMode,
+  };
+}
+
+/** Leaves the thread but keeps the mode. Matches MCP: new threads stay out of the shared checkout. */
+export function unbindDraftFromThread(draft: DraftState): DraftState {
+  if (!draft.threadId) return draft;
+  return {
+    ...draft,
+    threadId: "",
+    ...(draft.workspaceMode === "root"
+      ? { workspaceMode: "worktree" as const, startFromOrigin: true }
+      : {}),
+  };
+}
+
+/** Runs go to this agent's own thread, the one it already had when the agent is unchanged. */
+export function moveDraftToAgent(
+  draft: DraftState,
+  profileId: string,
+  task: Pick<ScheduledTask, "profileId" | "threadId"> | null,
+): DraftState {
+  return {
+    ...draft,
+    profileId,
+    threadId: task?.profileId === profileId ? (task.threadId ?? "") : "",
+    threadMode: "continue",
+  };
+}
+
+/** Leaves the agent and its thread; the caller picks the thread mode. */
+export function moveDraftOffAgent(draft: DraftState): DraftState {
+  return draft.profileId === "" ? draft : { ...draft, profileId: "", threadId: "" };
+}
+
+/**
+ * Where a save sends runs, and the model and modes they use. Agent tasks take them from the
+ * agent, and existing ones keep theirs until the agent changes. `profileId: null` clears a
+ * task's agent; omitted leaves a task that never had one alone.
+ */
+export function scheduledTaskDraftRouting(
+  draft: DraftState,
+  task: ScheduledTask | null,
+  context: {
+    readonly profiles: ReadonlyArray<McpGatewayProfile>;
+    readonly providers: ReadonlyArray<ServerProvider>;
+    readonly modelSelection: ModelSelection | null;
+    readonly offersThreadModes: boolean;
+  },
+):
+  | string
+  | {
+      readonly profileId?: string | null;
+      readonly threadId: ThreadId | null;
+      readonly threadMode?: ScheduledTaskThreadMode;
+      readonly modelSelection: ModelSelection;
+      readonly runtimeMode: RuntimeMode;
+      readonly interactionMode: ProviderInteractionMode;
+    } {
+  const threadId = draft.threadId ? (draft.threadId as ThreadId) : null;
+  if (draft.profileId !== "") {
+    const routing =
+      task && task.profileId === draft.profileId
+        ? {
+            profileId: draft.profileId,
+            modelSelection: task.modelSelection,
+            runtimeMode: task.runtimeMode,
+            interactionMode: task.interactionMode,
+          }
+        : resolveScheduledTaskProfileRouting(context.profiles, draft.profileId, context.providers);
+    return typeof routing === "string" ? routing : { ...routing, threadId };
+  }
+  if (context.modelSelection === null) return "Choose a model.";
+  const wasAgent = task?.profileId !== undefined;
+  return {
+    ...(wasAgent ? { profileId: null } : {}),
+    threadId,
+    ...(context.offersThreadModes ? { threadMode: draft.threadMode } : {}),
+    modelSelection: context.modelSelection,
+    runtimeMode: draft.runtimeMode,
+    // An agent's interaction mode does not carry over to a plain thread.
+    interactionMode: wasAgent ? "default" : draft.interactionMode,
+  };
+}
+
+export function changeDraftProject(draft: DraftState, projectId: string): DraftState {
+  if (projectId === draft.projectId) return draft;
+  return { ...unbindDraftFromThread(draft), projectId };
 }
 
 export function scheduledTaskDefaultModel(

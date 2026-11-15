@@ -4,8 +4,9 @@ import type {
   ClientOs,
   DesktopBridge,
 } from "@t3tools/contracts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
-interface BrowserIdentity {
+export interface BrowserIdentity {
   readonly userAgent: string;
   readonly platform: string;
   readonly maxTouchPoints: number;
@@ -32,7 +33,7 @@ function isIpadosDesktopUserAgent(identity: BrowserIdentity): boolean {
   );
 }
 
-function browserClientOs(identity: BrowserIdentity): ClientOs {
+export function browserClientOs(identity: BrowserIdentity): ClientOs {
   const userAgent = identity.userAgent;
   if (userAgent.trim() === "") return "unknown";
   if (/iphone|ipad|ipod/i.test(userAgent) || isIpadosDesktopUserAgent(identity)) return "iOS";
@@ -77,7 +78,7 @@ export function clientPresentationMetadata(input: {
 }): AuthClientPresentationMetadata {
   if (input.desktopBridge !== undefined) {
     return {
-      label: "T3 Agents Desktop",
+      label: `${APP_NAME} Desktop`,
       deviceType: "desktop",
       os: clientOsFromElectronPlatform(input.desktopBridge.getClientPlatform()),
       surface: "desktop",
@@ -86,7 +87,7 @@ export function clientPresentationMetadata(input: {
   }
 
   return {
-    label: "T3 Agents Web",
+    label: `${APP_NAME} Web`,
     deviceType: browserDeviceType(input.identity),
     os: browserClientOs(input.identity),
     surface: "web",

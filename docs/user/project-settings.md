@@ -86,6 +86,14 @@ environment's time zone, which may differ from your phone's. Choose **Once**
 to run a task a single time at a date and time in your own time zone. If the
 environment is offline then, the task runs when it is back.
 
+Under **Destination**, choose where runs go. **New thread each run** keeps every
+run separate. The two one-thread choices start a thread on the first run and post
+later runs there: one continues the same conversation, the other starts each run
+in a fresh session that doesn't see earlier runs, so the thread stays readable
+without the agent's context growing. To move a one-thread task, pick another
+thread in its project under **Destination**. Moving such a task to another
+project starts a new thread there on its next run.
+
 Deleting a thread also deletes tasks that post into that thread. Tasks that start
 a new thread on each run survive deletion of their previous threads.
 
@@ -94,13 +102,30 @@ Webhook tasks only run when their URL is called, so they can't be run
 immediately.
 Leaving an edited form asks before discarding unsaved changes.
 
+### Stale tasks are archived
+
+Tasks that stop doing anything are archived after 10 days: a one-time task after
+its run, a task paused or left off for 10 days, a task whose runs have failed at
+least three times in a row for 10 days, and a task whose thread has been
+archived for 10 days. A webhook task is archived only if its URL received no
+request for 30 days since you created or last edited it; a webhook that has run
+is never archived for being quiet. Archiving turns the task off.
+
+Choose **Archived** at the top of the list to see these tasks, why each was
+archived, and the date it will be deleted, 30 days after archiving. **Restore**
+turns a task back on; a one-time task whose time passed opens the editor so you
+can pick a new time. Saving an archived task also restores it. A restored
+webhook keeps its URL. The 10-day and 30-day windows can't be changed.
+
 ## Webhook automations
 
 In **Settings → Scheduled tasks**, choose **On webhook**
 as a task's schedule to run it whenever another service calls its URL, such as
-GitHub on a new pull request or a CI job that failed. A public URL needs a
-[T3 Connect](remote-access.md) managed tunnel; after you save the task, copy
-its URL from the editor. Without one, the editor shows only the URL's path.
+a CI job that failed. The URL uses the machine's
+[Tailscale HTTPS](remote-access.md#tailscale-https) address, so only senders on
+your tailnet can reach it; outside services such as GitHub or Linear cannot.
+After you save the task, copy its URL from the editor. Without a Tailscale HTTPS
+address, the editor shows only the URL's path.
 **Rotate** replaces the URL and the old one stops working.
 
 The prompt decides what the agent sees. Placeholders pull values out of the
@@ -151,7 +176,7 @@ always replace the persisted payload. Coalesced updates count toward a separate
 60-per-minute validation limit; exceeding it receives HTTP 429.
 
 A script that may retry a request can send an `Idempotency-Key` header, 1 to
-200 printable characters with no spaces. T3 Code runs the task once per key
+200 printable characters with no spaces. Ada runs the task once per key
 for 48 hours; a retry with the same key is accepted as a duplicate and answers
 with the first delivery's id. A malformed key gets a 400 and nothing runs.
 
@@ -159,17 +184,11 @@ On desktop and web, pick **Deliveries** from a task's menu to see recent
 requests and the prompt each one produced.
 
 If the environment is offline, the sender gets an error and nothing runs;
-redeliver from the sender, such as GitHub's **Recent Deliveries**, once it is
-back. To have T3 Connect keep requests instead, turn on **Hold webhooks while
-offline** in **Settings → Environments**. T3 Connect then stores requests to a
-T3 Connect URL for up to 24 hours and delivers them when the environment
-returns. Leave it off if you don't want request bodies stored outside your
-machine. To skip requests that waited too long, set **Skip requests older
-than** on the task.
+redeliver from the sender once it is back.
 
 ### Trigger a webhook only when something changes
 
-`t3 watch` turns external state into a webhook call without spending a model
+`ada watch` turns external state into a webhook call without spending a model
 run on polling. It probes a file, an HTTP endpoint, or a command's exit status,
 and sends one POST to your webhook task only when a value changes into one you
 listed. While nothing changes it sends nothing. Send actionable changes only,
@@ -209,22 +228,22 @@ Values are `present`/`absent` for files, `status:<code>`/`unreachable` for HTTP,
 and `exit:<code>`/`timeout` for commands (add `"output": true` to use the first
 line of stdout instead). `"*"` in `notify` means any change. The first run
 records a baseline and sends nothing unless a probe sets `"notifyInitial": true`.
-Commands run directly, without a shell. The webhook URL can be the direct,
-Tailscale, or T3 Connect URL. Failed deliveries retry, and a still-undelivered
+Commands run directly, without a shell. The webhook URL can be the direct or
+Tailscale URL. Failed deliveries retry, and a still-undelivered
 event is re-sent with the same `Idempotency-Key` on the next run.
 
-Use the `t3` command from the same T3 Code release as your server. Earlier
-releases and the `t3` package on npm don't include `watch`, so if `t3 watch`
-reports an unknown command, that `t3` is too old.
+Use the `ada` command from the same Ada release as your server. Earlier
+releases and the `ada` package on npm don't include `watch`, so if `ada watch`
+reports an unknown command, that `ada` is too old.
 
 - **Desktop app:** the app keeps its own launcher at `~/.t3/bin/t3`, or
-  `%USERPROFILE%\.t3\bin\t3.cmd` on Windows (under your T3 home if you changed
-  it). [The `t3` command](./install.md#the-t3-command) explains how to put it on
+  `%USERPROFILE%\.t3\bin\t3.cmd` on Windows (under your Ada home if you changed
+  it). [The `ada` command](./install.md#the-t3-command) explains how to put it on
   your `PATH`.
-- **Server without the desktop app:** use the standalone `t3` CLI built with
+- **Server without the desktop app:** use the standalone `ada` CLI built with
   the same release, not one installed from npm.
 
-Run `t3 watch /path/config.json --once` from a scheduler, or `t3 watch
+Run `ada watch /path/config.json --once` from a scheduler, or `ada watch
 /path/config.json --interval 30` under any supervisor. Progress is kept next
 to the config, in `config.json.state.json`.
 
@@ -236,7 +255,7 @@ copy a state file to another host or machine; give each its own. To start fresh,
 delete the state file.
 
 Schedulers don't read your shell's `PATH`, so give them absolute paths for
-both the `t3` launcher and the config. These examples use the desktop app's
+both the `ada` launcher and the config. These examples use the desktop app's
 launcher. Check them against your scheduler's own documentation before relying
 on them:
 
@@ -266,7 +285,8 @@ project crumb.
 The Projects category, under Code, holds the project's name, icon, actions,
 checkouts and removal. Actions belong to a project: editing them creates the project's own list
 on each selected environment, and reset returns to the environment's shared list. A project's
-`t3.json` actions can be imported there.
+`t3.json` actions can be imported there. When a project has several checkouts on one environment,
+choose one in the scope line at the top to see or change only that checkout's settings.
 
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the
@@ -282,10 +302,23 @@ applies when the project and environment are both on **Inherit**.
 
 ## Worktree location
 
-New worktrees go in the `worktrees` folder of the T3 home directory. To put them somewhere else,
+New worktrees go in the `worktrees` folder of the Ada home directory. To put them somewhere else,
 such as another drive, set **Settings → Worktrees → Worktree location** to an absolute path like
 `D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
 are, and cleanup covers both the default folder and the custom one.
+
+## Fast worktree checkout on macOS
+
+Fast worktree checkout is a beta. Turn it on for each Mac in **Settings → Labs → Fast worktree
+checkout**. Ada then keeps a few recent checkouts of each repository in the `caches` folder of
+the Ada home directory. A new worktree is cloned from one of them with APFS copy-on-write, which is
+about twice as fast as writing every file and makes the first `git status` in it fast as well.
+Turning it off deletes the cache.
+
+The first worktree of a repository uses Git's normal checkout and fills the cache. It needs Git 2.42
+or newer. Git's normal checkout is also used for worktrees on a different drive from the Ada home
+directory, sparse checkouts, repositories whose attributes use filters such as Git LFS, and
+repositories whose checkout settings changed.
 
 ## Storage cleanup
 
@@ -299,8 +332,11 @@ manually. Custom applies separate worktree rules to the selected project or chec
 captures and log retention remain machine-wide.
 
 Worktrees can be removed after a chosen number of inactive days, after a thread settles, after
-merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
-to remove a worktree at the next cleanup after settlement. Only T3-managed worktrees are eligible.
+merging, or when they have no commits beyond the default branch and their thread is settled or
+archived. Set settled retention to 0 days to remove a worktree at the next cleanup after
+settlement. In repositories without remotes,
+unchanged-worktree cleanup compares against the branch checked out in the project workspace;
+if that checkout has a detached HEAD, the worktree is kept. Only Ada-managed worktrees are eligible.
 Active sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
 to **Uncommitted changes**, which protects tracked edits and untracked files but deletes ignored
 files such as `.env` and build output. **Any local files** also protects ignored files other than
@@ -320,10 +356,19 @@ worktrees were removed or kept and why, plus any failures.
 Results also list folders in the worktree folder that no thread uses, with their sizes; cleanup never removes them, so remove them manually if you want.
 
 To free a finished thread's worktree without enabling a policy, ask an agent connected through
-T3's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps
+Ada's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps
 its history and branch, and its next turn recreates the checkout. Reclaiming also requires the
 latest commit to be included in the remote default branch, so squash-merged branches are kept;
 dependency installs and build output may be removed, other ignored files are kept. Every reason a checkout is kept is reported.
+
+The inactive and settled retention periods also apply to the folders of
+[threads without a project](./thread-sidebar.md#start-without-a-project). Those folders are not
+Git repositories, so their files are deleted with them and cannot be recovered; the thread stays,
+and its next turn starts in a new, empty folder. A folder is kept when it has a Git repository
+anywhere inside it or when its thread has an enabled scheduled task. Every file in such a folder
+counts as untracked, so only **Edited tracked files** removes a folder that holds anything other
+than `node_modules`; the other two rules remove only empty folders. Folders that no thread uses
+are listed here too.
 
 Browser captures and rotated logs have separate retention periods. Expired capture links stop
 working. Current logs, message attachments, and browser profiles are kept.
@@ -332,7 +377,7 @@ working. Current logs, message attachments, and browser profiles are kept.
 
 Select the project and open Project to choose an icon, emoji, monogram, or image. The choice applies to
 every checkout in the project group and appears on connected clients. Choose **Automatic** to let
-T3 Code detect an icon again.
+Ada detect an icon again.
 
 Choose **Monogram** in the icon picker to set one or two letters or numbers and a color.
 
@@ -346,6 +391,6 @@ In Source control, enable **Automatically pull** to keep the default-branch chec
 with its configured upstream. Choose an environment to set the default or a project to override it.
 On mobile, use **Settings → Source control** to change selected environment defaults or project overrides.
 
-T3 Code only pulls when it can fast-forward and the checkout has no changed files, untracked files,
+Ada only pulls when it can fast-forward and the checkout has no changed files, untracked files,
 or local commits. It skips checkouts on another branch or without an upstream. If a checkout has
 local work, resolve it yourself before automatic pulls can resume.

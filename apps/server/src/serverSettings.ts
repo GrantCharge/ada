@@ -1,5 +1,16 @@
+import { legacyAgentIcon } from "@t3tools/shared/agentIcons";
 import {
+  agentNameKey,
+  agentSkillDigest,
+  agentSkillDigestOf,
+  claimAgentName,
+  isAgentSkillStub,
   mergeAgentLibraries,
+  toAgentSkillStub,
+  withoutAgentSkillTransportFields,
+  type AgentLibraryMutationResult,
+  type AgentLibraryOperation,
+  type AgentSkill,
   DEFAULT_SERVER_SETTINGS,
   ModelSelection,
   ProjectId,
@@ -18,7 +29,10 @@ import {
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
+  type ManagedPolicySummary,
   globalIdleCompaction,
+  isSecretReference,
+  type SecretReference,
   withIdleCompaction,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
@@ -55,13 +69,20 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as ManagedPolicy from "./policy/ManagedPolicy.ts";
 import { secretProviderDefinitions } from "./secrets/secretProviderDefinitions.ts";
 import {
   readSecretFieldValues,
   sourceControlHostSecretName,
 } from "./sourceControl/sourceControlHostSecrets.ts";
 
-import { mapSettingsSecrets, SECRET_REDACTED, type SettingsSecret } from "./settingsSecrets.ts";
+import {
+  mapSettingsSecrets,
+  mapSettingsSecretValues,
+  withoutRemovedSecretProviderReferences,
+  SECRET_REDACTED,
+  type SettingsSecret,
+} from "./settingsSecrets.ts";
 
 export {
   resolveReviewGuideModelSelection,
@@ -132,13 +153,83 @@ const normalizeServerSettings = (
     ),
   );
 
-export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
+// Every settings reload decodes fresh objects, so entries are checked by body: comparing strings
+// is far cheaper than rehashing them, and a body can change without a new revision.
+const skillDigestCache = new Map<string, { readonly skill: AgentSkill; readonly digest: string }>();
+const sameSkillBody = (a: AgentSkill, b: AgentSkill) =>
+  a === b ||
+  (a.content === b.content &&
+    (a.resources?.length ?? 0) === (b.resources?.length ?? 0) &&
+    (a.resources ?? []).every((file, index) => {
+      const other = b.resources![index]!;
+      return (
+        file.path === other.path &&
+        file.contentBase64 === other.contentBase64 &&
+        file.executable === other.executable
+      );
+    }));
+function cachedSkillDigest(skill: AgentSkill) {
+  const cached = skillDigestCache.get(skill.skillId);
+  if (cached !== undefined && sameSkillBody(cached.skill, skill)) return cached.digest;
+  const digest = agentSkillDigest(skill);
+  skillDigestCache.set(skill.skillId, { skill, digest });
+  return digest;
+}
+function skillStubsForClient(skills: ReadonlyArray<AgentSkill>) {
+  const live = new Set(skills.map((skill) => skill.skillId));
+  for (const skillId of skillDigestCache.keys())
+    if (!live.has(skillId)) skillDigestCache.delete(skillId);
+  return skills.map((skill) => toAgentSkillStub(skill, cachedSkillDigest(skill)));
+}
+
+export function redactServerSettingsForClient(
+  settings: ServerSettings,
+  client: { readonly secretReferences: boolean; readonly agentSkillBodiesOnDemand?: boolean },
+): ServerSettings {
+  const shaped = redactSecretsForClient(settings, client);
+  return client.agentSkillBodiesOnDemand === true
+    ? {
+        ...shaped,
+        agentSkills: skillStubsForClient(shaped.agentSkills),
+      }
+    : shaped;
+}
+
+/** Full skills for `server.getAgentSkills`; ids that no longer exist are left out. */
+export function selectAgentSkills(settings: ServerSettings, skillIds: ReadonlyArray<string>) {
+  const wanted = new Set(skillIds);
+  return settings.agentSkills.filter((skill) => wanted.has(skill.skillId));
+}
+
+function redactSecretsForClient(
+  settings: ServerSettings,
+  client: { readonly secretReferences: boolean },
+): ServerSettings {
   const redacted = mapSettingsSecrets(settings, (secret) =>
     secret.sensitive
       ? { value: "", redacted: secret.redacted || secret.value.length > 0 }
       : { value: secret.value, redacted: false },
   );
-  return { ...redacted, secretProviders: withoutUnknownSecretProviderConfigs(redacted) };
+  // Older clients decode secret fields as strings and fail on a reference, so they see a saved secret.
+  const shaped = client.secretReferences
+    ? redacted
+    : mapSettingsSecretValues(redacted, (value) =>
+        isSecretReference(value) ? SECRET_REDACTED : value,
+      );
+  return { ...shaped, secretProviders: withoutUnknownSecretProviderConfigs(shaped) };
+}
+
+/** A client shown a reference as a saved secret sends that marker back; it keeps the reference. */
+function withEchoedSecretReferences(current: ServerSettings, next: ServerSettings): ServerSettings {
+  const references = new Map<string, SecretReference>();
+  mapSettingsSecretValues(current, (value, secretName) => {
+    if (isSecretReference(value)) references.set(secretName, value);
+    return value;
+  });
+  if (references.size === 0) return next;
+  return mapSettingsSecretValues(next, (value, secretName) =>
+    value === SECRET_REDACTED ? (references.get(secretName) ?? value) : value,
+  );
 }
 
 // A newer kind's config may hold credentials this build cannot recognize, so it never leaves the server.
@@ -208,7 +299,7 @@ function ensureProviderInstanceMutationAllowed(
 ): Effect.Effect<void, ServerSettingsError> {
   if (
     mutation.operation === "create" &&
-    settings.providerInstances[mutation.instanceId] !== undefined
+    Object.hasOwn(settings.providerInstances, mutation.instanceId)
   ) {
     return Effect.fail(
       new ServerSettingsError({
@@ -228,6 +319,9 @@ export class ServerSettingsService extends Context.Service<
 
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
+    /** The administrator's policy as clients see it; absent when unmanaged. */
+    readonly managedPolicy?: ManagedPolicySummary | undefined;
+
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
 
     readonly updateSettings: (
@@ -240,6 +334,11 @@ export class ServerSettingsService extends Context.Service<
       patch?: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
+    /** Per-item agent and skill edits; the latest write wins. */
+    readonly mutateAgentLibrary: (
+      operations: ReadonlyArray<AgentLibraryOperation>,
+    ) => Effect.Effect<AgentLibraryMutationResult, ServerSettingsError>;
+
     readonly withSettingsSnapshot: <A, E, R>(
       use: (settings: ServerSettings) => Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | ServerSettingsError, R>;
@@ -250,11 +349,15 @@ export class ServerSettingsService extends Context.Service<
     readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
   }
 >()("t3/serverSettings/ServerSettingsService") {
-  static readonly layerTest = (overrides: DeepPartial<ServerSettings> = {}) => layerTest(overrides);
+  static readonly layerTest = (
+    overrides: DeepPartial<ServerSettings> = {},
+    managedPolicy?: ManagedPolicySummary,
+  ) => layerTest(overrides, managedPolicy);
 }
 
 const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   overrides: DeepPartial<ServerSettings> = {},
+  managedPolicy?: ManagedPolicySummary,
 ) {
   const { automaticGitFetchInterval, providerHealthRefreshInterval, ...overridesForMerge } =
     overrides;
@@ -285,20 +388,53 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     );
 
   return {
+    managedPolicy,
     start: Effect.void,
     ready: Effect.void,
     getSettings,
     updateSettings: (patch, replicateProfiles = false) =>
       updateTestSettings((currentSettings) =>
         Effect.gen(function* () {
-          yield* validateMcpGatewayProfileNames(patch, "<memory>");
           const now = DateTime.formatIso(yield* DateTime.now);
           return applyServerSettingsPatch(
             currentSettings,
-            withServerOwnedMcpGatewayProfiles(currentSettings, patch, now, replicateProfiles),
+            withServerOwnedMcpGatewayProfiles(
+              currentSettings,
+              withUniqueMcpGatewayProfileNames(currentSettings, patch),
+              now,
+              replicateProfiles,
+            ),
           );
         }),
       ),
+    mutateAgentLibrary: Effect.fn("serverSettings.makeTest.mutateAgentLibrary")(function* (
+      operations: ReadonlyArray<AgentLibraryOperation>,
+    ) {
+      let touched: AgentLibraryTouched = emptyTouched;
+      const settings = yield* writeSemaphore.withPermits(1)(
+        Ref.get(currentSettingsRef).pipe(
+          Effect.flatMap((current) =>
+            DateTime.now.pipe(
+              Effect.flatMap((now) =>
+                applyAgentLibraryOperations(
+                  current,
+                  operations,
+                  DateTime.formatIso(now),
+                  "<memory>",
+                ),
+              ),
+              Effect.map((applied) => {
+                touched = applied.touched;
+                return applyServerSettingsPatch(current, applied.patch);
+              }),
+            ),
+          ),
+          Effect.flatMap(normalizeServerSettings),
+          Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+        ),
+      );
+      return agentLibraryMutationResult(settings, touched);
+    }),
     updateProviderInstance: (mutation, patch = {}) =>
       updateTestSettings((currentSettings) =>
         Effect.gen(function* () {
@@ -314,8 +450,11 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
   } satisfies ServerSettingsService["Service"];
 });
 
-export const layerTest = (overrides: DeepPartial<ServerSettings> = {}) =>
-  Layer.effect(ServerSettingsService, makeTest(overrides));
+/** Test settings; `managedPolicy` only tells consumers a policy applies, it does not lock values. */
+export const layerTest = (
+  overrides: DeepPartial<ServerSettings> = {},
+  managedPolicy?: ManagedPolicySummary,
+) => Layer.effect(ServerSettingsService, makeTest(overrides, managedPolicy));
 
 // Accept retired token delivery only on load so one old value cannot reset all settings.
 const PersistedResponseStreamingMode = Schema.Union([
@@ -330,24 +469,24 @@ const PersistedResponseStreamingMode = Schema.Union([
     }),
   ),
 );
-const ServerSettingsJson = fromLenientJson(
-  Schema.Struct({
-    ...ServerSettings.fields,
-    responseStreamingMode: PersistedResponseStreamingMode.pipe(
-      Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
+const PersistedServerSettings = Schema.Struct({
+  ...ServerSettings.fields,
+  responseStreamingMode: PersistedResponseStreamingMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("paragraph" as const)),
+  ),
+  projectSettingsOverrides: Schema.Record(
+    ProjectId,
+    keepUnknownOverrideKeys(
+      Schema.Struct({
+        ...ProjectSettingsOverrides.fields,
+        responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
+      }),
     ),
-    projectSettingsOverrides: Schema.Record(
-      ProjectId,
-      keepUnknownOverrideKeys(
-        Schema.Struct({
-          ...ProjectSettingsOverrides.fields,
-          responseStreamingMode: Schema.optionalKey(PersistedResponseStreamingMode),
-        }),
-      ),
-    ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  }),
-);
-const decodeServerSettingsJsonExit = Schema.decodeUnknownExit(ServerSettingsJson);
+  ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+});
+// Parse first and decode second, so a managed policy can fill its defaults in between.
+const decodeSettingsFileJsonExit = Schema.decodeUnknownExit(fromLenientJson(Schema.Unknown));
+const decodePersistedServerSettingsExit = Schema.decodeUnknownExit(PersistedServerSettings);
 const LegacyProviderSettingsJson = fromLenientJson(
   Schema.Struct({
     providers: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
@@ -472,26 +611,72 @@ function selectionSupportsTextGeneration(
   return settings.providerInstances[selection.instanceId]?.driver !== ACP_REGISTRY_DRIVER;
 }
 
-function validateMcpGatewayProfileNames(
+/** A new or renamed agent whose name clashes, ignoring case, gets a numbered suffix instead of failing. */
+function withUniqueMcpGatewayProfileNames(
+  current: ServerSettings,
   patch: ServerSettingsPatch,
-  settingsPath: string,
-): Effect.Effect<void, ServerSettingsError> {
-  if (patch.mcpGatewayProfiles === undefined) return Effect.void;
-  const names = new Set<string>();
-  for (const profile of patch.mcpGatewayProfiles) {
-    if (names.has(profile.name)) {
-      return Effect.fail(
-        new ServerSettingsError({
-          settingsPath,
-          operation: "normalize",
-          cause: new Error(`Duplicate MCP gateway profile name: ${profile.name}`),
-        }),
-      );
-    }
-    names.add(profile.name);
-  }
-  return Effect.void;
+): ServerSettingsPatch {
+  if (patch.mcpGatewayProfiles === undefined) return patch;
+  const kept = (profile: McpGatewayProfile) =>
+    current.mcpGatewayProfiles.some(
+      (stored) => stored.profileId === profile.profileId && stored.name === profile.name,
+    );
+  // Stored names keep theirs, so existing clashes stay editable until renamed.
+  const taken = new Set(patch.mcpGatewayProfiles.filter(kept).map((p) => agentNameKey(p.name)));
+  return {
+    ...patch,
+    mcpGatewayProfiles: patch.mcpGatewayProfiles.map((profile) =>
+      kept(profile) ? profile : { ...profile, name: claimAgentName(profile.name, taken) },
+    ),
+  };
 }
+
+/** Later than every stored library timestamp, so a write always wins its own merge. */
+function agentLibraryMutationTime(current: ServerSettings, now: string) {
+  return DateTime.formatIso(
+    DateTime.makeUnsafe(
+      Math.max(
+        Date.parse(now),
+        ...current.mcpGatewayProfiles.map((profile) => (Date.parse(profile.updatedAt) || 0) + 1),
+        ...current.agentSkills.map((skill) => (Date.parse(skill.updatedAt) || 0) + 1),
+        ...Object.values(current.agentSkillDeletedAt).map((at) => (Date.parse(at) || 0) + 1),
+        ...Object.values(current.mcpGatewayProfileDeletedAt).map((at) => (Date.parse(at) || 0) + 1),
+      ),
+    ),
+  );
+}
+
+/** A stub only names a stored body; one this server does not hold is unresolvable. */
+function resolveSkillCandidate(
+  candidate: AgentSkill,
+  existing: AgentSkill | undefined,
+): AgentSkill | undefined {
+  if (!isAgentSkillStub(candidate)) return withoutAgentSkillTransportFields(candidate);
+  if (existing === undefined || agentSkillDigestOf(existing) !== candidate.digest) return undefined;
+  const { resources: _resources, ...metadata } = withoutAgentSkillTransportFields(candidate);
+  return {
+    ...metadata,
+    content: existing.content,
+    ...(existing.resources === undefined ? {} : { resources: existing.resources }),
+  };
+}
+
+const withoutServerOwnedFields = <
+  T extends { revision: number; createdAt: string; updatedAt: string },
+>({
+  revision: _revision,
+  createdAt: _createdAt,
+  updatedAt: _updatedAt,
+  ...content
+}: T) => content;
+
+// Older builds render only the legacy literal, so every writer of an iconId also gets its nearest one.
+const withLegacyAgentIcon = <T extends Pick<McpGatewayProfile, "icon" | "iconId">>(
+  profile: T,
+): T =>
+  profile.iconId !== undefined && profile.icon === undefined
+    ? { ...profile, icon: legacyAgentIcon(profile.iconId) }
+    : profile;
 
 function withServerOwnedMcpGatewayProfiles(
   current: ServerSettings,
@@ -506,30 +691,25 @@ function withServerOwnedMcpGatewayProfiles(
     patch.agentSkillDeletedAt === undefined
   )
     return patch;
+  const storedSkill = (skillId: string) =>
+    current.agentSkills.find((skill) => skill.skillId === skillId);
   if (replicateProfiles)
     return {
       ...patch,
       ...mergeAgentLibraries([
         current,
         {
-          agentSkills: patch.agentSkills ?? [],
+          agentSkills: (patch.agentSkills ?? []).flatMap((candidate) => {
+            const resolved = resolveSkillCandidate(candidate, storedSkill(candidate.skillId));
+            return resolved === undefined ? [] : [resolved];
+          }),
           agentSkillDeletedAt: patch.agentSkillDeletedAt ?? {},
           mcpGatewayProfiles: patch.mcpGatewayProfiles ?? [],
           mcpGatewayProfileDeletedAt: patch.mcpGatewayProfileDeletedAt ?? {},
         },
       ]),
     };
-  const mutationTime = DateTime.formatIso(
-    DateTime.makeUnsafe(
-      Math.max(
-        Date.parse(now),
-        ...current.mcpGatewayProfiles.map((profile) => (Date.parse(profile.updatedAt) || 0) + 1),
-        ...current.agentSkills.map((skill) => (Date.parse(skill.updatedAt) || 0) + 1),
-        ...Object.values(current.agentSkillDeletedAt).map((at) => (Date.parse(at) || 0) + 1),
-        ...Object.values(current.mcpGatewayProfileDeletedAt).map((at) => (Date.parse(at) || 0) + 1),
-      ),
-    ),
-  );
+  const mutationTime = agentLibraryMutationTime(current, now);
   const skillDeleted = { ...current.agentSkillDeletedAt };
   if (patch.agentSkills !== undefined) {
     for (const skill of current.agentSkills) {
@@ -537,30 +717,33 @@ function withServerOwnedMcpGatewayProfiles(
         skillDeleted[skill.skillId] = mutationTime;
     }
   }
-  const skills = patch.agentSkills?.map((candidate) => {
-    const existing = current.agentSkills.find((skill) => skill.skillId === candidate.skillId);
-    const {
-      revision: _revision,
-      createdAt: _created,
-      updatedAt: _updated,
-      ...rawContent
-    } = candidate;
+  const skills = patch.agentSkills?.flatMap((raw): AgentSkill[] => {
+    const existing = storedSkill(raw.skillId);
+    // A client that saw an older revision echoes it back; it is not an edit.
+    if (existing && raw.revision < existing.revision) return [existing];
+    const candidate = isAgentSkillStub(raw)
+      ? existing && {
+          ...withoutAgentSkillTransportFields(raw),
+          content: existing.content,
+        }
+      : withoutAgentSkillTransportFields(raw);
+    if (candidate === undefined) return [];
+    const rawContent = withoutServerOwnedFields(candidate);
     const content = {
       ...rawContent,
       ...(candidate.resources === undefined && existing?.resources !== undefined
         ? { resources: existing.resources }
         : {}),
     };
-    if (existing) {
-      const { revision: _r, createdAt: _c, updatedAt: _u, ...previous } = existing;
-      if (Equal.equals(content, previous)) return existing;
-    }
-    return {
-      ...content,
-      revision: (existing?.revision ?? 0) + 1,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: mutationTime,
-    };
+    if (existing && Equal.equals(content, withoutServerOwnedFields(existing))) return [existing];
+    return [
+      {
+        ...content,
+        revision: (existing?.revision ?? 0) + 1,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: mutationTime,
+      },
+    ];
   });
   const deleted = { ...current.mcpGatewayProfileDeletedAt };
   for (const profile of current.mcpGatewayProfiles) {
@@ -575,23 +758,22 @@ function withServerOwnedMcpGatewayProfiles(
       const existing = current.mcpGatewayProfiles.find(
         (profile) => profile.profileId === candidate.profileId,
       );
-      const {
-        revision: _candidateRevision,
-        createdAt: _candidateCreatedAt,
-        updatedAt: _candidateUpdatedAt,
-        ...candidateContent
-      } = candidate;
+      // Clients that predate icons and tags strip them; clearing them takes a per-item edit.
+      const content = withLegacyAgentIcon({
+        ...withoutServerOwnedFields(candidate),
+        ...(candidate.iconId === undefined && existing?.iconId !== undefined
+          ? { iconId: existing.iconId }
+          : {}),
+        ...(candidate.tags === undefined && existing?.tags !== undefined
+          ? { tags: existing.tags }
+          : {}),
+      });
       if (existing !== undefined) {
-        const {
-          revision: _existingRevision,
-          createdAt: _existingCreatedAt,
-          updatedAt: _existingUpdatedAt,
-          ...existingContent
-        } = existing;
-        if (Equal.equals(candidateContent, existingContent)) return existing;
+        if (candidate.revision < existing.revision) return existing;
+        if (Equal.equals(content, withoutServerOwnedFields(existing))) return existing;
       }
       return {
-        ...candidateContent,
+        ...content,
         revision: (existing?.revision ?? 0) + 1,
         createdAt: existing?.createdAt ?? now,
         updatedAt: mutationTime,
@@ -606,17 +788,173 @@ function withServerOwnedMcpGatewayProfiles(
   };
 }
 
-function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  return isModelSelectionProviderEnabled(settings, settings.textGenerationModelSelection) &&
-    selectionSupportsTextGeneration(settings, settings.textGenerationModelSelection)
-    ? settings
-    : fallbackTextGenerationProvider(settings);
+interface AgentLibraryTouched {
+  readonly profileIds: ReadonlySet<string>;
+  readonly skillIds: ReadonlySet<string>;
+}
+const emptyTouched: AgentLibraryTouched = { profileIds: new Set(), skillIds: new Set() };
+
+/**
+ * Applies every operation or none, last write wins: an upsert overwrites or recreates its item
+ * and a delete always removes it. Deleting a skill also unassigns it from agents.
+ */
+function applyAgentLibraryOperations(
+  current: ServerSettings,
+  operations: ReadonlyArray<AgentLibraryOperation>,
+  now: string,
+  settingsPath: string,
+): Effect.Effect<
+  { readonly patch: ServerSettingsPatch; readonly touched: AgentLibraryTouched },
+  ServerSettingsError
+> {
+  const mutationTime = agentLibraryMutationTime(current, now);
+  const profiles = new Map(
+    current.mcpGatewayProfiles.map((profile) => [profile.profileId, profile]),
+  );
+  const skills = new Map(current.agentSkills.map((skill) => [skill.skillId, skill]));
+  const profileDeletedAt = { ...current.mcpGatewayProfileDeletedAt };
+  const skillDeletedAt = { ...current.agentSkillDeletedAt };
+  const profileIds = new Set<string>();
+  const skillIds = new Set<string>();
+  // Never below the writer's copy or the stored item; convergence itself follows updatedAt.
+  const bump = <T extends { revision: number; createdAt: string; updatedAt: string }>(
+    existing: T | undefined,
+    incomingRevision: number,
+    content: Omit<T, "revision" | "createdAt" | "updatedAt">,
+  ) =>
+    ({
+      ...content,
+      revision: Math.max(existing?.revision ?? 0, incomingRevision) + 1,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: mutationTime,
+    }) as T;
+  for (const operation of operations) {
+    switch (operation.type) {
+      case "skill.upsert": {
+        const id = operation.skill.skillId;
+        const existing = skills.get(id);
+        const raw = withoutAgentSkillTransportFields(operation.skill);
+        const stub = isAgentSkillStub(operation.skill);
+        if (stub && existing === undefined)
+          return Effect.fail(
+            new ServerSettingsError({
+              settingsPath,
+              operation: "normalize",
+              cause: new Error(
+                `Skill "${raw.name}" was deleted on this machine and its instructions aren't loaded. Open the skill, then save again.`,
+              ),
+            }),
+          );
+        const { resources: rawResources, ...rawContent } = withoutServerOwnedFields(raw);
+        const resources = stub ? existing?.resources : (rawResources ?? existing?.resources);
+        const content = {
+          ...rawContent,
+          content: stub ? existing!.content : raw.content,
+          ...(resources === undefined ? {} : { resources }),
+        };
+        skillIds.add(id);
+        if (existing && Equal.equals(content, withoutServerOwnedFields(existing))) break;
+        skills.set(id, bump<AgentSkill>(existing, operation.skill.revision, content));
+        break;
+      }
+      case "skill.delete": {
+        skills.delete(operation.skillId);
+        skillDeletedAt[operation.skillId] = mutationTime;
+        skillIds.add(operation.skillId);
+        for (const profile of profiles.values()) {
+          if (!profile.skillIds?.includes(operation.skillId)) continue;
+          profiles.set(
+            profile.profileId,
+            bump<McpGatewayProfile>(profile, 0, {
+              ...withoutServerOwnedFields(profile),
+              skillIds: profile.skillIds.filter((skillId) => skillId !== operation.skillId),
+            }),
+          );
+          profileIds.add(profile.profileId);
+        }
+        break;
+      }
+      case "profile.upsert": {
+        const id = operation.profile.profileId;
+        const existing = profiles.get(id);
+        const { name, ...rest } = withLegacyAgentIcon(withoutServerOwnedFields(operation.profile));
+        // A new or renamed agent whose name clashes ignoring case takes a suffix, as sync does.
+        const taken = new Set(
+          [...profiles.values()]
+            .filter((profile) => profile.profileId !== id)
+            .map((profile) => agentNameKey(profile.name)),
+        );
+        const content = {
+          ...rest,
+          name: existing?.name === name ? name : claimAgentName(name, taken),
+        };
+        profileIds.add(id);
+        if (existing && Equal.equals(content, withoutServerOwnedFields(existing))) break;
+        profiles.set(id, bump<McpGatewayProfile>(existing, operation.profile.revision, content));
+        break;
+      }
+      case "profile.delete": {
+        profiles.delete(operation.profileId);
+        profileDeletedAt[operation.profileId] = mutationTime;
+        profileIds.add(operation.profileId);
+        break;
+      }
+    }
+  }
+  return Effect.succeed({
+    patch: {
+      mcpGatewayProfiles: [...profiles.values()],
+      mcpGatewayProfileDeletedAt: profileDeletedAt,
+      agentSkills: [...skills.values()],
+      agentSkillDeletedAt: skillDeletedAt,
+    },
+    touched: { profileIds, skillIds },
+  });
 }
 
-function fallbackTextGenerationProvider(settings: ServerSettings): ServerSettings {
+function agentLibraryMutationResult(
+  settings: ServerSettings,
+  touched: AgentLibraryTouched,
+): AgentLibraryMutationResult {
+  const pick = (record: Readonly<Record<string, string>>, ids: ReadonlySet<string>) =>
+    Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)));
+  return {
+    mcpGatewayProfiles: settings.mcpGatewayProfiles.filter((profile) =>
+      touched.profileIds.has(profile.profileId),
+    ),
+    agentSkills: settings.agentSkills.filter((skill) => touched.skillIds.has(skill.skillId)),
+    mcpGatewayProfileDeletedAt: pick(settings.mcpGatewayProfileDeletedAt, touched.profileIds),
+    agentSkillDeletedAt: pick(settings.agentSkillDeletedAt, touched.skillIds),
+  };
+}
+
+type DriverAllowed = (driver: ProviderDriverKind) => boolean;
+const anyDriver: DriverAllowed = () => true;
+
+function resolveTextGenerationProvider(
+  settings: ServerSettings,
+  isDriverAllowed: DriverAllowed = anyDriver,
+): ServerSettings {
+  const selection = settings.textGenerationModelSelection;
+  return isModelSelectionProviderEnabled(settings, selection) &&
+    selectionSupportsTextGeneration(settings, selection) &&
+    isDriverAllowed(
+      settings.providerInstances[selection.instanceId]?.driver ??
+        ProviderDriverKind.make(selection.instanceId),
+    )
+    ? settings
+    : fallbackTextGenerationProvider(settings, isDriverAllowed);
+}
+
+function fallbackTextGenerationProvider(
+  settings: ServerSettings,
+  isDriverAllowed: DriverAllowed,
+): ServerSettings {
   const fallback = fallbackTextGenerationModelSelection(
     settings.providerInstances,
     (instanceId, driver) =>
+      // A default instance id can be configured with another driver.
+      isDriverAllowed(settings.providerInstances[instanceId]?.driver ?? driver) &&
       resolveProviderInstanceEnabled(
         settings.providerInstances[instanceId] ?? { driver, config: {} },
       ),
@@ -634,6 +972,10 @@ const ATOMIC_SETTINGS_KEYS: ReadonlySet<string> = new Set([
   "textGenerationModelSelection",
   "fallbackModelSelection",
   "pullRequestMergeMethod",
+  // Empty by default, these hold one whole value, which a managed policy can default.
+  ...Object.entries(DEFAULT_SERVER_SETTINGS).flatMap(([key, value]) =>
+    value === null ? [key] : [],
+  ),
 ]);
 
 function stripDefaultServerSettings(current: unknown, defaults: unknown): unknown | undefined {
@@ -755,6 +1097,17 @@ const make = Effect.gen(function* () {
   const pathService = yield* Path.Path;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
+  const {
+    settings: managed,
+    providers: managedProviders,
+    summary: managedPolicy,
+  } = yield* ManagedPolicy.ManagedPolicy;
+  // Locks are laid over every settings value that leaves this service, never persisted.
+  const toEffective = (settings: ServerSettings) =>
+    resolveTextGenerationProvider(
+      managedProviders.applyLimits(managed.applyLocks(settings)),
+      managedProviders.isDriverAllowed,
+    );
   const writeSemaphore = yield* Semaphore.make(1);
   const cacheKey = "settings" as const;
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
@@ -788,10 +1141,22 @@ const make = Effect.gen(function* () {
     ),
   );
 
+  // The file before this write, parsed; only read when policy defaults need it.
+  const readStoredSettings = Effect.gen(function* () {
+    if (!(yield* readConfigExists)) return undefined;
+    const parsed = decodeSettingsFileJsonExit(yield* readRawConfig);
+    return Exit.isSuccess(parsed) ? parsed.value : undefined;
+  });
+
   const writeSettingsAtomically = Effect.fnUntraced(
     function* (settings: ServerSettings) {
+      const stripped = stripDefaultServerSettings(settings, managed.defaults) ?? {};
       const sparseSettingsJson = yield* encodeServerSettingsJson(
-        stripDefaultServerSettings(settings, DEFAULT_SERVER_SETTINGS) ?? {},
+        managed.keepStored === undefined
+          ? stripped
+          : managed.keepStored(stripped, settings, yield* readStoredSettings, (key) =>
+              ATOMIC_SETTINGS_KEYS.has(key),
+            ),
       );
 
       return yield* writeFileStringAtomically({
@@ -843,14 +1208,17 @@ const make = Effect.gen(function* () {
   );
 
   const loadSettingsFromDisk = Effect.gen(function* () {
-    let settings = DEFAULT_SERVER_SETTINGS;
+    let settings = managed.defaults;
     let legacyProviders: Readonly<Record<string, unknown>> | undefined;
     let legacySourceControl: Parameters<typeof migrateLegacySourceControlSettings>[1] = {};
     let parseFailure = Option.none<unknown>();
 
     if (yield* readConfigExists) {
       const raw = yield* readRawConfig;
-      const decoded = decodeServerSettingsJsonExit(raw);
+      const parsed = decodeSettingsFileJsonExit(raw);
+      const decoded = Exit.isFailure(parsed)
+        ? parsed
+        : decodePersistedServerSettingsExit(managed.withDefaults(parsed.value));
       const legacySettings = decodeLegacyProviderSettingsJsonExit(raw);
       if (legacySettings._tag === "Success") {
         legacyProviders = legacySettings.value.providers;
@@ -862,7 +1230,7 @@ const make = Effect.gen(function* () {
       if (decoded._tag === "Failure" || legacySettings._tag === "Failure") {
         const failure = decoded._tag === "Failure" ? decoded : legacySettings;
         // The file may hold an opt-out we can no longer read; never resume threads on a guess.
-        settings = { ...DEFAULT_SERVER_SETTINGS, continueThreadsAfterServerUpdate: false };
+        settings = { ...managed.defaults, continueThreadsAfterServerUpdate: false };
         if (failure._tag === "Failure") {
           parseFailure = Option.some(Cause.squash(failure.cause));
           yield* Effect.logWarning("failed to parse settings.json, using defaults", {
@@ -1045,7 +1413,7 @@ const make = Effect.gen(function* () {
       if (materialized?.source === source) return Effect.succeed(materialized.value);
       const generation = secretWriteGeneration;
       return materializeSettingsSecrets(source).pipe(
-        Effect.map(resolveTextGenerationProvider),
+        Effect.map(toEffective),
         Effect.tap((value) =>
           Effect.sync(() => {
             if (generation === secretWriteGeneration) materialized = { source, value };
@@ -1069,7 +1437,7 @@ const make = Effect.gen(function* () {
           ),
         ),
       ),
-      Stream.map(resolveTextGenerationProvider),
+      Stream.map(toEffective),
     );
 
   type SecretChange = {
@@ -1083,14 +1451,23 @@ const make = Effect.gen(function* () {
 
   const persistSettingsSecrets = (current: ServerSettings, next: ServerSettings) =>
     Effect.sync(() => {
+      // Only sensitive rows own a stored secret; a plain duplicate must not hide one from cleanup.
       const previous = new Map<string, SettingsSecret>();
+      const inlineValues = new Map<string, string>();
       mapSettingsSecrets(current, (secret) => {
+        if (!secret.sensitive) return secret;
         previous.set(secret.secretName, secret);
+        if (!secret.redacted && secret.value.length > 0) {
+          inlineValues.set(secret.secretName, secret.value);
+        }
         return secret;
       });
       const changes: SecretChange[] = [];
       const nextSecretNames = new Set<string>();
-      const settings = mapSettingsSecrets(next, (secret) => {
+      const keptSecretNames = new Set<string>();
+      const writtenSecretNames = new Set<string>();
+      const inlineWrites = new Map<string, SecretChange>();
+      const settings = mapSettingsSecrets(withEchoedSecretReferences(current, next), (secret) => {
         const metadata = {
           secretName: secret.secretName,
           ...(secret.providerInstanceId !== undefined
@@ -1104,24 +1481,34 @@ const make = Effect.gen(function* () {
           changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
           return { value: secret.value, redacted: false };
         }
-        const old = previous.get(secret.secretName);
-        const inlineValue =
-          old?.sensitive && !old.redacted && old.value.length > 0 ? old.value : undefined;
-        const value = secret.redacted ? inlineValue : secret.value;
-        if (value === undefined) {
+        if (secret.redacted) {
+          keptSecretNames.add(secret.secretName);
           nextSecretNames.add(secret.secretName);
+          const inlineValue = inlineValues.get(secret.secretName);
+          if (inlineValue !== undefined) {
+            inlineWrites.set(secret.secretName, {
+              ...metadata,
+              kind: "write",
+              value: textEncoder.encode(inlineValue),
+            });
+          }
           return { value: "", redacted: true };
         }
-        if (value.length === 0) {
+        if (secret.value.length === 0) {
           changes.push({ ...metadata, kind: "remove", operation: "remove-secret" });
           return { value: "", redacted: false };
         }
         nextSecretNames.add(secret.secretName);
-        changes.push({ ...metadata, kind: "write", value: textEncoder.encode(value) });
+        writtenSecretNames.add(secret.secretName);
+        changes.push({ ...metadata, kind: "write", value: textEncoder.encode(secret.value) });
         return { value: "", redacted: true };
       });
+      // A legacy inline value only moves to the store when no row in this save replaces it.
+      for (const [secretName, change] of inlineWrites) {
+        if (!writtenSecretNames.has(secretName)) changes.push(change);
+      }
       for (const secret of previous.values()) {
-        if (!secret.sensitive || nextSecretNames.has(secret.secretName)) continue;
+        if (nextSecretNames.has(secret.secretName)) continue;
         if (changes.some((change) => change.secretName === secret.secretName)) continue;
         changes.push({
           kind: "remove",
@@ -1135,7 +1522,13 @@ const make = Effect.gen(function* () {
             : {}),
         });
       }
-      return { settings, changes };
+      return {
+        settings,
+        // A redacted row still claims its stored secret, so a duplicate row must not remove it.
+        changes: changes.filter(
+          (change) => change.kind === "write" || !keptSecretNames.has(change.secretName),
+        ),
+      };
     });
 
   const rollbackSettingsSecretWrites = (
@@ -1214,9 +1607,10 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const updateAndPersistSettings = (
-    update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError>,
-  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+  const updateAndPersistSettings = <E = never>(
+    patch: ServerSettingsPatch,
+    update: (current: ServerSettings) => Effect.Effect<ServerSettings, ServerSettingsError | E>,
+  ): Effect.Effect<ServerSettings, ServerSettingsError | E> =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const { settings: current, parseFailure } = yield* reloadSettings;
@@ -1227,8 +1621,42 @@ const make = Effect.gen(function* () {
             cause: parseFailure.value,
           });
         }
-        const updated = yield* update(current);
-        const persisted = yield* persistSettingsSecrets(current, updated);
+        // An older client echoes a reference as the redacted marker; restore it before vetting so
+        // a removed provider's reference is cleared below rather than restored by persistence.
+        const updated = withEchoedSecretReferences(current, yield* update(current));
+        // Vet before secrets: a variable the policy hides from clients is not one they removed.
+        const vetted = managed.vetWrite(current, yield* normalizeServerSettings(updated), patch);
+        if (vetted._tag === "Locked") {
+          return yield* new ServerSettingsError({
+            settingsPath,
+            operation: "write-managed-setting",
+            managedSetting: vetted.path,
+            managedBy: managedPolicy?.organization,
+          });
+        }
+        const vettedProviders = managedProviders.vetWrite(current, vetted.settings);
+        if (vettedProviders._tag === "Locked") {
+          return yield* new ServerSettingsError({
+            settingsPath,
+            operation: "write-managed-setting",
+            managedSetting: vettedProviders.path,
+            managedBy: managedPolicy?.organization,
+          });
+        }
+        if (vettedProviders._tag === "Disallowed") {
+          return yield* new ServerSettingsError({
+            settingsPath,
+            operation: "use-disallowed-provider",
+            providerInstanceId: vettedProviders.instanceId,
+            providerLabel: vettedProviders.label,
+            managedBy: managedPolicy?.organization,
+          });
+        }
+        // After vetting, which can keep stored variables a policy hides from clients.
+        const persisted = yield* persistSettingsSecrets(
+          current,
+          withoutRemovedSecretProviderReferences(current, vettedProviders.settings),
+        );
         const next = yield* normalizeServerSettings(persisted.settings);
         const materializedNext = yield* Effect.uninterruptibleMask(() =>
           Effect.gen(function* () {
@@ -1248,7 +1676,7 @@ const make = Effect.gen(function* () {
           }).pipe(Effect.ensuring(invalidateMaterialized)),
         );
         yield* Cache.set(settingsCache, cacheKey, { settings: next, parseFailure: Option.none() });
-        const resolved = resolveTextGenerationProvider(materializedNext);
+        const resolved = toEffective(materializedNext);
         materialized = { source: next, value: resolved };
         yield* emitChange(next);
         return resolved;
@@ -1359,23 +1787,47 @@ const make = Effect.gen(function* () {
   });
 
   return {
+    managedPolicy,
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getMaterializedSettings,
     updateSettings: (patch, replicateProfiles = false) =>
-      updateAndPersistSettings((current) =>
+      updateAndPersistSettings(patch, (current) =>
         Effect.gen(function* () {
           yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
-          yield* validateMcpGatewayProfileNames(patch, settingsPath);
           const now = DateTime.formatIso(yield* DateTime.now);
           return applyServerSettingsPatch(
             current,
-            withServerOwnedMcpGatewayProfiles(current, patch, now, replicateProfiles),
+            withServerOwnedMcpGatewayProfiles(
+              current,
+              withUniqueMcpGatewayProfileNames(current, patch),
+              now,
+              replicateProfiles,
+            ),
           );
         }),
       ),
+    mutateAgentLibrary: Effect.fn("serverSettings.mutateAgentLibrary")(function* (
+      operations: ReadonlyArray<AgentLibraryOperation>,
+    ) {
+      let touched: AgentLibraryTouched = emptyTouched;
+      const settings = yield* updateAndPersistSettings({}, (current) =>
+        Effect.gen(function* () {
+          const now = DateTime.formatIso(yield* DateTime.now);
+          const applied = yield* applyAgentLibraryOperations(
+            current,
+            operations,
+            now,
+            settingsPath,
+          );
+          touched = applied.touched;
+          return applyServerSettingsPatch(current, applied.patch);
+        }),
+      );
+      return agentLibraryMutationResult(settings, touched);
+    }),
     updateProviderInstance: (mutation, patch = {}) =>
-      updateAndPersistSettings((current) =>
+      updateAndPersistSettings(patch, (current) =>
         Effect.gen(function* () {
           yield* ensureSecretProviderWritesAllowed(patch, settingsPath);
           yield* ensureProviderInstanceMutationAllowed(current, mutation, settingsPath);

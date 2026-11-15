@@ -1,7 +1,8 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -12,11 +13,6 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import {
-  PUBLISH_AGENT_ACTIVITY_SECRET,
-  RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
-  RELAY_URL_SECRET,
-} from "../cloud/config.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "./ServerEnvironment.ts";
 
@@ -75,7 +71,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
   } satisfies ServerConfig.ServerConfig["Service"];
 });
 
-it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("ServerEnvironmentLive", (it) => {
   it.effect("publishes proven install ownership only for manually updated servers", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -125,13 +121,81 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     }),
   );
   it.effect.each([
+    { desktopAppUpdate: false, advertised: undefined },
+    { desktopAppUpdate: true, advertised: true },
+  ])(
+    "advertises desktop app updates only when the desktop can install them ($desktopAppUpdate)",
+    ({ desktopAppUpdate, advertised }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const config = yield* makeServerConfig(baseDir);
+        yield* fs.makeDirectory(config.stateDir, { recursive: true });
+        const descriptor = yield* Effect.gen(function* () {
+          const environment = yield* ServerEnvironment.ServerEnvironment;
+          return yield* environment.getDescriptor;
+        }).pipe(
+          Effect.provide(
+            ServerEnvironment.layer.pipe(
+              Layer.provide(layerEmptySecretStore),
+              Layer.provide(
+                ServerConfig.layer({
+                  ...config,
+                  mode: "desktop",
+                  desktopTelemetryControlFd: 5,
+                  desktopAppUpdate,
+                }),
+              ),
+            ),
+          ),
+          Effect.provideService(HostProcess.Environment, {}),
+        );
+        const capabilities = descriptor.capabilities;
+        expect({
+          serverSelfUpdate: capabilities.serverSelfUpdate,
+          desktopAppUpdate: capabilities.desktopAppUpdate,
+          desktopAppChannelSwitch: capabilities.desktopAppChannelSwitch,
+          serverSelfUpdateProgress: capabilities.serverSelfUpdateProgress,
+        }).toEqual({
+          serverSelfUpdate: "desktop-managed",
+          desktopAppUpdate: advertised,
+          desktopAppChannelSwitch: advertised,
+          serverSelfUpdateProgress: advertised,
+        });
+      }),
+  );
+  it.effect.each([
+    { platform: "darwin", architecture: "arm64", supported: true },
+    { platform: "linux", architecture: "x64", supported: true },
+    { platform: "linux", architecture: "x64", libc: "musl", supported: false },
+    { platform: "win32", architecture: "arm64", supported: false },
+    { platform: "linux", architecture: "arm", supported: false },
+  ] as const)("advertises voice transcription on $platform-$architecture: $supported", (host) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-speech-test-",
+      });
+      const descriptor = yield* Effect.gen(function* () {
+        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+        return yield* serverEnvironment.getDescriptor;
+      }).pipe(
+        Effect.provide(layerServerEnvironment(baseDir)),
+        Effect.provideService(HostProcess.Platform, host.platform),
+        Effect.provideService(HostProcess.Architecture, host.architecture),
+        Effect.provideService(HostProcess.LinuxLibc, "libc" in host ? host.libc : "gnu"),
+      );
+      expect(descriptor.capabilities.voiceTranscription).toBe(host.supported);
+    }),
+  );
+  it.effect.each([
     { name: "missing", content: undefined },
     { name: "empty", content: "" },
     { name: "whitespace-only", content: " \t\n" },
   ])("concurrent initializers recover a $name environment id file", ({ content }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
-      const crypto = yield* Crypto.Crypto;
+      const random = yield* SecureRandom.SecureRandom;
       const baseDir = yield* fileSystem.makeTempDirectoryScoped({
         prefix: "t3-server-environment-concurrent-test-",
       });
@@ -171,17 +235,17 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
               ),
             ),
         }),
-        Effect.provideService(Crypto.Crypto, {
-          ...crypto,
-          randomUUIDv4: (() =>
+        Effect.provideService(SecureRandom.SecureRandom, {
+          ...random,
+          uuidV4: (() =>
             Effect.gen(function* () {
-              const id = yield* crypto.randomUUIDv4();
+              const id = yield* random.uuidV4();
               if (--remaining === 0) {
                 yield* Deferred.succeed(bothGenerated, undefined);
               }
               yield* Deferred.await(bothGenerated);
               return id;
-            })) as Crypto.Crypto["randomUUIDv4"],
+            })) as SecureRandom.SecureRandom["Service"]["uuidV4"],
         }),
       );
 
@@ -226,46 +290,6 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.serverResolvedCommandContext).toBe(true);
       expect(second.capabilities.projectProviderInstanceOverrides).toBe(true);
-      expect(second.capabilities.agentActivityPublishing).toBe(false);
-    }),
-  );
-
-  it.effect("reports agent activity publishing from the current secret state", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-server-environment-publish-test-",
-      });
-      const layerTest = Layer.mergeAll(
-        ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer)),
-        ServerSecretStore.layer,
-      ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
-
-      yield* Effect.gen(function* () {
-        const secrets = yield* ServerSecretStore.ServerSecretStore;
-        const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-        const encode = (value: string) => new TextEncoder().encode(value);
-
-        const unlinked = yield* serverEnvironment.getDescriptor;
-        expect(unlinked.capabilities.agentActivityPublishing).toBe(false);
-
-        yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("true"));
-        const withoutLink = yield* serverEnvironment.getDescriptor;
-        expect(withoutLink.capabilities.agentActivityPublishing).toBe(false);
-
-        yield* secrets.set(RELAY_URL_SECRET, encode(""));
-        yield* secrets.set(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, encode("credential"));
-        const emptyUrl = yield* serverEnvironment.getDescriptor;
-        expect(emptyUrl.capabilities.agentActivityPublishing).toBe(false);
-
-        yield* secrets.set(RELAY_URL_SECRET, encode("https://relay.example"));
-        const linked = yield* serverEnvironment.getDescriptor;
-        expect(linked.capabilities.agentActivityPublishing).toBe(true);
-
-        yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("false"));
-        const disabled = yield* serverEnvironment.getDescriptor;
-        expect(disabled.capabilities.agentActivityPublishing).toBe(false);
-      }).pipe(Effect.provide(layerTest));
     }),
   );
 });

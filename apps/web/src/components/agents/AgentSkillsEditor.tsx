@@ -1,7 +1,24 @@
-import { useState } from "react";
-import type { AgentSkill } from "@t3tools/contracts";
-import { Dialog, DialogPopup, DialogTitle, DialogDescription } from "../ui/dialog";
+import { useId, useState } from "react";
+import { isAgentSkillStub, type AgentSkill } from "@t3tools/contracts";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from "../ui/dialog";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Label } from "../ui/label";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Textarea } from "../ui/textarea";
 import { randomUUID } from "../../lib/utils";
+import { useAgentLibrary } from "../../hooks/useAgentLibrary";
+import { APP_NAME } from "@t3tools/shared/branding";
+
+const NEW_SKILL = "";
 
 export function AgentSkillsEditor({
   skills,
@@ -17,19 +34,31 @@ export function AgentSkillsEditor({
   const [description, setDescription] = useState("");
   const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const select = (skill: AgentSkill | null) => {
+  const { loadSkills } = useAgentLibrary();
+  const ids = useId();
+  const fill = (skill: AgentSkill | null) => {
     setSelected(skill);
     setName(skill?.name ?? "");
     setDescription(skill?.description ?? "");
     setContent(skill?.content ?? "");
     setError("");
   };
+  const select = async (skill: AgentSkill | null) => {
+    if (!skill || !isAgentSkillStub(skill)) return fill(skill);
+    fill(null);
+    setLoading(true);
+    const [full] = await loadSkills([skill.skillId]).catch(() => []);
+    setLoading(false);
+    if (full) fill(full);
+    else setError("Could not load this skill. Connect the machine that holds it and try again.");
+  };
   const save = async (next: ReadonlyArray<AgentSkill>) => {
     setSaving(true);
     setError("");
     try {
-      if (await onSave(next)) select(null);
+      if (await onSave(next)) fill(null);
       else setError("Could not save skills. Check your connection and try again.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save skills.");
@@ -43,32 +72,34 @@ export function AgentSkillsEditor({
         if (!open && !saving) onClose();
       }}
     >
-      <DialogPopup>
-        <div className="agent-dialog p-6">
+      <DialogPopup className="sm:max-w-xl">
+        <DialogHeader>
           <DialogTitle>Shared skills</DialogTitle>
-          <DialogDescription className="mt-2">
+          <DialogDescription>
             Edit a skill once, then assign it to agents. Changes sync across connected machines and
             apply to new chats. Existing chats keep their starting skills.
           </DialogDescription>
-          <div className="mt-5 space-y-3 text-sm">
+        </DialogHeader>
+        <DialogPanel>
+          <div className="flex flex-col gap-3 text-sm">
             <p>
-              Ask an agent to create or update skills using the T3 Agents MCP. It can save skills to
-              this shared library and assign them to the agents you choose.
+              Ask an agent to create or update skills using the {APP_NAME} MCP. It can save skills
+              to this shared library and assign them to the agents you choose.
             </p>
             <p className="rounded-lg bg-muted p-3 text-muted-foreground">
               Try: “Create a shared skill for reviewing pull requests and assign it to Randy.”
             </p>
             <p className="text-muted-foreground">
               {skills.length} shared {skills.length === 1 ? "skill" : "skills"} in your library.
-              Enable the T3 Agents MCP in your agent’s harness to get started.
+              Enable the {APP_NAME} MCP in your agent’s harness to get started.
             </p>
           </div>
-          <details className="mt-5">
+          <details className="border-t pt-4">
             <summary className="cursor-pointer text-sm font-medium">
               Create or edit manually
             </summary>
             <form
-              className="agent-form"
+              className="mt-4 flex flex-col gap-4"
               onSubmit={async (event) => {
                 event.preventDefault();
                 const now = new Date().toISOString();
@@ -89,83 +120,97 @@ export function AgentSkillsEditor({
                 );
               }}
             >
-              <label>
-                Skill
-                <select
-                  disabled={saving}
-                  value={selected?.skillId ?? ""}
-                  onChange={(event) =>
-                    select(skills.find((skill) => skill.skillId === event.target.value) ?? null)
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor={`${ids}-skill`}>Skill</Label>
+                <Select
+                  items={{
+                    [NEW_SKILL]: "New skill",
+                    ...Object.fromEntries(skills.map((skill) => [skill.skillId, skill.name])),
+                  }}
+                  disabled={saving || loading}
+                  value={selected?.skillId ?? NEW_SKILL}
+                  onValueChange={(value) =>
+                    void select(skills.find((skill) => skill.skillId === value) ?? null)
                   }
                 >
-                  <option value="">New skill</option>
-                  {skills.map((skill) => (
-                    <option key={skill.skillId} value={skill.skillId}>
-                      {skill.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Name
-                <input
+                  <SelectTrigger id={`${ids}-skill`}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopup>
+                    <SelectItem value={NEW_SKILL}>New skill</SelectItem>
+                    {skills.map((skill) => (
+                      <SelectItem key={skill.skillId} value={skill.skillId}>
+                        {skill.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor={`${ids}-name`}>Name</Label>
+                <Input
+                  id={`${ids}-name`}
                   required
                   maxLength={200}
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                 />
-              </label>
-              <label>
-                When to use
-                <input
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor={`${ids}-when`}>When to use</Label>
+                <Input
+                  id={`${ids}-when`}
                   maxLength={1024}
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
                 />
-              </label>
-              <label>
-                SKILL.md
-                <textarea
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor={`${ids}-content`}>SKILL.md</Label>
+                <Textarea
+                  id={`${ids}-content`}
                   required
                   rows={12}
                   maxLength={64000}
+                  className="max-h-96"
                   value={content}
                   onChange={(event) => setContent(event.target.value)}
                   placeholder="Paste the skill’s Markdown instructions…"
                 />
-              </label>
+              </div>
               {error && (
                 <p role="alert" className="text-sm text-destructive">
                   {error}
                 </p>
               )}
-              <footer>
+              <div className="flex justify-end gap-2">
                 {selected && (
-                  <button
+                  <Button
                     type="button"
+                    variant="destructive-outline"
                     disabled={saving}
                     onClick={() =>
                       void save(skills.filter((skill) => skill.skillId !== selected.skillId))
                     }
                   >
                     Delete skill
-                  </button>
+                  </Button>
                 )}
-                <button
-                  className="agent-primary"
-                  disabled={saving || !name.trim() || !content.trim()}
+                <Button
+                  type="submit"
+                  disabled={saving || loading || !name.trim() || !content.trim()}
                 >
                   {saving ? "Saving…" : "Save skill"}
-                </button>
-              </footer>
+                </Button>
+              </div>
             </form>
           </details>
-          <div className="mt-5 flex justify-end">
-            <button type="button" disabled={saving} onClick={onClose}>
-              Close
-            </button>
-          </div>
-        </div>
+        </DialogPanel>
+        <DialogFooter>
+          <Button type="button" variant="outline" disabled={saving} onClick={onClose}>
+            Close
+          </Button>
+        </DialogFooter>
       </DialogPopup>
     </Dialog>
   );

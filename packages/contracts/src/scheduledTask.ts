@@ -1,3 +1,5 @@
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import {
@@ -99,15 +101,6 @@ export const ScheduledTaskWebhookSignature = Schema.Struct(
 ).annotate({ description: "HMAC-SHA256 check on the raw body." });
 export type ScheduledTaskWebhookSignature = typeof ScheduledTaskWebhookSignature.Type;
 
-/** Matches how long the relay holds a request for an offline environment. */
-export const MAX_WEBHOOK_DELIVERY_AGE_MINUTES = 24 * 60;
-
-const WebhookMaxDeliveryAgeMinutes = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: MAX_WEBHOOK_DELIVERY_AGE_MINUTES }),
-).annotate({
-  description: "Skip requests held offline over this many minutes. Omit to run all.",
-});
-
 export function isWebhookDedupeTemplate(template: string): boolean {
   const placeholders = /\{\{\s*(?:(?:body|headers|query)(?:\.[^{}.\s]+)*|request)\s*\}\}/g;
   const matches = [...template.matchAll(placeholders)];
@@ -169,7 +162,6 @@ const ScheduledTaskWebhookFilters = Schema.Array(ScheduledTaskWebhookFilter)
 const ScheduledTaskWebhookSchedule = Schema.Struct({
   type: Schema.Literal("webhook"),
   signature: Schema.NullOr(ScheduledTaskWebhookSignature),
-  maxDeliveryAgeMinutes: Schema.optional(Schema.NullOr(WebhookMaxDeliveryAgeMinutes)),
   dedupe: Schema.optional(ScheduledTaskWebhookDedupe),
   filters: Schema.optional(ScheduledTaskWebhookFilters),
 }).annotate({
@@ -193,7 +185,6 @@ const ScheduledTaskUpsertWebhookSchedule = Schema.Struct({
   ).annotate({
     description: "Omit for URL token only.",
   }),
-  maxDeliveryAgeMinutes: Schema.optional(Schema.NullOr(WebhookMaxDeliveryAgeMinutes)),
   dedupe: Schema.optional(ScheduledTaskWebhookDedupe),
   filters: Schema.optional(ScheduledTaskWebhookFilters),
 }).annotate({
@@ -214,7 +205,7 @@ export const ScheduledTaskSchedule = Schema.Union([
 });
 export type ScheduledTaskSchedule = typeof ScheduledTaskSchedule.Type;
 
-export const ScheduledTaskUpsertSchedule = Schema.Union([
+const ScheduledTaskUpsertTimedSchedules = [
   Schema.Struct({
     type: Schema.Literal("interval"),
     everyMs: ScheduledTaskIntervalMs.check(
@@ -226,12 +217,28 @@ export const ScheduledTaskUpsertSchedule = Schema.Union([
   ScheduledTaskFixedTimeSchedule,
   ScheduledTaskCronSchedule,
   ScheduledTaskOnceSchedule,
+] as const;
+
+export const ScheduledTaskUpsertSchedule = Schema.Union([
+  ...ScheduledTaskUpsertTimedSchedules,
   ScheduledTaskUpsertWebhookSchedule,
 ]).annotate({
   description:
     "Writable trigger. Pass an object with type 'interval', 'fixed_time', 'cron', 'once' or 'webhook'.",
 });
 export type ScheduledTaskUpsertSchedule = typeof ScheduledTaskUpsertSchedule.Type;
+
+/**
+ * Shipped clients send the retired `maxDeliveryAgeMinutes` on every webhook save, null when unset.
+ * It decodes here so the server can refuse a value it cannot enforce; agents never see it.
+ */
+const ScheduledTaskClientUpsertSchedule = Schema.Union([
+  ...ScheduledTaskUpsertTimedSchedules,
+  ScheduledTaskUpsertWebhookSchedule.mapFields((fields) => ({
+    ...fields,
+    maxDeliveryAgeMinutes: Schema.optional(Schema.NullOr(Schema.Number)),
+  })),
+]);
 
 export const ScheduledTaskRunStatus = Schema.Literals(["never", "running", "succeeded", "failed"]);
 export type ScheduledTaskRunStatus = typeof ScheduledTaskRunStatus.Type;
@@ -243,6 +250,54 @@ export const ScheduledTaskWebhookEndpoint = Schema.Struct({
 });
 export type ScheduledTaskWebhookEndpoint = typeof ScheduledTaskWebhookEndpoint.Type;
 
+/**
+ * Where runs go. One-thread modes launch their thread on the first run and keep it; `fresh_session`
+ * starts each later run in a new provider session there.
+ */
+export const ScheduledTaskThreadMode = Schema.Literals(["new_thread", "continue", "fresh_session"]);
+export type ScheduledTaskThreadMode = typeof ScheduledTaskThreadMode.Type;
+
+/** Servers before thread modes omit it; their bound tasks continue the conversation. */
+export function scheduledTaskThreadMode(
+  task: Pick<ScheduledTask, "threadId" | "threadMode">,
+): ScheduledTaskThreadMode {
+  return task.threadMode ?? (task.threadId === null ? "new_thread" : "continue");
+}
+
+/** Why the server archived a task. Any string, so a reason added later still decodes. */
+export const ScheduledTaskArchiveReason = Schema.Union([
+  Schema.Literals(["completed", "paused", "failing", "thread_archived", "webhook_unused"]),
+  Schema.String,
+]);
+export type ScheduledTaskArchiveReason = typeof ScheduledTaskArchiveReason.Type;
+
+/** Stale tasks are archived after this many days (never-triggered webhooks after the longer window). */
+export const SCHEDULED_TASK_ARCHIVE_AFTER_DAYS = 10;
+export const SCHEDULED_TASK_UNUSED_WEBHOOK_ARCHIVE_AFTER_DAYS = 30;
+/** Archived tasks are deleted this many days after they were archived. */
+export const SCHEDULED_TASK_ARCHIVE_RETENTION_DAYS = 30;
+
+/** When the server deletes an archived task, or null for one that is not archived. */
+export function scheduledTaskDeletesAt(task: Pick<ScheduledTask, "archivedAt">): string | null {
+  if (task.archivedAt == null) return null;
+  return DateTime.make(task.archivedAt).pipe(
+    Option.map((archivedAt) =>
+      DateTime.formatIso(DateTime.add(archivedAt, { days: SCHEDULED_TASK_ARCHIVE_RETENTION_DAYS })),
+    ),
+    Option.getOrNull,
+  );
+}
+
+/** Where a task's runs go: an agent's own thread, one bound thread, or a new thread each run. */
+export type ScheduledTaskTarget = "agent" | "thread" | "new_thread";
+
+export function scheduledTaskTarget(
+  task: Pick<ScheduledTask, "profileId" | "threadId" | "threadMode">,
+): ScheduledTaskTarget {
+  if (task.profileId !== undefined) return "agent";
+  return scheduledTaskThreadMode(task) === "new_thread" ? "new_thread" : "thread";
+}
+
 export const ScheduledTask = Schema.Struct({
   id: ScheduledTaskId,
   title: TrimmedNonEmptyString,
@@ -253,6 +308,7 @@ export const ScheduledTask = Schema.Struct({
   threadId: Schema.NullOr(ThreadId),
   /** Agent profile each run launches with; its thread is then reused by later runs. */
   profileId: Schema.optional(TrimmedNonEmptyString),
+  threadMode: Schema.optional(ScheduledTaskThreadMode),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
@@ -267,6 +323,11 @@ export const ScheduledTask = Schema.Struct({
   lastRunError: Schema.NullOr(Schema.String),
   runCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   webhook: Schema.optional(ScheduledTaskWebhookEndpoint),
+  /** Set when the server archived the stale task; it is disabled and deleted after the retention window. */
+  archivedAt: Schema.optional(IsoDateTime),
+  archiveReason: Schema.optional(ScheduledTaskArchiveReason),
+  /** Why the task cannot run regardless of `enabled`, such as a managed policy refusing webhooks. */
+  blockedByPolicy: Schema.optionalKey(Schema.String),
 });
 export type ScheduledTask = typeof ScheduledTask.Type;
 
@@ -275,6 +336,8 @@ export type ScheduledTaskListInput = typeof ScheduledTaskListInput.Type;
 
 export const ScheduledTaskListResult = Schema.Struct({
   tasks: ForwardCompatibleArray(ScheduledTask),
+  /** The server's IANA zone for fixed-time schedules. Absent from older servers. */
+  timeZone: Schema.optional(TrimmedNonEmptyString),
 });
 export type ScheduledTaskListResult = typeof ScheduledTaskListResult.Type;
 
@@ -287,7 +350,7 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
   title: TrimmedNonEmptyString,
   prompt: TrimmedNonEmptyString,
   enabled: Schema.Boolean,
-  schedule: ScheduledTaskUpsertSchedule,
+  schedule: ScheduledTaskClientUpsertSchedule,
   projectId: ProjectId,
   threadId: Schema.optional(Schema.NullOr(ThreadId)),
   profileId: Schema.optional(
@@ -296,6 +359,8 @@ export const ScheduledTaskUpsertInput = Schema.Struct({
         "Agent profile to launch with. Omit to keep the current profile; null clears it.",
     }),
   ),
+  /** Omitted: keep the stored mode, or derive it from `threadId` for a new or rebound task. */
+  threadMode: Schema.optional(ScheduledTaskThreadMode),
   workspaceStrategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

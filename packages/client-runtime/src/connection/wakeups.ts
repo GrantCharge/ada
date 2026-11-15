@@ -7,7 +7,7 @@ export type ConnectionWakeup =
   | "application-active"
   | "application-active-probe"
   | "application-active-long"
-  | "credentials-changed"
+  | "application-focused"
   | "network-changed";
 
 function isApplicationActiveWakeup(reason: ConnectionWakeup): boolean {
@@ -24,6 +24,11 @@ export function resetsRetryBackoff(reason: ConnectionWakeup): boolean {
 
 export function shouldResubscribeAfterWakeup(reason: ConnectionWakeup): boolean {
   return isApplicationActiveWakeup(reason);
+}
+
+// Focus fires on every window switch; any wakeup would arm a running probe's silent-socket check.
+export function reachesConnectionSupervisor(reason: ConnectionWakeup): boolean {
+  return reason !== "application-focused";
 }
 
 export class ConnectionWakeups extends Context.Service<

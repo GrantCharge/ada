@@ -1,13 +1,11 @@
 import { NATIVE_WORKSPACE_COLUMNS_SUPPORTED } from "../native/NativeWorkspaceColumns";
 import Constants from "expo-constants";
-import type { NativeStackNavigationOptions } from "@react-navigation/native-stack";
 import { useState } from "react";
 import { Platform, View } from "react-native";
 
 import { AppText as Text } from "./ui/AppText";
-import { T3Wordmark } from "./T3Wordmark";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
-import { resolveMobileStageLabel } from "../lib/mobileBranding";
+import { MOBILE_APP_NAME, resolveMobileStageLabel } from "../lib/mobileBranding";
 import { useAndroidControlSizing } from "./ui/useAndroidControlSizing";
 
 const BRAND_MAX_FONT_SCALE = 1.4;
@@ -32,7 +30,8 @@ export function CompactBrandTitle(
   // Measured only while the badge shows, so hiding it does not make it look like it fits.
   const [fullWidth, setFullWidth] = useState<number | null>(null);
   const showStage =
-    !props.fit || availableWidth === null || fullWidth === null || fullWidth <= availableWidth;
+    stageLabel !== null &&
+    (!props.fit || availableWidth === null || fullWidth === null || fullWidth <= availableWidth);
 
   const title = (
     <View
@@ -40,7 +39,7 @@ export function CompactBrandTitle(
         props.fit && showStage ? (event) => setFullWidth(event.nativeEvent.layout.width) : undefined
       }
       aria-level={1}
-      accessibilityLabel={props.accessibilityLabel ?? "T3 Code, Threads"}
+      accessibilityLabel={props.accessibilityLabel ?? `${MOBILE_APP_NAME}, Threads`}
       accessible
       role="heading"
       className="flex-row items-center gap-1.5"
@@ -50,15 +49,14 @@ export function CompactBrandTitle(
         props.fit && { flexShrink: 0 },
       ]}
     >
-      <T3Wordmark colorClassName="accent-icon" height={Math.round(15 * scale)} />
-      {/* A logo beside a fixed-size wordmark: it may grow with Dynamic Type, not crowd the bar. */}
+      {/* It may grow with Dynamic Type, but only so far that it does not crowd the bar. */}
       <Text
         allowFontScaling={props.allowFontScaling}
         maxFontSizeMultiplier={BRAND_MAX_FONT_SCALE}
-        className="font-t3-medium text-foreground-muted"
+        className="font-t3-bold text-foreground"
         style={{ fontSize: 21 * scale, letterSpacing: -0.5 * scale }}
       >
-        Code
+        {MOBILE_APP_NAME}
       </Text>
       {showStage ? (
         <View
@@ -92,19 +90,4 @@ export function CompactBrandTitle(
   ) : (
     title
   );
-}
-
-function renderCompactBrandTitle() {
-  return <CompactBrandTitle allowFontScaling={Platform.OS === "ios"} />;
-}
-
-export function getCompactBrandHeaderOptions(
-  fallbackTitleStyle?: NativeStackNavigationOptions["headerTitleStyle"],
-): NativeStackNavigationOptions {
-  return {
-    headerTitle: renderCompactBrandTitle,
-    headerTitleStyle: fallbackTitleStyle,
-    title: "Threads",
-    unstable_headerLeftItems: undefined,
-  };
 }

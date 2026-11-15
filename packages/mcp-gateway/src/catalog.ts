@@ -4,6 +4,7 @@ import { compactJson } from "@t3tools/shared/compactJson";
 import * as DateTime from "effect/DateTime";
 import { z } from "zod";
 
+import { profileFields } from "./profileInput.ts";
 import { skillFields } from "./skillInput.ts";
 import { GatewayError, GATEWAY_THREAD_EXECUTION_STATES } from "./port.ts";
 import {
@@ -14,6 +15,7 @@ import {
   type GatewayInvocation,
   type GatewayToolContext,
 } from "./tools.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const environmentId = z.string().trim().min(1);
 const threadId = z.string().trim().min(1);
@@ -65,32 +67,6 @@ const pr = {
 const webhook = { environmentId, webhookId: z.string().trim().min(1) };
 const executionState = z.enum(GATEWAY_THREAD_EXECUTION_STATES);
 
-const profileFields = {
-  name: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(280).optional(),
-  providerLabel: z.string().trim().min(1),
-  modelLabel: z.string().trim().min(1),
-  color: z
-    .string()
-    .regex(/^#[0-9a-fA-F]{6}$/)
-    .optional(),
-  icon: z
-    .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
-    .optional(),
-  skillIds: z.array(z.string().trim().min(1)).optional(),
-  systemPrompt: z.string().max(32_000).optional(),
-  reasoningEffort: z.string().trim().min(1).optional(),
-  runtimeMode: z.enum([
-    "approval-required",
-    "auto-accept-edits",
-    "auto",
-    "full-access",
-    "read-only",
-  ]),
-  interactionMode: z.enum(["default", "plan"]),
-  environmentIds: z.array(z.string().trim().min(1)).optional(),
-};
-
 const createThreadFields = {
   environmentId,
   projectId: z.string().trim().min(1),
@@ -121,7 +97,7 @@ const createThreadFields = {
     .nullable()
     .optional()
     .describe(
-      "Chat to show this one under, on any environment. When a T3 chat calls this tool, omitting it makes the calling chat the parent; pass null for a standalone chat.",
+      `Chat to show this one under, on any environment. When an ${APP_NAME} chat calls this tool, omitting it makes the calling chat the parent; pass null for a standalone chat.`,
     ),
   parentEnvironmentId: z
     .string()
@@ -137,15 +113,15 @@ export type ToolSpec = readonly [description: string, inputSchema: z.ZodRawShape
 
 export const TOOL_SPECS = {
   t3_list_skills: [
-    "List the shared T3 skills library, including SKILL.md contents, base64 resources, executable flags and revisions. Use skillId with t3_update_skill or assign skillIds using t3_update_agent.",
+    `List the shared ${APP_NAME} skills library, including SKILL.md contents, base64 resources, executable flags and revisions. Use skillId with t3_update_skill or assign skillIds using t3_update_agent.`,
     { environmentId },
   ],
   t3_create_skill: [
-    "Create a reusable skill in the shared T3 Agents library. Supply a name, when-to-use description, and full SKILL.md Markdown content. Optional resources contain relative path, contentBase64, and executable fields; include scripts, references and binary assets without inlining them. Limits: 256 files, 1 MiB per file, 2 MiB per skill. Requires create or admin access. Assign the returned skillId to agents with t3_update_agent. Changes sync across connected machines and apply to newly created threads. Existing threads keep their starting skills.",
+    `Create a reusable skill in the shared ${APP_NAME} agents library. Supply a name, when-to-use description, and full SKILL.md Markdown content. Optional resources contain relative path, contentBase64, and executable fields; include scripts, references and binary assets without inlining them. Limits: 256 files, 1 MiB per file, 2 MiB per skill. Requires create or admin access and a full-access/default calling chat, since every machine shares the library. Assign the returned skillId to agents with t3_update_agent. Changes sync across connected machines and apply to newly created threads. Existing threads keep their starting skills.`,
     { environmentId, ...skillFields },
   ],
   t3_update_skill: [
-    "Update a shared skill bundle by skillId. Omit resources to preserve files; supply resources to replace all files (an empty array removes them). New threads for assigned agents receive the change. Existing threads keep their starting skills. Requires create or admin access.",
+    "Update a shared skill bundle by skillId. Omit resources to preserve files; supply resources to replace all files (an empty array removes them). New threads for assigned agents receive the change. Existing threads keep their starting skills. Requires create or admin access and a full-access/default calling chat, since every machine shares the library.",
     {
       environmentId,
       skillId: z.string().trim().min(1),
@@ -153,7 +129,7 @@ export const TOOL_SPECS = {
     },
   ],
   t3_delete_skill: [
-    "Delete a shared skill from the library. New threads will no longer include it. Existing threads keep their starting skills. Requires create or admin access.",
+    "Delete a shared skill from the library. New threads will no longer include it. Existing threads keep their starting skills. Requires create or admin access and a full-access/default calling chat, since every machine shares the library.",
     { environmentId, skillId: z.string().trim().min(1) },
   ],
   t3_list_agents: [
@@ -178,11 +154,11 @@ export const TOOL_SPECS = {
     },
   ],
   t3_create_agent: [
-    "Create an agent in the shared Agents library without starting a session. Requires create or admin access. Shares to connected machines with the same grant.",
+    "Create an agent in the shared Agents library without starting a session. Requires create or admin access and a full-access/default calling chat, since every machine shares the library. Shares to connected machines with the same grant.",
     { environmentId, ...profileFields },
   ],
   t3_update_agent: [
-    "Update an agent by profileId. Updated configuration and assigned skillIds apply to newly created threads. Existing threads keep their starting configuration and skill contents.",
+    "Update an agent by profileId. Updated configuration and assigned skillIds apply to newly created threads. Existing threads keep their starting configuration and skill contents. Requires create or admin access and a full-access/default calling chat, since every machine shares the library.",
     {
       environmentId,
       profileId: z.string().trim().min(1),
@@ -190,7 +166,7 @@ export const TOOL_SPECS = {
     },
   ],
   t3_delete_agent: [
-    "Remove an agent from the shared Agents library, retaining its chats.",
+    "Remove an agent from the shared Agents library, retaining its chats. Requires create or admin access and a full-access/default calling chat, since every machine shares the library.",
     { environmentId, profileId: z.string().trim().min(1) },
   ],
   t3_handoff_thread: [
@@ -228,13 +204,16 @@ export const TOOL_SPECS = {
     "Open the Agents board in the connected desktop app and reveal its window.",
     { environmentId },
   ],
-  t3_list_environments: ["List T3 environments granted to this host.", optionalRequestContext],
+  t3_list_environments: [
+    `List ${APP_NAME} environments granted to this host.`,
+    optionalRequestContext,
+  ],
   t3_get_environment_status: [
-    "Get connection state for one T3 environment.",
+    `Get connection state for one ${APP_NAME} environment.`,
     { environmentId, ...optionalRequestContext },
   ],
   t3_get_presence: [
-    "Whether someone is at a T3 client of this environment right now: present is true when any live client is visible or focused. Also reports recent interaction, lastActivityAt (ISO time of the latest client report, or null), and each live client's state. Use it to hold back notifications while the user is at the computer. Requires read scope.",
+    `Whether someone is at an ${APP_NAME} client of this environment right now: present is true when any live client is visible or focused. Also reports recent interaction, lastActivityAt (ISO time of the latest client report, or null), and each live client's state. Use it to hold back notifications while the user is at the computer. Requires read scope.`,
     { environmentId, ...optionalRequestContext },
   ],
   t3_get_environment_health: [
@@ -246,11 +225,11 @@ export const TOOL_SPECS = {
     optionalRequestContext,
   ],
   t3_list_projects: [
-    "List projects across T3 environments, or in one.",
+    `List projects across ${APP_NAME} environments, or in one.`,
     { environmentId: discoveryEnvironmentId, ...optionalRequestContext },
   ],
   t3_list_threads: [
-    "List chats across every connected T3 environment (or one), most recently updated first. Returns the latest 20 unless you pass limit (max 100). When hasMore is true, pass nextCursor back as cursor with the same filters for the next page. Narrow with agent profileId, project, parentThreadId, active/settled state, executionState, and the updatedAfter, updatedBefore, and createdAfter ISO times; use updatedBefore or cursor to reach older chats. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. Rows are summaries: read one chat with t3_get_thread or its messages with t3_get_messages. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileId and profileName name the chat's agent; read its instructions with t3_list_agents includeSystemPrompt.",
+    `List chats across every connected ${APP_NAME} environment (or one), most recently updated first. Returns the latest 20 unless you pass limit (max 100). When hasMore is true, pass nextCursor back as cursor with the same filters for the next page. Narrow with agent profileId, project, parentThreadId, active/settled state, executionState, and the updatedAfter, updatedBefore, and createdAfter ISO times; use updatedBefore or cursor to reach older chats. state=active means unsettled (it still includes completed or stopped chats); use executionState to select running or waiting-input/waiting-approval work explicitly. Finished chats remain active until manually settled or automatically settled after their idle age (3 days by default); new activity and un-settling reset the idle clock. Manually settling a parent chat also settles its child chats. Rows are summaries: read one chat with t3_get_thread or its messages with t3_get_messages. hasPendingUserInput marks a chat waiting on a question; pass includeQuestions to attach each one's pendingQuestions (full text and options, as t3_get_pending_questions returns). profileId and profileName name the chat's agent; read its instructions with t3_list_agents includeSystemPrompt.`,
     {
       environmentId: discoveryEnvironmentId,
       state: z.enum(["all", "active", "settled"]).optional(),
@@ -323,7 +302,7 @@ export const TOOL_SPECS = {
     { environmentId, threadId },
   ],
   t3_list_devices: [
-    "List T3 apps (desktop, web, mobile) connected to an environment that you can bring content on screen for with t3_focus_device. focused/visible show which device the user is looking at now. A device connected to several environments appears once per environment.",
+    `List ${APP_NAME} apps (desktop, web, mobile) connected to an environment that you can bring content on screen for with t3_focus_device. focused/visible show which device the user is looking at now. A device connected to several environments appears once per environment.`,
     { environmentId },
   ],
   t3_focus_device: [
@@ -342,8 +321,8 @@ export const TOOL_SPECS = {
     { environmentId },
   ],
   t3_create_scheduled_task: [
-    "Schedule a prompt to run on an agent, once (runAt) or repeatedly (cron + timezone). The first run creates the task's thread from the agent profile in the project; later runs post into the same thread. The task is stored on and runs on the environment that hosts the project, so pass that environment (omit it for this chat's own machine), not the device you are talking through. Tasks run only while that environment's server is up; a run missed while it was down fires once when it returns. Runs use the agent's permission mode, so an agent that needs approvals will wait for them. Requires create or admin access.",
-    { environmentId, ...scheduledTaskFields },
+    "Schedule a prompt to run on an agent, once (runAt) or repeatedly (cron + timezone). The first run creates the task's thread from the agent profile in the project; later runs post into the same thread. The task is stored on and runs on the environment that hosts the project, so pass that environment (omit it for this chat's own machine), not the device you are talking through. Tasks run only while that environment's server is up; a run missed while it was down fires once when it returns. Runs use the agent's permission mode, so an agent that needs approvals will wait for them. Retrying with the same idempotencyKey returns the same task. Requires create or admin access.",
+    { environmentId, ...scheduledTaskFields, idempotencyKey: idempotencyKey.optional() },
   ],
   t3_update_scheduled_task: [
     "Change a scheduled task by taskId: prompt, title, schedule (runAt or cron/timezone), agent, project, or enabled to pause/resume. Changing agent or project starts a new thread on the next run. Re-arming a finished one-time task needs a future runAt. Requires create or admin access.",
@@ -402,7 +381,7 @@ export const TOOL_SPECS = {
     { environmentId, ...threadTaskInputFields.watch },
   ],
   t3_task_board: [
-    "Read-only view of a project's tasks on this environment and every environment your connected T3 app reaches, grouped by the chat that owns them, so Captains see each other's domains. coverage lists each environment as local, live, or unreachable; a child on an unreachable environment is shown from your own mirror (source mirror) and may be stale. Changes go through t3_task_update on your own tasks only. Captains and the user; workers read their own task. Requires read access.",
+    `Read-only view of a project's tasks on this environment and every environment your connected ${APP_NAME} app reaches, grouped by the chat that owns them, so Captains see each other's domains. coverage lists each environment as local, live, or unreachable; a child on an unreachable environment is shown from your own mirror (source mirror) and may be stale. Changes go through t3_task_update on your own tasks only. Captains and the user; workers read their own task. Requires read access.`,
     { environmentId, ...threadTaskInputFields.board },
   ],
   t3_settle_after_turn: [
@@ -410,7 +389,7 @@ export const TOOL_SPECS = {
     { environmentId, ...threadTaskInputFields.settleAfterTurn },
   ],
   t3_get_thread: [
-    "Read one T3 chat and its messages, including its profileSnapshot.",
+    `Read one ${APP_NAME} chat and its messages, including its profileSnapshot.`,
     { environmentId, threadId, ...optionalRequestContext },
   ],
   t3_summarize_thread: [
@@ -418,7 +397,7 @@ export const TOOL_SPECS = {
     { environmentId, threadId, ...optionalRequestContext },
   ],
   t3_get_messages: [
-    "Read recent messages from one T3 chat.",
+    `Read recent messages from one ${APP_NAME} chat.`,
     {
       environmentId,
       threadId,
@@ -450,7 +429,7 @@ export const TOOL_SPECS = {
     { ...createThreadFields, text: z.string().trim().min(1) },
   ],
   t3_send_message: [
-    "Send a user message to an existing T3 chat.",
+    `Send a user message to an existing ${APP_NAME} chat.`,
     {
       environmentId,
       threadId,
@@ -460,7 +439,7 @@ export const TOOL_SPECS = {
     },
   ],
   t3_control_thread: [
-    "Cancel, stop, pause, resume, retry, or restart a T3 chat.",
+    `Cancel, stop, pause, resume, retry, or restart an ${APP_NAME} chat.`,
     {
       environmentId,
       threadId,
@@ -524,7 +503,7 @@ export const TOOL_SPECS = {
     },
   ],
   t3_respond_to_approval: [
-    "Approve or reject one pending T3 action.",
+    `Approve or reject one pending ${APP_NAME} action.`,
     {
       environmentId,
       threadId,
@@ -617,7 +596,7 @@ export const TOOL_SPECS = {
     },
   ],
   t3_apply_patch: [
-    "Apply a patch through the authoritative T3 runtime.",
+    `Apply a patch through the authoritative ${APP_NAME} runtime.`,
     {
       environmentId,
       projectId: z.string().trim().min(1),
@@ -852,7 +831,7 @@ export function toolInputJsonSchema(
           environmentId: (shape.environmentId as z.ZodType)
             .optional()
             .describe(
-              "Environment to act on. Omit to use the machine this chat runs on; pass another environment's ID to act there through your connected T3 app.",
+              `Environment to act on. Omit to use the machine this chat runs on; pass another environment's ID to act there through your connected ${APP_NAME} app.`,
             ),
         }
       : shape;

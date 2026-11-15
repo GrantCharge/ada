@@ -1,4 +1,11 @@
-param([Parameter(Mandatory = $true)][string]$Installer)
+param(
+  [Parameter(Mandatory = $true)][string]$Installer,
+  # Shortcuts and the Apps entry follow the product name. The exe and uninstaller file names come
+  # from scripts/lib/windows-package-names.ts, the rule packaging uses.
+  [Parameter(Mandatory = $true)][string]$ProductName,
+  [Parameter(Mandatory = $true)][string]$ExecutableName,
+  [Parameter(Mandatory = $true)][string]$UninstallerName
+)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'This destructive installer test is only for disposable GitHub runners.' }
 
@@ -20,28 +27,69 @@ function Assert-OfficialPreserved {
     throw 'Agents modified the official app directory.'
   }
 }
-function Install-And-Remove-Agents {
-  $process = Start-Process -FilePath $Installer -ArgumentList '/S' -PassThru -Wait
+function Invoke-Installer([string[]]$Arguments) {
+  $process = Start-Process -FilePath $Installer -ArgumentList $Arguments -PassThru -Wait
   if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
-  $exe = Join-Path $agents 'T3 Agents.exe'
+}
+function Get-Shortcuts([string]$Name) {
+  foreach ($folder in 'Desktop', 'Programs') {
+    Join-Path ([Environment]::GetFolderPath($folder)) "$Name.lnk"
+  }
+}
+function Assert-Installed {
+  $exe = Join-Path $agents $ExecutableName
   if (!(Test-Path $exe)) { throw 'Agents executable missing from its separate directory.' }
   if ((Get-ItemProperty $installKey).InstallLocation.TrimEnd('\') -ne $agents) {
     throw 'Agents registered the wrong install directory.'
   }
-  $shortcut = Join-Path ([Environment]::GetFolderPath('Desktop')) 'T3 Agents.lnk'
   $shell = New-Object -ComObject WScript.Shell
-  if (!(Test-Path $shortcut) -or $shell.CreateShortcut($shortcut).TargetPath -ne $exe) {
-    throw 'Agents shortcut does not target the installed executable.'
+  foreach ($shortcut in Get-Shortcuts $ProductName) {
+    if (!(Test-Path $shortcut) -or $shell.CreateShortcut($shortcut).TargetPath -ne $exe) {
+      throw "Agents shortcut $shortcut does not target the installed executable."
+    }
   }
   Assert-OfficialPreserved
-  $uninstaller = Join-Path $agents 'Uninstall T3 Agents.exe'
+}
+function Remove-Agents {
+  # Settings > Apps runs the registered UninstallString, so it must name the installed uninstaller.
+  $registered = (Get-ItemProperty $uninstallKey).UninstallString
+  $uninstaller = Join-Path $agents $UninstallerName
+  if ($registered -notmatch '^"([^"]+)"' -or $Matches[1] -ne $uninstaller -or !(Test-Path $uninstaller)) {
+    throw "The Apps entry runs '$registered', not the installed '$uninstaller'."
+  }
   $process = Start-Process -FilePath $uninstaller -ArgumentList "/S _?=$agents" -PassThru -Wait
   if ($process.ExitCode -ne 0) { throw "Uninstaller failed: $($process.ExitCode)" }
+  if (Test-Path $uninstallKey) { throw 'Uninstalling left the Apps entry behind.' }
+  if (@(Get-Shortcuts $ProductName | Where-Object { Test-Path $_ }).Count -ne 0) {
+    throw 'Uninstalling left an Agents shortcut behind.'
+  }
   Assert-OfficialPreserved
+}
+function Install-And-Remove-Agents {
+  Invoke-Installer '/S'
+  Assert-Installed
+  Remove-Agents
 }
 
 # Exercise the real installer, including its shortcut and uninstaller.
 Install-And-Remove-Agents
+
+# Reproduce an install whose shortcuts were created while the product was named 'T3 Agents'.
+# The auto-update must rename them, not leave them beside a second set.
+if ($ProductName -ne 'T3 Agents') {
+  Invoke-Installer '/S'
+  foreach ($shortcut in Get-Shortcuts $ProductName) { Rename-Item $shortcut 'T3 Agents.lnk' }
+  Set-ItemProperty $installKey -Name ShortcutName -Value 'T3 Agents'
+  Invoke-Installer '--updated', '/S'
+  Assert-Installed
+  if (@(Get-Shortcuts 'T3 Agents' | Where-Object { Test-Path $_ }).Count -ne 0) {
+    throw 'The update left a T3 Agents shortcut behind.'
+  }
+  if ((Get-ItemProperty $uninstallKey).DisplayName -notlike "$ProductName *") {
+    throw 'The update kept the old uninstall entry name.'
+  }
+  Remove-Agents
+}
 
 # Reproduce the first release's registration pointing at the official directory.
 # An invalid uninstaller deliberately fails if the new installer tries to run it.
@@ -54,4 +102,4 @@ New-ItemProperty $uninstallKey -Name DisplayVersion -Value '0.0.40-nightly.20260
 New-ItemProperty $uninstallKey -Name UninstallString -Value ('"' + $legacyUninstaller + '"') -Force | Out-Null
 Install-And-Remove-Agents
 if (!(Test-Path $legacyUninstaller)) { throw 'Installer removed files from the legacy shared directory.' }
-Write-Output 'Fresh install, legacy collision recovery, shortcuts, and uninstall isolation passed.'
+Write-Output 'Fresh install, shortcut rename on update, legacy collision recovery, and uninstall isolation passed.'

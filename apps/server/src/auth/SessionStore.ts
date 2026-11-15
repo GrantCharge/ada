@@ -9,9 +9,10 @@ import {
   AuthWebSocketTicketUse,
   RuntimeMode,
   type ServerAuthSessionMethod,
+  withoutRetiredScopes,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -25,6 +26,7 @@ import * as Option from "effect/Option";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as AuthSessions from "../persistence/AuthSessions.ts";
+import * as PayloadSigner from "./PayloadSigner.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import {
   REUSABLE_DEV_SESSION_EXPIRES_AT,
@@ -36,8 +38,6 @@ import {
   base64UrlEncode,
   resolveLegacySessionCookieName,
   resolveSessionCookieName,
-  signPayload,
-  timingSafeEqualBase64Url,
 } from "./utils.ts";
 
 export interface IssuedSession {
@@ -62,6 +62,8 @@ export interface VerifiedSession {
   readonly runtimeModeCeiling?: RuntimeMode;
   /** An MCP client that is another T3 Code environment's peer link. */
   readonly peerLink?: true;
+  /** A member's session, minted by the tailnet handshake; only these may sync the roster. */
+  readonly member?: true;
   /** The environment holding the session, when another T3 server holds it. */
   readonly peerEnvironmentId?: EnvironmentId;
 }
@@ -366,6 +368,30 @@ export class PeerSessionsRevocationError extends Schema.TaggedError<PeerSessions
   }
 }
 
+export class SubjectSessionsRevocationError extends Schema.TaggedError<SubjectSessionsRevocationError>()(
+  "SubjectSessionsRevocationError",
+  {
+    subject: Schema.String,
+    ...sessionCredentialInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to revoke one subject's sessions.";
+  }
+}
+
+export class BrokeredSessionsRevocationError extends Schema.TaggedError<BrokeredSessionsRevocationError>()(
+  "BrokeredSessionsRevocationError",
+  {
+    brokeredBy: Schema.String,
+    ...sessionCredentialInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to revoke the sessions one machine brokered.";
+  }
+}
+
 export const SessionCredentialInternalError = Schema.Union([
   SessionClaimsEncodingError,
   SessionCredentialIssueError,
@@ -376,6 +402,8 @@ export const SessionCredentialInternalError = Schema.Union([
   SessionRevocationError,
   OtherSessionsRevocationError,
   PeerSessionsRevocationError,
+  SubjectSessionsRevocationError,
+  BrokeredSessionsRevocationError,
 ]);
 export type SessionCredentialInternalError = typeof SessionCredentialInternalError.Type;
 
@@ -399,7 +427,10 @@ export class SessionStore extends Context.Service<
       readonly proofKeyThumbprint?: string;
       readonly runtimeModeCeiling?: RuntimeMode;
       readonly peerLink?: boolean;
+      readonly member?: boolean;
       readonly peerEnvironmentId?: EnvironmentId;
+      /** The member that asked for the credential this session is redeemed from. */
+      readonly brokeredBy?: EnvironmentId;
       readonly replaceActiveForSubjectAndMethod?: boolean;
       readonly replaceSessionId?: AuthSessionId;
     }) => Effect.Effect<IssuedSession, SessionCredentialInternalError>;
@@ -441,6 +472,16 @@ export class SessionStore extends Context.Service<
     readonly revokeByPeerEnvironment: (
       peerEnvironmentId: EnvironmentId,
     ) => Effect.Effect<number, SessionCredentialInternalError>;
+    /** Revokes every session of one subject, such as an app of the network, except `keep`. */
+    readonly revokeBySubject: (
+      subject: string,
+      keep?: AuthSessionId,
+    ) => Effect.Effect<number, SessionCredentialInternalError>;
+    /** Revokes every session redeemed from a credential another machine asked for, except `keep`. */
+    readonly revokeBrokeredBy: (
+      brokeredBy: EnvironmentId,
+      keep?: AuthSessionId,
+    ) => Effect.Effect<number, SessionCredentialInternalError>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
   }
@@ -461,6 +502,8 @@ const SessionClaims = Schema.Struct({
   rtc: Schema.optionalKey(RuntimeMode),
   /** Signed, so a client cannot shed its peer link's limits. */
   plk: Schema.optionalKey(Schema.Literal(1)),
+  /** Signed, so a pairing-code link cannot pass itself off as a member. */
+  mbr: Schema.optionalKey(Schema.Literal(1)),
   iat: Schema.Number,
   exp: Schema.Number,
 });
@@ -512,12 +555,14 @@ function toAuthClientSession(input: Omit<AuthClientSession, "current">): AuthCli
 }
 
 const make = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const authSessions = yield* AuthSessions.AuthSessionRepository;
-  const signingSecret = yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32);
+  const signer = yield* PayloadSigner.fromSecret(
+    yield* secretStore.getOrCreateRandom(SIGNING_SECRET_NAME, 32),
+  );
   const connectedSessionsRef = yield* Ref.make(new Map<AuthSessionId, number>());
   const changesPubSub = yield* PubSub.unbounded<SessionCredentialChange>();
   // Newest session per DPoP key. A live socket moves to it at expiry, so a
@@ -667,8 +712,8 @@ const make = Effect.gen(function* () {
   const issue: SessionStore["Service"]["issue"] = Effect.fn("SessionStore.issue")(
     function* (input) {
       const sessionId = AuthSessionId.make(
-        yield* crypto
-          .randomUUIDv4()
+        yield* random
+          .uuidV4()
           .pipe(Effect.mapError((cause) => new SessionCredentialIssueError({ cause }))),
       );
       const issuedAt = yield* DateTime.now;
@@ -680,11 +725,12 @@ const make = Effect.gen(function* () {
         kind: "session",
         sid: sessionId,
         sub: input?.subject ?? "browser",
-        scopes: input?.scopes ?? AuthStandardClientScopes,
+        scopes: withoutRetiredScopes(input?.scopes ?? AuthStandardClientScopes),
         method: input?.method ?? "browser-session-cookie",
         ...(input?.proofKeyThumbprint ? { jkt: input.proofKeyThumbprint } : {}),
         ...(input?.runtimeModeCeiling ? { rtc: input.runtimeModeCeiling } : {}),
         ...(input?.peerLink === true ? { plk: 1 as const } : {}),
+        ...(input?.member === true ? { mbr: 1 as const } : {}),
         iat: issuedAt.epochMilliseconds,
         exp: expiresAt.epochMilliseconds,
       };
@@ -703,7 +749,7 @@ const make = Effect.gen(function* () {
             }),
         ),
       );
-      const signature = signPayload(encodedPayload, signingSecret);
+      const signature = yield* signer.sign(encodedPayload);
       const client = input?.client ?? createDefaultClientMetadata();
       const sessionRecord = {
         sessionId,
@@ -721,6 +767,7 @@ const make = Effect.gen(function* () {
         ...(input?.peerEnvironmentId === undefined
           ? {}
           : { peerEnvironmentId: input.peerEnvironmentId }),
+        ...(input?.brokeredBy === undefined ? {} : { brokeredBy: input.brokeredBy }),
         issuedAt,
         expiresAt,
       } satisfies AuthSessions.CreateAuthSessionInput;
@@ -821,8 +868,7 @@ const make = Effect.gen(function* () {
         return yield* new MalformedSessionTokenError({});
       }
 
-      const expectedSignature = signPayload(encodedPayload, signingSecret);
-      if (!timingSafeEqualBase64Url(signature, expectedSignature)) {
+      if (!(yield* signer.verify(encodedPayload, signature))) {
         return yield* new InvalidSessionTokenSignatureError({});
       }
 
@@ -874,6 +920,7 @@ const make = Effect.gen(function* () {
         ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
         ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
         ...(claims.plk === 1 ? { peerLink: true as const } : {}),
+        ...(claims.mbr === 1 ? { member: true as const } : {}),
         ...(row.value.peerEnvironmentId === null
           ? {}
           : { peerEnvironmentId: row.value.peerEnvironmentId }),
@@ -912,7 +959,7 @@ const make = Effect.gen(function* () {
           }),
       ),
     );
-    const signature = signPayload(encodedPayload, signingSecret);
+    const signature = yield* signer.sign(encodedPayload);
     return {
       token: `${encodedPayload}.${signature}`,
       expiresAt,
@@ -927,8 +974,7 @@ const make = Effect.gen(function* () {
       return yield* new MalformedWebSocketTokenError({});
     }
 
-    const expectedSignature = signPayload(encodedPayload, signingSecret);
-    if (!timingSafeEqualBase64Url(signature, expectedSignature)) {
+    if (!(yield* signer.verify(encodedPayload, signature))) {
       return yield* new InvalidWebSocketTokenSignatureError({});
     }
 
@@ -1095,6 +1141,44 @@ const make = Effect.gen(function* () {
     return revokedSessionIds.length;
   });
 
+  const revokeBySubject: SessionStore["Service"]["revokeBySubject"] = Effect.fn(
+    "SessionStore.revokeBySubject",
+  )(function* (subject, keep) {
+    const revokedAt = yield* DateTime.now;
+    const revokedSessionIds = yield* authSessions
+      .revokeBySubject({ subject, revokedAt, ...(keep === undefined ? {} : { keep }) })
+      .pipe(Effect.mapError((cause) => new SubjectSessionsRevocationError({ subject, cause })));
+    yield* Ref.update(connectedSessionsRef, (current) => {
+      const next = new Map(current);
+      for (const revokedSessionId of revokedSessionIds) next.delete(revokedSessionId);
+      return next;
+    });
+    yield* Effect.forEach(revokedSessionIds, emitRemoved, {
+      concurrency: "unbounded",
+      discard: true,
+    });
+    return revokedSessionIds.length;
+  });
+
+  const revokeBrokeredBy: SessionStore["Service"]["revokeBrokeredBy"] = Effect.fn(
+    "SessionStore.revokeBrokeredBy",
+  )(function* (brokeredBy, keep) {
+    const revokedAt = yield* DateTime.now;
+    const revokedSessionIds = yield* authSessions
+      .revokeBrokeredBy({ brokeredBy, revokedAt, ...(keep === undefined ? {} : { keep }) })
+      .pipe(Effect.mapError((cause) => new BrokeredSessionsRevocationError({ brokeredBy, cause })));
+    yield* Ref.update(connectedSessionsRef, (current) => {
+      const next = new Map(current);
+      for (const revokedSessionId of revokedSessionIds) next.delete(revokedSessionId);
+      return next;
+    });
+    yield* Effect.forEach(revokedSessionIds, emitRemoved, {
+      concurrency: "unbounded",
+      discard: true,
+    });
+    return revokedSessionIds.length;
+  });
+
   const awaitInvalidation = Effect.fn(function* (
     sessionId: AuthSessionId,
     proofKeyThumbprint?: string,
@@ -1169,6 +1253,8 @@ const make = Effect.gen(function* () {
     revoke,
     revokeAllExcept,
     revokeByPeerEnvironment,
+    revokeBySubject,
+    revokeBrokeredBy,
     markConnected,
     markDisconnected,
   });

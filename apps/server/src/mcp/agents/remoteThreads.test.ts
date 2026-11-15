@@ -1,13 +1,15 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import type { GatewayRuntimePort } from "@t3tools/client-runtime/gateway";
+import { answerGatewayPortCall, type GatewayRuntimePort } from "@t3tools/client-runtime/gateway";
 import {
+  type AuthMcpClientAccess,
   EnvironmentId,
   type OrchestrationV2RunStatus,
   type OrchestrationV2ThreadShell,
   ProjectId,
   ProviderInstanceId,
+  type TailnetDeviceAccess,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
@@ -24,7 +26,10 @@ import * as ServerConfig from "../../config.ts";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import * as PeerForwarding from "../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../peer/PeerLinkRequests.ts";
+import * as Membership from "../../peer/Membership.ts";
 import * as PeerLinks from "../../peer/PeerLinks.ts";
+import * as PeerMcpClient from "../../peer/PeerMcpClient.ts";
+import * as RemoteDelegation from "../../peer/RemoteDelegation.ts";
 import * as TailnetDevices from "../../peer/TailnetDevices.ts";
 import * as ThreadLaunch from "../../orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "../../orchestration-v2/ThreadManagementService.ts";
@@ -36,7 +41,11 @@ import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
 import * as McpGatewayBrokerModule from "../McpGatewayBroker.ts";
 import { McpGatewayBroker } from "../McpGatewayBroker.ts";
-import { layerAgentsToolkit, toolkitRegistration } from "../McpHttpServer.ts";
+import {
+  layerAgentsToolkit,
+  layerInProcessMcpServer,
+  toolkitRegistration,
+} from "../McpHttpServer.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpToolAccess from "../McpToolAccess.ts";
 import * as OrchestratorMcpService from "../OrchestratorMcpService.ts";
@@ -48,6 +57,12 @@ import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
 import { ProjectToolkit } from "../toolkits/project/tools.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
+import {
+  CODE_PAIRED_SUBJECT,
+  DESKTOP_APP_SUBJECT,
+  layerDependencies,
+  storedLink,
+} from "../McpGatewayBroker.testkit.ts";
 
 // The 2026-10-22 shape: Captain on dev-box launching Cody on the MacBook.
 const devBox = EnvironmentId.make("environment-dev-box");
@@ -185,7 +200,34 @@ const makeMacBook = (
   };
 };
 
-const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) => {
+const makeLayer = (
+  macbook: ReturnType<typeof makeMacBook>,
+  record: TestRecord,
+  options: {
+    readonly self?: TailnetDeviceAccess;
+    /**
+     * The MacBook is a member of this machine's network, reached through this machine's own
+     * desktop app, which answers each call the way a real app does: through its own port.
+     */
+    readonly member?: boolean;
+    /** No app is connected at all, as on a headless server. */
+    readonly noApp?: boolean;
+    /** This server's own link to the MacBook, at this access; the MacBook answers over it. */
+    readonly link?: AuthMcpClientAccess;
+  } = {},
+) => {
+  const { self, member = false, noApp = false, link } = options;
+  const macbookPort = new Proxy(
+    {},
+    {
+      get:
+        (_, method) =>
+        async (...args: ReadonlyArray<unknown>) => {
+          macbook.calls.push({ method: String(method), args });
+          return macbook.answer(String(method), args);
+        },
+    },
+  ) as GatewayRuntimePort;
   const localPort = {
     listEnvironments: async () => [
       {
@@ -201,29 +243,78 @@ const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) 
     McpGatewayBroker,
     Effect.gen(function* () {
       const broker = yield* McpGatewayBrokerModule.make;
-      yield* broker.connect("desktop", { [macBook]: ["read", "create", "send"] }).pipe(
-        Stream.runForEach((event) => {
-          macbook.calls.push({ method: event.method, args: event.args });
-          const reply = (() => {
-            try {
-              return { result: macbook.answer(event.method, event.args) };
-            } catch (error) {
-              return { error: (error as Error).message };
+      const grants = { [macBook]: ["read", "create", "send"] } as const;
+      if (noApp) return broker;
+      if (member) {
+        const membership = yield* Membership.Membership;
+        for (const environmentId of [devBox, macBook]) {
+          yield* membership
+            .put({ environmentId, label: environmentId, nodeId: null, access: "full-access" })
+            .pipe(Effect.orDie);
+        }
+      }
+      yield* broker
+        .connect("desktop", grants, member ? DESKTOP_APP_SUBJECT : CODE_PAIRED_SUBJECT)
+        .pipe(
+          Stream.runForEach((event) => {
+            const ids = { connectionId: event.connectionId, invocationId: event.invocationId };
+            if (member) {
+              return Effect.promise(() =>
+                answerGatewayPortCall(
+                  macbookPort,
+                  grants,
+                  event.method,
+                  event.args,
+                  event.modeCeiling,
+                ).then(
+                  (result) => ({ result }),
+                  (error: Error) => ({ error: error.message }),
+                ),
+              ).pipe(
+                Effect.flatMap((outcome) => broker.respond("desktop", { ...ids, ...outcome })),
+              );
             }
-          })();
-          return broker.respond("desktop", {
-            connectionId: event.connectionId,
-            invocationId: event.invocationId,
-            ...reply,
-          });
-        }),
-        Effect.forkScoped({ startImmediately: true }),
-      );
+            macbook.calls.push({ method: event.method, args: event.args });
+            const reply = (() => {
+              try {
+                return { result: macbook.answer(event.method, event.args) };
+              } catch (error) {
+                return { error: (error as Error).message };
+              }
+            })();
+            return broker.respond("desktop", { ...ids, ...reply });
+          }),
+          Effect.forkScoped({ startImmediately: true }),
+        );
       return broker;
     }),
-  ).pipe(Layer.provide(NodeServices.layer));
+  ).pipe(
+    Layer.provide(
+      layerDependencies({
+        environmentId: devBox,
+        ...(self && { self }),
+        links: link === undefined ? [] : [storedLink(macBook, link)],
+      }),
+    ),
+  );
+  // The MacBook's own `/mcp`, as this server's link reaches it.
+  const peers = Layer.mock(PeerMcpClient.PeerMcpClient)({
+    call: (input) =>
+      Effect.sync(() => {
+        macbook.calls.push({ method: `peer:${input.tool}`, args: [input.arguments] });
+        switch (input.tool) {
+          case "t3_get_thread":
+            return { data: macbook.answer("getThread", [macBook, input.arguments.threadId]) };
+          case "t3_thread_organize":
+            return { sequence: 1 };
+          default:
+            return { data: macbook.answer(input.tool, []) };
+        }
+      }),
+  });
   return Layer.mergeAll(
     broker,
+    peers,
     Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
     Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({ discard: () => Effect.void }),
     Layer.succeed(LocalGatewayPort, {
@@ -269,11 +360,17 @@ const makeLayer = (macbook: ReturnType<typeof makeMacBook>, record: TestRecord) 
     }),
     Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
     Layer.mock(ThreadMetadataMcpService.ThreadMetadataMcpService)({}),
-    Layer.mock(Project.ProjectService)({}),
+    Layer.mock(Project.ProjectService)({
+      getById: (projectId) =>
+        Effect.succeedSome({ id: projectId, workspaceRoot: "/projects/local" } as never),
+    }),
     Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
     Layer.mock(GitVcsDriver.GitVcsDriver)({}),
     Layer.mock(DocumentText.DocumentText)({}),
     Layer.mock(PeerForwarding.PeerForwarding)({}),
+    Layer.mock(RemoteDelegation.RemoteDelegation)({
+      followUp: (_scope, _environmentId, _request, sent) => Effect.succeed(sent),
+    }),
     Layer.mock(PeerLinkRequests.PeerLinkRequests)({}),
     Layer.mock(PeerLinks.PeerLinks)({ get: () => Effect.succeedNone }),
     Layer.mock(TailnetDevices.TailnetDevices)({}),
@@ -464,6 +561,45 @@ it.effect("an unknown environment is refused before anything launches", () => {
   }).pipe(Effect.provide(makeLayer(macbook, record)));
 });
 
+it.effect(
+  "a launch the network does not let this machine make says so, not blaming the app",
+  () => {
+    const macbook = makeMacBook();
+    const record = newRecord();
+    return Effect.gen(function* () {
+      const output = yield* launch({
+        environmentId: macBook,
+        projectId: "project:macbook",
+        title: "Configure Accessibility",
+        message: "Turn on the six permissions.",
+      });
+      expect(output.isFailure).toBe(true);
+      const message = (output.result as { message: string }).message;
+      expect(message).toContain("read-only");
+      expect(message).not.toContain("Ada app grants");
+      expect(macbook.called("createThread")).toEqual([]);
+    }).pipe(Effect.provide(makeLayer(macbook, record, { self: "read-only" })));
+  },
+);
+
+it.effect("a member refuses a launch's message to a thread above the calling chat's modes", () => {
+  const macbook = makeMacBook();
+  const record = newRecord({ caller: { runtimeMode: "approval-required" } });
+  return Effect.gen(function* () {
+    // Nothing here reads the new thread before its first message, so no local check can stop
+    // it; the MacBook's own port runs that thread full-access and must refuse the message.
+    const output = yield* launch({
+      environmentId: macBook,
+      projectId: "project:macbook",
+      title: "Configure Accessibility",
+      message: "Turn on the six permissions.",
+    });
+    const sent = macbook.calls.filter((call) => call.method === "sendMessage");
+    expect(sent).toEqual([]);
+    expect(JSON.stringify(output.result)).toContain("broader than this chat's");
+  }).pipe(Effect.provide(makeLayer(macbook, record, { member: true })));
+});
+
 it.effect("a remote launch refuses what it cannot honor there instead of dropping it", () => {
   const macbook = makeMacBook();
   const record = newRecord();
@@ -612,7 +748,7 @@ it.effect("launch, create, delegate, send, and wait reject parameters they do no
     const refused = yield* mcp
       .callTool({ name: "t3_thread_launch", arguments: { title: "x", machine: "macbook" } })
       .pipe(Effect.provideService(McpSchema.McpServerClient, mcpClient), Effect.flip);
-    expect(refused.message).toContain("excess property");
+    expect(refused.message).toContain('Unknown argument "machine"');
     expect(record.launches).toEqual([]);
   }).pipe(
     Effect.provide(
@@ -620,7 +756,7 @@ it.effect("launch, create, delegate, send, and wait reject parameters they do no
         toolkitRegistration(ProjectToolkit, ProjectHandlers.layer),
         toolkitRegistration(OrchestratorToolkit, OrchestratorHandlers.layer),
       ).pipe(
-        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provideMerge(layerInProcessMcpServer),
         Layer.provideMerge(makeLayer(makeMacBook(), record)),
       ),
     ),
@@ -666,6 +802,59 @@ it.effect(
         layerAgentsToolkit.pipe(
           Layer.provideMerge(McpServer.McpServer.layer),
           Layer.provideMerge(makeLayer(macbook, record)),
+        ),
+      ),
+    );
+  },
+);
+
+const callAgentsTool = (name: string, args: Record<string, unknown>) =>
+  McpServer.McpServer.pipe(
+    Effect.flatMap((mcp) => mcp.callTool({ name, arguments: args })),
+    Effect.provideService(McpSchema.McpServerClient, mcpClient),
+  );
+
+it.effect.each([
+  { link: "full-access", settles: true },
+  { link: "approval-required", settles: false },
+] as const)(
+  "with no app attached, agents reach a linked machine within its $link link",
+  ({ link, settles }) => {
+    const macbook = makeMacBook();
+    return Effect.gen(function* () {
+      const listed = yield* callAgentsTool("t3_list_environments", {});
+      expect(JSON.stringify(listed.structuredContent)).toContain(macBook);
+      const read = yield* callAgentsTool("t3_get_thread", {
+        environmentId: macBook,
+        threadId: child,
+      });
+      expect(read.isError).toBe(false);
+      expect(read.structuredContent).toMatchObject({ data: { id: child } });
+      // The peer runs it on its own environment, so the call leaves environmentId out.
+      expect(macbook.called("peer:t3_get_thread")[0]?.args[0]).toEqual({ threadId: child });
+      // Settling is the one change a link carries, and only at full access.
+      const settled = yield* callAgentsTool("t3_settle_thread", {
+        environmentId: macBook,
+        threadId: child,
+      });
+      expect(settled.isError).toBe(!settles);
+      expect(macbook.called("peer:t3_thread_organize").map((call) => call.args[0])).toEqual(
+        settles ? [{ threadId: child, action: "settle" }] : [],
+      );
+      const sent = yield* callAgentsTool("t3_send_message", {
+        environmentId: macBook,
+        threadId: child,
+        text: "Hi.",
+      });
+      expect(sent.isError).toBe(true);
+      expect(macbook.called("peer:t3_send_message")).toEqual([]);
+      // Nothing went through an app: there is none.
+      expect(macbook.called("getThread")).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        layerAgentsToolkit.pipe(
+          Layer.provideMerge(McpServer.McpServer.layer),
+          Layer.provideMerge(makeLayer(macbook, newRecord(), { noApp: true, link })),
         ),
       ),
     );

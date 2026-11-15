@@ -2,6 +2,7 @@ import ChatMarkdown from "./ChatMarkdown";
 import { isSvgAttachment } from "@t3tools/shared/image";
 import { ReadOnlySourcePreview } from "./files/AttachmentFilePreview";
 import type {
+  AgentContextRecord,
   EnvironmentContextRecord,
   PreviewAnnotationPayload,
   ThreadContextRecord,
@@ -9,16 +10,14 @@ import type {
 import { formatAttachmentSize } from "@t3tools/client-runtime/state/attachments";
 import { videoMimeType } from "@t3tools/shared/video";
 import { MessageCircleIcon, MousePointerClickIcon } from "lucide-react";
-import { createContext, type MouseEvent, type ReactElement, type ReactNode, use } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { createContext, type ReactElement, type ReactNode, use } from "react";
+import { ComposerContextActionsContext } from "./composerContextActions";
 
 import type { ComposerFileAttachment, ComposerImageAttachment } from "~/composerDraftStore";
 import { composerFileNeedsReattach } from "~/composerDraftStore";
 import { useTheme } from "~/hooks/useTheme";
-import {
-  formatAttachmentUploadProgress,
-  type AttachmentUploadState,
-} from "~/lib/attachmentUploadState";
+import type { AttachmentUploadState } from "~/lib/attachmentUploadState";
+import { useAttachmentUploadProgress } from "~/hooks/useAttachmentUploadProgress";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 import {
   fileContextReference,
@@ -32,10 +31,12 @@ import {
   reviewCommentContextLabel,
   terminalContextReference,
   uploadedAttachmentContextRecord,
+  type MentionedIdentityRecord,
 } from "~/lib/composerContextRecords";
 import type { TerminalContextDraft } from "~/lib/terminalContext";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { ComposerPendingTerminalContextChip } from "./chat/ComposerPendingTerminalContexts";
+import { AgentContextChip } from "./AgentContextChip";
 import { EnvironmentContextChip } from "./EnvironmentContextChip";
 import { ThreadContextChip } from "./ThreadContextChip";
 import { useLinkedEnvironments } from "~/state/peerLinks";
@@ -66,26 +67,13 @@ export type ComposerDraftContextRecord =
   | { kind: "image"; record: ComposerImageAttachment; upload?: AttachmentUploadState | undefined }
   | { kind: "file"; record: ComposerFileAttachment; upload?: AttachmentUploadState | undefined }
   | { kind: "thread"; record: ThreadContextRecord }
-  | { kind: "environment"; record: EnvironmentContextRecord };
+  | { kind: "environment"; record: EnvironmentContextRecord }
+  | { kind: "agent"; record: AgentContextRecord };
 
-export interface ComposerContextActions {
-  environmentId: EnvironmentId | null;
-  cwd?: string | undefined;
-  expandImage: (imageId: string) => void;
-  expandVideo: (fileId: string) => void;
-  openFile: (fileId: string) => void;
-  openMention: (path: string) => void;
-  openPullRequest: (event: MouseEvent<HTMLElement>, url: string) => void;
-}
-
-export const ComposerContextActionsContext = createContext<ComposerContextActions>({
-  environmentId: null,
-  expandImage: () => {},
-  expandVideo: () => {},
-  openFile: () => {},
-  openMention: () => {},
-  openPullRequest: () => {},
-});
+export {
+  ComposerContextActionsContext,
+  type ComposerContextActions,
+} from "./composerContextActions";
 
 export type ComposerDraftContextRecords = ReadonlyMap<string, ComposerDraftContextRecord>;
 
@@ -105,7 +93,7 @@ export function composerContextRecordsFromDraft(input: {
   reviewComments?: ReadonlyArray<ReviewCommentContext>;
   previewAnnotations?: ReadonlyArray<PreviewAnnotationPayload>;
   threadContexts?: ReadonlyArray<ThreadContextRecord>;
-  environmentContexts?: ReadonlyArray<EnvironmentContextRecord>;
+  environmentContexts?: ReadonlyArray<MentionedIdentityRecord>;
   images?: ReadonlyArray<ComposerImageAttachment>;
   files?: ReadonlyArray<ComposerFileAttachment>;
   uploadsByImageId?: Readonly<Record<string, AttachmentUploadState>>;
@@ -143,7 +131,10 @@ export function composerContextRecordsFromDraft(input: {
     records.set(record.contextId, { kind: "thread", record });
   }
   for (const record of input.environmentContexts ?? []) {
-    records.set(record.contextId, { kind: "environment", record });
+    records.set(
+      record.contextId,
+      record.kind === "agent" ? { kind: "agent", record } : { kind: "environment", record },
+    );
   }
   return records;
 }
@@ -181,10 +172,13 @@ function ContextChip(props: {
   );
 }
 
-function uploadStatusSuffix(upload: AttachmentUploadState | undefined): string | null {
-  if (upload?.status === "uploading") return formatAttachmentUploadProgress(upload.progress);
+function useUploadStatusSuffix(
+  key: string,
+  upload: AttachmentUploadState | undefined,
+): string | null {
+  const progress = useAttachmentUploadProgress(key, upload);
   if (upload?.status === "failed") return "upload failed";
-  return null;
+  return progress;
 }
 
 function attachmentTooltip(
@@ -201,6 +195,7 @@ function ImageContextChip(props: {
   upload: AttachmentUploadState | undefined;
 }) {
   const actions = use(ComposerContextActionsContext);
+  const suffix = useUploadStatusSuffix(props.record.id, props.upload);
   return (
     <Tooltip>
       <TooltipTrigger
@@ -209,7 +204,7 @@ function ImageContextChip(props: {
             name={props.record.name}
             previewUrl={props.record.previewUrl}
             size={formatAttachmentSize(props.record.sizeBytes)}
-            suffix={uploadStatusSuffix(props.upload)}
+            suffix={suffix}
             onClick={() => actions.expandImage(props.record.id)}
           />
         }
@@ -228,7 +223,8 @@ function FileContextChip(props: {
   const actions = use(ComposerContextActionsContext);
   const { resolvedTheme } = useTheme();
   const needsReattach = composerFileNeedsReattach(props.record);
-  const suffix = needsReattach ? "attach again" : uploadStatusSuffix(props.upload);
+  const uploadSuffix = useUploadStatusSuffix(props.record.id, props.upload);
+  const suffix = needsReattach ? "attach again" : uploadSuffix;
   const size = formatAttachmentSize(props.record.sizeBytes);
   const isVideo = videoMimeType(props.record) !== null;
   return (
@@ -344,6 +340,11 @@ function ComposerPreviewAnnotationDetails({
   );
 }
 
+function ComposerAgentContextChip(props: { record: AgentContextRecord }) {
+  const { environmentId } = use(ComposerContextActionsContext);
+  return <AgentContextChip record={props.record} environmentId={environmentId} />;
+}
+
 function ComposerThreadContextChip(props: { record: ThreadContextRecord }) {
   const { environmentId } = use(ComposerContextActionsContext);
   const linkedEnvironments = useLinkedEnvironments(environmentId);
@@ -385,6 +386,7 @@ const composerContextPresentationRegistry = createContextPresentationRegistry<
     "preview-annotation",
     "thread",
     "environment",
+    "agent",
   ],
   handlers: [
     {
@@ -487,6 +489,16 @@ const composerContextPresentationRegistry = createContextPresentationRegistry<
       render: (entry, context) =>
         entry.kind === "environment" ? (
           <EnvironmentContextChip record={entry.record} />
+        ) : (
+          <UnresolvedContextChip label={context.label} />
+        ),
+    },
+    {
+      kind: "agent",
+      canRender: (entry) => entry.kind === "agent",
+      render: (entry, context) =>
+        entry.kind === "agent" ? (
+          <ComposerAgentContextChip record={entry.record} />
         ) : (
           <UnresolvedContextChip label={context.label} />
         ),

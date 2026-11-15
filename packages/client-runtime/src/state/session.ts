@@ -1,6 +1,6 @@
 import { pipe } from "effect/Function";
 import type { AuthSessionState, EnvironmentId, ServerConfig } from "@t3tools/contracts";
-import * as Data from "effect/Data";
+import * as Schema from "effect/Schema";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -8,11 +8,9 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { HttpClient } from "effect/http";
 import { AsyncResult, Atom } from "effect/reactivity";
 
-import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
-import * as ManagedRelay from "../relay/managedRelay.ts";
 import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
@@ -20,8 +18,9 @@ import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAut
 import { followStreamInEnvironment } from "./environmentStreams.ts";
 
 /** @public Required to name the error in consumers' inferred session results. */
-export class SessionHttpClientUnavailable extends Data.TaggedError(
+export class SessionHttpClientUnavailable extends Schema.TaggedError<SessionHttpClientUnavailable>()(
   "SessionHttpClientUnavailable",
+  {},
 ) {}
 
 function initialConfigOption<E>(
@@ -45,14 +44,7 @@ const SESSION_STATE_RETRY_MAX_MS = 60_000;
 
 export const fetchEnvironmentSessionState = Effect.fn(
   "clientRuntime.state.fetchEnvironmentSessionState",
-)(function* (input: {
-  readonly prepared: PreparedConnection;
-  readonly signer: Option.Option<ManagedRelay.ManagedRelayDpopSigner["Service"]>;
-  readonly remoteAuthorization?: Option.Option<
-    RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]
-  >;
-  readonly timeoutMs?: number;
-}) {
+)(function* (input: { readonly prepared: PreparedConnection; readonly timeoutMs?: number }) {
   const request = (
     timeoutMs: number,
   ): Effect.Effect<AuthSessionState, RemoteEnvironmentRequestError, HttpClient.HttpClient> =>
@@ -63,8 +55,6 @@ export const fetchEnvironmentSessionState = Effect.fn(
       url: (urls) => urls.session(),
       timeoutMs,
       request: ({ client, headers }) => client.session({ headers }),
-      // This endpoint returns 200 with authenticated:false for expired credentials.
-      isUnauthorizedResponse: (response) => !response.authenticated,
     }).pipe(
       // A timeout says nothing about grants; failing would show a busy host as read-only.
       Effect.catchTags({
@@ -172,16 +162,10 @@ function makeEnvironmentSessionAtoms<R, E>(
           consecutiveFailures = 0;
         }
         return Effect.gen(function* () {
-          const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
-          const remoteAuthorization = yield* Effect.serviceOption(
-            RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
-          );
           const client = yield* Effect.serviceOption(HttpClient.HttpClient);
           if (Option.isNone(client)) return yield* new SessionHttpClientUnavailable();
           return yield* fetchEnvironmentSessionState({
             prepared,
-            signer,
-            remoteAuthorization,
           }).pipe(Effect.provideService(HttpClient.HttpClient, client.value));
         }).pipe(
           Effect.tap(() =>

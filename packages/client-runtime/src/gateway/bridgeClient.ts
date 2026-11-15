@@ -1,5 +1,8 @@
+import { ThreadTaskError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import type * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 
 import type {
   GatewayProfile,
@@ -12,9 +15,10 @@ import { parseGatewayStatusSnapshot } from "./port.ts";
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 
-export type GatewayBridgeState = "connecting" | "running" | "degraded" | "disabled";
+/** `standby`: the owner turned this standby client away because an app's runtime serves it. */
+export type GatewayBridgeState = "connecting" | "running" | "standby" | "degraded" | "disabled";
 
-type GatewayBridgeEvent = { readonly data?: string };
+type GatewayBridgeEvent = { readonly data?: string; readonly code?: number };
 type GatewayBridgeEventType = "open" | "close" | "error" | "message";
 
 export interface GatewayBridgeSocket {
@@ -87,6 +91,20 @@ async function proof(token: string, value: string): Promise<string> {
   return Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+const encodeTaskError = Schema.encodeUnknownOption(Schema.Struct(ThreadTaskError.fields));
+
+/** A task error the port failed with, in wire form, so the gateway can still report its code. */
+export function wireTaskError(error: unknown): unknown {
+  for (let current = error, depth = 0; depth < 4; depth++) {
+    if (typeof current !== "object" || current === null) return undefined;
+    if ((current as { _tag?: unknown })._tag === "ThreadTaskError") {
+      return Option.getOrUndefined(encodeTaskError(current));
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 export function connectGatewayBridge(input: {
   readonly port: GatewayRuntimePort;
   readonly events?: GatewayRuntimeEventSource;
@@ -111,6 +129,7 @@ export function connectGatewayBridge(input: {
   let stopped = false;
   let statusRequestId = 0;
   let configured = false;
+  let standingBy = false;
   let healthFiber: Fiber.Fiber<void, never> | undefined;
   let responseFiber: Fiber.Fiber<void, never> | undefined;
 
@@ -147,7 +166,8 @@ export function connectGatewayBridge(input: {
     if (stopped) return;
     configured = false;
     input.onStatusSnapshot?.(null);
-    input.onState?.("connecting");
+    // A retry while standing by is not news; it reports again only if the answer changes.
+    if (!standingBy) input.onState?.("connecting");
     const next =
       input.createSocket?.(input.url) ?? (new WebSocket(input.url) as GatewayBridgeSocket);
     let authenticated = false;
@@ -156,12 +176,13 @@ export function connectGatewayBridge(input: {
     expectResponse(next);
     next.addEventListener("error", () => {
       if (socket === next && !stopped) {
+        standingBy = false;
         configured = false;
         input.onStatusSnapshot?.(null);
         input.onState?.("degraded");
       }
     });
-    next.addEventListener("close", () => {
+    next.addEventListener("close", (event) => {
       if (socket !== next || stopped) return;
       socket = null;
       clearHealthCheck();
@@ -169,7 +190,10 @@ export function connectGatewayBridge(input: {
       input.onStatusSnapshot?.(null);
       unsubscribeEvents?.();
       unsubscribeEvents = null;
-      input.onState?.("degraded");
+      // The owner's "standing by" close (1013, Try Again Later) while an app holds the runtime.
+      const wasStandingBy = standingBy;
+      standingBy = input.standby === true && event.code === 1013;
+      if (!(wasStandingBy && standingBy)) input.onState?.(standingBy ? "standby" : "degraded");
       reconnectFiber = Effect.runFork(
         Effect.sleep(input.reconnectDelayMs ?? 1_000).pipe(Effect.tap(() => Effect.sync(connect))),
       );
@@ -269,6 +293,7 @@ export function connectGatewayBridge(input: {
                 { environmentIds, afterSequenceByEnvironment },
               ) ?? null;
             configured = true;
+            standingBy = false;
             // A half-open loopback connection must reconnect even when the UI is not mounted.
             healthFiber = Effect.runFork(
               Effect.sleep(15_000).pipe(
@@ -315,6 +340,7 @@ export function connectGatewayBridge(input: {
             JSON.stringify({
               id: requestId,
               error: error instanceof Error ? error.message : String(error),
+              taskError: wireTaskError(error),
             }),
           );
           if (!configured) {

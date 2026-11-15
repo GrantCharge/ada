@@ -23,6 +23,18 @@
       "types": "./src/composerThreadItems.ts",
       "default": "./src/composerThreadItems.ts"
     },
+    "./composer-model-mentions": {
+      "types": "./src/composerModelMentions.ts",
+      "default": "./src/composerModelMentions.ts"
+    },
+    "./locales": {
+      "types": "./src/locales.ts",
+      "default": "./src/locales.ts"
+    },
+    "./model-search": {
+      "types": "./src/modelSearch.ts",
+      "default": "./src/modelSearch.ts"
+    },
     "./image-attachment-size": {
       "types": "./src/imageAttachmentSize.ts",
       "default": "./src/imageAttachmentSize.ts"
@@ -79,9 +91,25 @@
       "types": "./src/tailnetDevices.ts",
       "default": "./src/tailnetDevices.ts"
     },
+    "./scheduled-task-destinations": {
+      "types": "./src/scheduledTaskDestinations.ts",
+      "default": "./src/scheduledTaskDestinations.ts"
+    },
+    "./scheduled-task-cron": {
+      "types": "./src/scheduledTaskCron.ts",
+      "default": "./src/scheduledTaskCron.ts"
+    },
+    "./scheduled-task-archive": {
+      "types": "./src/scheduledTaskArchive.ts",
+      "default": "./src/scheduledTaskArchive.ts"
+    },
     "./scheduled-task-webhook": {
       "types": "./src/scheduledTaskWebhook.ts",
       "default": "./src/scheduledTaskWebhook.ts"
+    },
+    "./scheduled-task-time-zone": {
+      "types": "./src/scheduledTaskTimeZone.ts",
+      "default": "./src/scheduledTaskTimeZone.ts"
     },
     "./connection": {
       "types": "./src/connection/index.ts",
@@ -127,6 +155,10 @@
       "types": "./src/operations/index.ts",
       "default": "./src/operations/index.ts"
     },
+    "./operations/agentLibrary": {
+      "types": "./src/operations/agentLibrary.ts",
+      "default": "./src/operations/agentLibrary.ts"
+    },
     "./operations/projects": {
       "types": "./src/operations/projects.ts",
       "default": "./src/operations/projects.ts"
@@ -150,10 +182,6 @@
     "./t3ToolSummary": {
       "types": "./src/t3ToolSummary.ts",
       "default": "./src/t3ToolSummary.ts"
-    },
-    "./relay": {
-      "types": "./src/relay/index.ts",
-      "default": "./src/relay/index.ts"
     },
     "./state/auth": {
       "types": "./src/state/auth.ts",
@@ -243,9 +271,21 @@
       "types": "./src/state/peerLinks.ts",
       "default": "./src/state/peerLinks.ts"
     },
+    "./state/network-members": {
+      "types": "./src/state/networkMembers.ts",
+      "default": "./src/state/networkMembers.ts"
+    },
     "./state/tailnetDevices": {
       "types": "./src/state/tailnetDevices.ts",
       "default": "./src/state/tailnetDevices.ts"
+    },
+    "./state/deviceNetwork": {
+      "types": "./src/state/deviceNetwork.ts",
+      "default": "./src/state/deviceNetwork.ts"
+    },
+    "./state/environmentHttpAuth": {
+      "types": "./src/state/environmentHttpAuth.ts",
+      "default": "./src/state/environmentHttpAuth.ts"
     },
     "./state/peerPairingCode": {
       "types": "./src/state/peerPairingCode.ts",
@@ -274,10 +314,6 @@
     "./state/project-grouping": {
       "types": "./src/state/projectGrouping.ts",
       "default": "./src/state/projectGrouping.ts"
-    },
-    "./state/relay": {
-      "types": "./src/state/relayDiscovery.ts",
-      "default": "./src/state/relayDiscovery.ts"
     },
     "./state/review": {
       "types": "./src/state/review.ts",
@@ -331,6 +367,10 @@
       "types": "./src/state/threads.ts",
       "default": "./src/state/threads.ts"
     },
+    "./state/thread-activity-announcement": {
+      "types": "./src/state/threadActivityAnnouncement.ts",
+      "default": "./src/state/threadActivityAnnouncement.ts"
+    },
     "./state/subagent-display": {
       "types": "./src/state/subagentDisplay.ts",
       "default": "./src/state/subagentDisplay.ts"
@@ -374,6 +414,10 @@
     "./state/composer-dispatch": {
       "types": "./src/state/composerDispatch.ts",
       "default": "./src/state/composerDispatch.ts"
+    },
+    "./state/context-window": {
+      "types": "./src/state/contextWindow.ts",
+      "default": "./src/state/contextWindow.ts"
     },
     "./state/thread-subagents": {
       "types": "./src/state/threadSubagents.ts",
@@ -422,6 +466,10 @@
     "./work-log/command-label": {
       "types": "./src/work-log/commandLabel.ts",
       "default": "./src/work-log/commandLabel.ts"
+    },
+    "./work-log/embedded-scripts": {
+      "types": "./src/work-log/embeddedScripts.ts",
+      "default": "./src/work-log/embeddedScripts.ts"
     },
     "./work-log/scroll-anchor": {
       "types": "./src/work-log/scrollAnchor.ts",
@@ -491,6 +539,10 @@
       "types": "./src/state/agents.ts",
       "default": "./src/state/agents.ts"
     },
+    "./state/agentIdentity": {
+      "types": "./src/state/agentIdentity.ts",
+      "default": "./src/state/agentIdentity.ts"
+    },
     "./state/child-status-counts": {
       "types": "./src/state/childStatusCounts.ts",
       "default": "./src/state/childStatusCounts.ts"
@@ -535,6 +587,10 @@
       "types": "./src/pullRequestReactions.ts",
       "default": "./src/pullRequestReactions.ts"
     },
+    "./pull-request-reply": {
+      "types": "./src/pullRequestReply.ts",
+      "default": "./src/pullRequestReply.ts"
+    },
     "./pull-request-query": {
       "types": "./src/pullRequestQuery.ts",
       "default": "./src/pullRequestQuery.ts"
@@ -543,13 +599,21 @@
       "types": "./src/modelTraits.ts",
       "default": "./src/modelTraits.ts"
     },
+    "./pull-request-reviewers": {
+      "types": "./src/pullRequestReviewers.ts",
+      "default": "./src/pullRequestReviewers.ts"
+    },
     "./provider-clients": {
       "types": "./src/providerClients.ts",
       "default": "./src/providerClients.ts"
+    },
+    "./provider-instance-ids": {
+      "types": "./src/providerInstanceIds.ts",
+      "default": "./src/providerInstanceIds.ts"
     }
   },
   "scripts": {
-    "typecheck": "tsc --noEmit",
+    "typecheck": "effect-tsgo tsrs --noEmit",
     "test": "vp test run"
   },
   "dependencies": {
@@ -560,16 +624,19 @@
     "@t3tools/provider-cursor": "workspace:*",
     "@t3tools/provider-fx": "workspace:*",
     "@t3tools/provider-grok": "workspace:*",
+    "@t3tools/provider-kiro": "workspace:*",
     "@t3tools/provider-muse": "workspace:*",
     "@t3tools/provider-opencode": "workspace:*",
     "@t3tools/provider-pi": "workspace:*",
+    "@t3tools/secret-provider-definitions": "workspace:*",
     "@t3tools/shared": "workspace:*",
     "@t3tools/source-control-core": "workspace:*",
     "@t3tools/source-control-definitions": "workspace:*",
     "effect": "catalog:",
     "fflate": "0.8.3",
     "jszip": "3.10.1",
-    "three": "0.180.0"
+    "three": "0.180.0",
+    "unbash": "^5.0.0"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

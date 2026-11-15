@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - The ownership lock is a native SQLite handle held for the server's lifetime.
+import { cliInstallCommand } from "@t3tools/shared/cliRelease";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
@@ -6,7 +7,7 @@ import * as NodeSqlite from "node:sqlite";
 import { SERVER_EXIT_CODE_STATE_DIR_OWNED } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -21,15 +22,19 @@ import {
   BOOT_SERVICE_PLIST_FILE,
   BOOT_SERVICE_UNIT_FILE,
   bootServiceBaseDirOf,
-} from "./cloud/bootService.ts";
-import { ServiceLauncherHostProcess } from "./cloud/serviceLauncherClient.ts";
+} from "./service/bootService.ts";
+import { ServiceLauncherHostProcess } from "./service/serviceLauncherClient.ts";
 import {
   SERVICE_LAUNCHER_CONTEXT_ENV,
   SERVICE_RESTART_PENDING_FILE,
   SERVICE_STATE_FILE,
   compareExactServiceVersions,
   serviceStateActiveVersion,
-} from "./cloud/serviceProtocol.ts";
+} from "./service/serviceProtocol.ts";
+import {
+  legacyOwnerStartedBeforeRecord,
+  legacyOwnerStartTimeCommand,
+} from "./legacyServerOwner.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -39,6 +44,7 @@ import {
   type PersistedServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { SERVER_SHUTDOWN_DEADLINE } from "./serverShutdown.ts";
+import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 
 export class ServerAlreadyRunningError extends Schema.TaggedError<ServerAlreadyRunningError>()(
   "ServerAlreadyRunningError",
@@ -48,7 +54,7 @@ export class ServerAlreadyRunningError extends Schema.TaggedError<ServerAlreadyR
   override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_STATE_DIR_OWNED;
 
   override get message(): string {
-    return `A T3 Code server already owns ${this.stateDir}. Stop that server, or use a separate T3 home and pair with it, then retry. No server was stopped. server-owner.sqlite is the ownership lock; do not delete it while a server is running.`;
+    return `An ${APP_NAME} server already owns ${this.stateDir}. Stop that server, or use a separate ${APP_NAME} home and pair with it, then retry. No server was stopped. server-owner.sqlite is the ownership lock; do not delete it while a server is running.`;
   }
 }
 
@@ -59,7 +65,7 @@ export class OlderBootServiceError extends Schema.TaggedError<OlderBootServiceEr
   override readonly [Runtime.errorExitCode] = SERVER_EXIT_CODE_STATE_DIR_OWNED;
 
   override get message(): string {
-    return `A T3 Code background service set up for ${this.baseDir} may still run a release without the ownership lock. On that machine, try \`t3 update\` and let it restart (or run \`t3 service restart\` if the update is already installed). If the older launcher cannot update, run \`t3 service uninstall\`, then reinstall with \`t3 service install\` from a current CLI. You can also leave the service uninstalled. Pass \`--base-dir ${this.baseDir}\` to each command, and use \`npx t3@latest\` if \`t3\` is not installed or is outdated. Then retry. No server was stopped.`;
+    return `An ${APP_NAME} background service set up for ${this.baseDir} may still run a release without the ownership lock. On that machine, try \`${CLI_COMMAND} update\` and let it restart (or run \`${CLI_COMMAND} service restart\` if the update is already installed). If the older launcher cannot update, run \`${CLI_COMMAND} service uninstall\`, then reinstall with \`${CLI_COMMAND} service install\` from a current CLI. You can also leave the service uninstalled. Pass \`--base-dir ${this.baseDir}\` to each command, and install \`${CLI_COMMAND}\` with \`${cliInstallCommand("posix")}\` if it is missing or outdated. Then retry. No server was stopped.`;
   }
 }
 
@@ -84,29 +90,20 @@ const legacyOwnerIsLive = Effect.fn("legacyOwnerIsLive")(function* (
   if (!isProcessAlive(state.pid)) return false;
   const recordedAt = Date.parse(state.startedAt);
   if (!Number.isFinite(recordedAt)) return true;
-  const windows = (yield* HostProcess.Platform) === "win32";
+  const platform = yield* HostProcess.Platform;
   const runner = yield* ProcessRunner.ProcessRunner;
   const result = yield* runner
     .run({
-      command: windows ? "powershell.exe" : "ps",
-      args: windows
-        ? [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            `(Get-Process -Id ${state.pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`,
-          ]
-        : ["-p", String(state.pid), "-o", "lstart="],
-      env: { LC_ALL: "C", TZ: "UTC" },
+      ...legacyOwnerStartTimeCommand(state.pid, platform),
       timeout: Duration.seconds(2),
       maxOutputBytes: 16_384,
     })
     .pipe(Effect.option);
-  if (Option.isNone(result) || result.value.code !== 0) return true;
-  const output = result.value.stdout.trim();
-  const startedAt = Date.parse(windows ? output : `${output} UTC`);
-  // ps reports whole seconds. Unknown identity stays conservative.
-  return !Number.isFinite(startedAt) || startedAt <= recordedAt + 1_000;
+  return legacyOwnerStartedBeforeRecord(
+    Option.isSome(result) && result.value.code === 0 ? result.value.stdout : undefined,
+    recordedAt,
+    platform,
+  );
 });
 
 // Pre-lock services become invisible when another server replaces their runtime
@@ -209,54 +206,73 @@ const stoppingOwnerRemaining = Effect.fn("stoppingOwnerRemaining")(function* (st
   return remaining > 0 ? Option.some(Duration.millis(remaining)) : Option.none<Duration.Duration>();
 });
 
-/** Never unlink the ownership database: its transaction lock survives path reuse and releases on process exit. */
+const ownershipLockPath = (stateDir: string) => NodePath.join(stateDir, "server-owner.sqlite");
+
+/**
+ * The lock is an exclusive transaction on `server-owner.sqlite`, which never
+ * holds data and must never be unlinked: the OS releases it when the process
+ * exits, even on SIGKILL, so a crashed owner never blocks the next start.
+ */
+const openOwnershipLock = (stateDir: string) =>
+  Effect.try({
+    try: () => {
+      const lockPath = ownershipLockPath(stateDir);
+      NodeFS.mkdirSync(stateDir, { recursive: true });
+      let before = NodeFS.statSync(lockPath, { bigint: true, throwIfNoEntry: false });
+      if (before === undefined) {
+        NodeFS.closeSync(NodeFS.openSync(lockPath, "a", 0o644));
+        before = NodeFS.statSync(lockPath, { bigint: true });
+      }
+      const db = new NodeSqlite.DatabaseSync(lockPath);
+      try {
+        // An idle service launcher probes this lock for a moment; wait out that probe.
+        db.exec("PRAGMA busy_timeout = 250; BEGIN EXCLUSIVE;");
+        const identity = NodeFS.statSync(lockPath, { bigint: true });
+        return {
+          db,
+          identity,
+          replacedDuringAcquire: before.dev !== identity.dev || before.ino !== identity.ino,
+        };
+      } catch (cause) {
+        db.close();
+        throw cause;
+      }
+    },
+    catch: (cause) =>
+      isSqliteBusy(cause)
+        ? new ServerAlreadyRunningError({ stateDir })
+        : new ServerOwnershipError({ stateDir, cause }),
+  });
+
+/** Hold only the ownership lock until the scope closes, without claiming the runtime state. */
+export const holdServerOwnershipLock = Effect.fn("holdServerOwnershipLock")(function* (
+  statePath: string,
+) {
+  yield* Effect.acquireRelease(openOwnershipLock(NodePath.dirname(statePath)), ({ db }) =>
+    Effect.sync(() => db.close()),
+  );
+});
+
+/** Hold an exclusive lock on the state directory until the scope closes. */
 export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(function* (
   statePath: string,
 ) {
   const stateDir = NodePath.dirname(statePath);
-  const crypto = yield* Crypto.Crypto;
-  const ownerId = yield* crypto
-    .randomUUIDv4()
+  const random = yield* SecureRandom.SecureRandom;
+  const ownerId = yield* random
+    .uuidV4()
     .pipe(Effect.mapError((cause) => new ServerOwnershipError({ stateDir, cause })));
-  const lockPath = NodePath.join(stateDir, "server-owner.sqlite");
-  const acquireLock = Effect.acquireRelease(
-    Effect.try({
-      try: () => {
-        NodeFS.mkdirSync(stateDir, { recursive: true });
-        let before = NodeFS.statSync(lockPath, { bigint: true, throwIfNoEntry: false });
-        if (before === undefined) {
-          NodeFS.closeSync(NodeFS.openSync(lockPath, "a", 0o644));
-          before = NodeFS.statSync(lockPath, { bigint: true });
-        }
-        const db = new NodeSqlite.DatabaseSync(lockPath);
-        try {
-          db.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
-          const identity = NodeFS.statSync(lockPath, { bigint: true });
-          return {
-            db,
-            identity,
-            replacedDuringAcquire: before.dev !== identity.dev || before.ino !== identity.ino,
-          };
-        } catch (cause) {
-          db.close();
-          throw cause;
-        }
-      },
-      catch: (cause) =>
-        isSqliteBusy(cause)
-          ? new ServerAlreadyRunningError({ stateDir })
-          : new ServerOwnershipError({ stateDir, cause }),
-    }),
-    ({ db }) =>
-      readPersistedServerRuntimeState(statePath).pipe(
-        Effect.flatMap((state) =>
-          Option.isSome(state) && state.value.ownerId === ownerId
-            ? clearPersistedServerRuntimeState(statePath)
-            : Effect.void,
-        ),
-        Effect.ignore({ log: true }),
-        Effect.ensuring(Effect.sync(() => db.close())),
+  const lockPath = ownershipLockPath(stateDir);
+  const acquireLock = Effect.acquireRelease(openOwnershipLock(stateDir), ({ db }) =>
+    readPersistedServerRuntimeState(statePath).pipe(
+      Effect.flatMap((state) =>
+        Option.isSome(state) && state.value.ownerId === ownerId
+          ? clearPersistedServerRuntimeState(statePath)
+          : Effect.void,
       ),
+      Effect.ignore({ log: true }),
+      Effect.ensuring(Effect.sync(() => db.close())),
+    ),
   );
   // Each attempt is its own acquireRelease, so the wait between them stays interruptible.
   const awaitStoppingOwner = Effect.fn("acquireServerOwnership.awaitStoppingOwner")(function* (
@@ -264,7 +280,7 @@ export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(functi
   ) {
     const remaining = yield* stoppingOwnerRemaining(statePath);
     if (Option.isNone(remaining)) return yield* refused;
-    yield* Effect.logInfo("waiting for the stopping server to release this T3 home", {
+    yield* Effect.logInfo("waiting for the stopping server to release this Ada home", {
       stateDir,
       remainingMs: Duration.toMillis(remaining.value),
     });
@@ -327,7 +343,7 @@ export const acquireServerOwnership = Effect.fn("acquireServerOwnership")(functi
         current.ino !== lock.identity.ino;
     }
     yield* Effect.logError(
-      `Server ownership lock at ${lockPath} was deleted or replaced. Another server may now share this T3 home. Stop any other server using this home, then restart this server. Do not delete server-owner.sqlite while a server is running.`,
+      `Server ownership lock at ${lockPath} was deleted or replaced. Another server may now share this ${APP_NAME} home. Stop any other server using this home, then restart this server. Do not delete server-owner.sqlite while a server is running.`,
     );
   }).pipe(Effect.forkScoped);
 

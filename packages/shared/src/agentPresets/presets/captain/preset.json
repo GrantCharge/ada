@@ -20,13 +20,13 @@
     "retro",
     "grill-me",
     "grilling",
-    "native-first-tools",
-    "captain-event-loop"
+    "captain-event-loop",
+    "t3-agents"
   ],
   "setupNotes": [
     "Requires Claude Code with access to claude-opus-5-5.",
-    "Delegation requires configured T3 agents named Cook, Pastry and Cleaner; Cook (OpenSource) is optional.",
-    "Listener helpers require Claude Haiku 5.5 access, or the documented Codex Luna fallback.",
+    "Delegation requires configured Ada agents named Cook, Pastry and Cleaner; Cook (OpenSource) is optional.",
+    "Listener helpers require Claude Haiku 5.5 access.",
     "Project bootstrapping requires Git and Node.js; Go, Make and Docker are needed for generated project checks.",
     "GitHub publication requires an authenticated GitHub CLI and explicit authorization.",
     "Browser CLI workflows require playwright-cli and its browser dependencies."

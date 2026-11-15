@@ -9,6 +9,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import type { OtlpEndpointSource } from "@t3tools/contracts";
 
 import { OtlpHeadersFromString, OtlpProtocol, type SignalExport } from "./observability.ts";
+import { APP_NAME } from "./branding.ts";
 
 type OtlpSignalName = "TRACES" | "METRICS" | "LOGS";
 
@@ -176,7 +177,7 @@ const exporter = (name: string): Config.Config<Setting<Exporter>> =>
         ? { value }
         : {
             value,
-            warning: `${name} names ${ignored.join(", ")}, which T3 Code does not export to, so ${ignored.length === 1 ? "it was" : "they were"} ignored`,
+            warning: `${name} names ${ignored.join(", ")}, which ${APP_NAME} does not export to, so ${ignored.length === 1 ? "it was" : "they were"} ignored`,
           };
     }),
   );
@@ -317,19 +318,6 @@ export const load: Effect.Effect<OtelEnvironment> = Config.all({
   }),
   Effect.orDie,
 );
-
-export const isRelayTracingEnabled = (env: Readonly<Record<string, string | undefined>>) =>
-  Config.all({
-    ...sdkFlags,
-    telemetry: flag("T3CODE_TELEMETRY_ENABLED", T3CODE_TRUE, T3CODE_FALSE, String),
-  }).pipe(
-    Effect.map(
-      ({ telemetry, t3, spec }) => telemetry.value !== false && !(t3.value ?? spec.value ?? false),
-    ),
-    Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(env))),
-    Effect.orDie,
-    Effect.runSync,
-  );
 
 export type SignalName = "traces" | "metrics" | "logs";
 

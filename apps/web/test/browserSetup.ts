@@ -1,10 +1,14 @@
-import { beforeEach } from "vite-plus/test";
+import { afterAll, beforeEach } from "vite-plus/test";
 import { commands } from "vite-plus/test/browser";
+
+import { initializeI18n } from "../src/i18n/initializeI18n";
 
 declare module "vite-plus/test/browser" {
   interface BrowserCommands {
     /** Defined in vite.config.ts. Moves Playwright's mouse off the page. */
     resetPointer: () => Promise<void>;
+    /** Defined in vite.config.ts. Runs a full V8 garbage collection in the test page, throttled. */
+    collectGarbage: () => Promise<void>;
   }
 }
 
@@ -15,3 +19,12 @@ declare module "vite-plus/test/browser" {
 beforeEach(async () => {
   await commands.resetPointer();
 });
+
+// After each file, so earlier files' detached iframes release their shared memory before it
+// starves the page's own sockets. See collectGarbage in vite.config.ts.
+afterAll(async () => {
+  await commands.collectGarbage();
+});
+
+// The app initializes GT at startup; components using its hooks need the same here.
+initializeI18n(() => {});

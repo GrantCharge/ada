@@ -1,3 +1,4 @@
+import { withinModes } from "@t3tools/client-runtime/gateway";
 import { GatewayError } from "@t3tools/mcp-gateway";
 import {
   failure,
@@ -22,8 +23,11 @@ import * as ThreadManagementService from "../../orchestration-v2/ThreadManagemen
 import * as ThreadTaskService from "../../threadTask/ThreadTaskService.ts";
 import * as McpInvocationContext from "../McpInvocationContext.ts";
 import * as McpToolAccess from "../McpToolAccess.ts";
+import { loadCaller } from "../threadAccess.ts";
 import { LocalGatewayPort } from "./LocalGatewayPort.ts";
-import { assignRemoteChild, gatewayToolContext } from "./remoteThreads.ts";
+import { assertNotLinked } from "../linkOrigin.ts";
+import { assignRemoteChild, gatewayToolContext, READ_TOOL } from "./remoteThreads.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 type ToolResult = {
   readonly isError?: boolean;
@@ -54,22 +58,31 @@ const CREATE_TOOLS: ReadonlySet<string> = new Set([
 /** Tools that deliver text to another chat; managed workers report through their task instead. */
 const MESSAGE_TOOLS: ReadonlySet<string> = new Set(["t3_send_message", "t3_answer_question"]);
 
-/** Gateway tools that only read. Every other tool changes something and is declared a write. */
-const READ_TOOL = /^t3_(?:list|get|summarize)_|^t3_(?:git_status|task_read|task_watch|task_board)$/;
-
 const specOf = (name: string) => (TOOL_SPECS as Record<string, ToolSpec>)[name]!;
 
 const AGENTS_TOOL_NAMES = Object.keys(TOOL_SPECS).filter(
   (name) => !GATEWAY_ONLY_TOOLS.has(name) && !SERVER_SUPERSEDED_TOOLS.has(name),
 );
 
+/**
+ * This server's own schedule tools cover these, so in-process agents see one tool set. They stay
+ * one release for agents that learned them; then drop them like SERVER_SUPERSEDED_TOOLS.
+ */
+const DEPRECATED_SCHEDULE_TOOLS: Readonly<Record<string, string>> = {
+  t3_list_scheduled_tasks: "Deprecated: use `list_scheduled_tasks`.",
+  t3_create_scheduled_task: "Deprecated: use `schedule_task` with `profileId`.",
+  t3_update_scheduled_task: "Deprecated: use `schedule_task` with `scheduledTaskId`.",
+  t3_delete_scheduled_task: "Deprecated: use `delete_scheduled_task`.",
+  t3_run_scheduled_task: "Deprecated: use `run_scheduled_task_now`.",
+};
+
 // The gateway validates arguments against the catalog's own schema (agentsToolInputSchema),
 // so the toolkit passes the object through.
 const agentsTool = (name: string) =>
   Tool.make(name, {
-    description: specOf(name)[0],
+    description: DEPRECATED_SCHEDULE_TOOLS[name] ?? specOf(name)[0],
     parameters: Schema.Record(Schema.String, Schema.Unknown),
-    success: Schema.instanceOf(McpSchema.CallToolResult),
+    success: McpSchema.CallToolResult,
     failure: OrchestratorMcpFailure,
     failureMode: "return",
     dependencies: [
@@ -98,6 +111,9 @@ export const agentsToolRefusal = (error: unknown, args: Record<string, unknown>)
     ),
   );
 
+const modeRefusal = (message: string) =>
+  new GatewayError({ code: "scope_required", message, retryable: false });
+
 /** Whether this server hosts the Agents tools; servers without the in-process port host none. */
 export const hostsAgentsTools = Effect.map(Effect.serviceOption(LocalGatewayPort), Option.isSome);
 
@@ -119,7 +135,10 @@ export const layer = McpToolAccess.toLayer(
           const args = { ...payload };
           if (local === undefined || context === undefined) {
             return toCallToolResult(
-              failure(new Error("This server hosts no T3 Agents tools."), requestContext(args)),
+              failure(
+                new Error(`This server hosts no ${APP_NAME} gateway tools.`),
+                requestContext(args),
+              ),
             );
           }
           if (defaultEnvironment && typeof args.environmentId !== "string") {
@@ -128,9 +147,31 @@ export const layer = McpToolAccess.toLayer(
           if (!invocation.capabilities.has("orchestration")) {
             return toCallToolResult(
               failure(
-                new Error("This chat's MCP credential cannot use T3 Agents tools."),
+                new Error(`This chat's MCP credential cannot use ${APP_NAME} gateway tools.`),
                 requestContext(args),
               ),
+            );
+          }
+          // With no app relaying it, an environment this server links to runs the tool there.
+          const target = args.environmentId;
+          const linked =
+            typeof target === "string" && target !== local.environmentId
+              ? Option.getOrUndefined(yield* local.linkRoute(target))
+              : undefined;
+          if (typeof target === "string" && linked !== undefined) {
+            const loaded = yield* loadCaller();
+            const fenced = yield* assertNotLinked(loaded, "use this environment's links").pipe(
+              Effect.flip,
+              Effect.option,
+            );
+            if (Option.isSome(fenced)) return agentsToolRefusal(fenced.value, args);
+            const outcome = yield* local
+              .overLink(target, linked, name, args, loaded.limits)
+              .pipe(Effect.result);
+            return toCallToolResult(
+              outcome._tag === "Success"
+                ? success(outcome.success, args)
+                : failure(outcome.failure, requestContext(args)),
             );
           }
           // An OAuth client has no calling thread; the gateway then needs explicit targets.
@@ -138,7 +179,19 @@ export const layer = McpToolAccess.toLayer(
             invocation.thread === undefined
               ? undefined
               : { environmentId: local.environmentId, threadId: invocation.thread.threadId };
-          const run = Effect.promise(() => runGatewayTool(context, name, args, { caller })).pipe(
+          // A relayed call runs there as the app's user, and a local one as this server's own
+          // client, so neither end sees the calling chat's modes; they are enforced here.
+          // Refused here first; the app answering a relayed call applies the same limits to the
+          // target as it reads it, since this server only sees what that app reports.
+          const limits = READ_TOOL.test(name) ? undefined : (yield* loadCaller()).limits;
+          const relayed = limits === undefined ? context : local.contextFor(limits);
+          const toolContext =
+            limits === undefined
+              ? relayed
+              : { ...relayed, port: withinModes(relayed.port, limits, modeRefusal) };
+          const run = Effect.promise(() =>
+            runGatewayTool(toolContext, name, args, { caller }),
+          ).pipe(
             Effect.flatMap((run) => {
               const created = run.ok ? (run.value as { threadId?: unknown }) : undefined;
               const isNamedRemoteChild =

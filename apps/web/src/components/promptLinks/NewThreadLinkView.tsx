@@ -1,5 +1,9 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { getCloneDestinationPath } from "@t3tools/client-runtime/operations/projects";
+import {
+  getAddProjectInitialQuery,
+  getCloneDestinationPath,
+  getCloneDirectoryPath,
+} from "@t3tools/client-runtime/operations/projects";
 import {
   findPromptLinkProjects,
   findPromptLinkPullRequestThread,
@@ -45,6 +49,7 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 import { suggestAppAccessForRemote } from "../sourceControlAppAccessToast";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { placeLinkedPrompt, warnAboutHiddenCharacters } from "./linkedPrompt";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 type LinkState =
   | { readonly status: "opening" }
@@ -137,7 +142,7 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
       replace: true,
     }).catch(() => null);
     if (opened === null) {
-      setState({ status: "failed", message: "T3 Code could not open a new thread." });
+      setState({ status: "failed", message: `${APP_NAME} could not open a new thread.` });
       return;
     }
     setState({ status: "opened" });
@@ -198,25 +203,31 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
   const cloneRepository = async (repository: PromptLinkRepository) => {
     const environmentId = lastActiveEnvironmentId();
     const environment = environments.find((entry) => entry.environmentId === environmentId);
-    const newProjectsRoot = environment?.serverConfig?.newProjectsRoot ?? null;
-    if (environmentId === null || newProjectsRoot === null) {
+    const serverConfig = environment?.serverConfig ?? null;
+    const newProjectsRoot = serverConfig?.newProjectsRoot ?? null;
+    if (environmentId === null || serverConfig === null || newProjectsRoot === null) {
       setState({
         status: "failed",
-        message:
-          "This machine cannot clone from a link. Update T3 Code on it, or clone the repository from the command palette.",
+        message: `This machine cannot clone from a link. Update ${APP_NAME} on it, or clone the repository from the command palette.`,
       });
       return;
     }
     setState({ status: "opening" });
-    const projectId = newProjectId();
+    const remoteUrl = `https://github.com/${repository.owner}/${repository.name}.git`;
+    const settings = serverConfig.settings;
     const result = await startProjectClone({
       environmentId,
       input: {
-        projectId,
+        projectId: newProjectId(),
         title: repository.name,
         createdAt: new Date().toISOString(),
-        remoteUrl: `https://github.com/${repository.owner}/${repository.name}.git`,
-        destinationPath: getCloneDestinationPath(newProjectsRoot, repository.name),
+        remoteUrl,
+        destinationPath: getCloneDestinationPath(
+          settings.ghqCloneLayout
+            ? getAddProjectInitialQuery(settings.addProjectBaseDirectory)
+            : newProjectsRoot,
+          getCloneDirectoryPath(remoteUrl, settings.ghqCloneLayout === true),
+        ),
       },
     });
     if (result._tag === "Failure") {
@@ -237,9 +248,10 @@ export function NewThreadLinkView({ link }: { readonly link: NewThreadLink }) {
       environmentId,
       `https://github.com/${repository.owner}/${repository.name}.git`,
     );
-    const project = await waitForProject(scopeProjectRef(environmentId, projectId), 5_000).catch(
-      () => null,
-    );
+    const project = await waitForProject(
+      scopeProjectRef(environmentId, result.value.projectId),
+      5_000,
+    ).catch(() => null);
     if (project === null) {
       setState({ status: "failed", message: "The clone started, but its project did not appear." });
       return;

@@ -6,15 +6,13 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/http";
 
-import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
-import * as ManagedRelay from "../relay/managedRelay.ts";
 import { type RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const DEFAULT_PULL_REQUEST_DIFF_TIMEOUT_MS = 60_000;
 
@@ -28,7 +26,7 @@ export class PullRequestDiffCredentialRejectedError extends Schema.TaggedError<P
   },
 ) {
   override get message(): string {
-    return "This environment session is no longer valid (invalid_credential). Refresh the page or quit and reopen T3 Code.";
+    return `This environment session is no longer valid (invalid_credential). Refresh the page or quit and reopen ${APP_NAME}.`;
   }
 }
 
@@ -41,10 +39,6 @@ export const fetchEnvironmentPullRequestDiff = Effect.fn(
 )(function* (input: {
   readonly prepared: PreparedConnection;
   readonly diff: PullRequestDiffInput;
-  readonly signer: Option.Option<ManagedRelay.ManagedRelayDpopSigner["Service"]>;
-  readonly remoteAuthorization?: Option.Option<
-    RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]
-  >;
   readonly timeoutMs?: number;
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
@@ -82,10 +76,6 @@ export const layer: Layer.Layer<PullRequestDiffLoader, never, HttpClient.HttpCli
   PullRequestDiffLoader,
   Effect.gen(function* () {
     const httpClient = yield* HttpClient.HttpClient;
-    const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
-    const remoteAuthorization = yield* Effect.serviceOption(
-      RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
-    );
     // The HTTP fetch owns the load span.
     return PullRequestDiffLoader.of({
       load: Effect.fnUntraced(
@@ -93,8 +83,6 @@ export const layer: Layer.Layer<PullRequestDiffLoader, never, HttpClient.HttpCli
           return yield* fetchEnvironmentPullRequestDiff({
             prepared,
             diff: input,
-            signer,
-            remoteAuthorization,
           });
         },
         Effect.provideService(HttpClient.HttpClient, httpClient),

@@ -1,14 +1,21 @@
+import type { ServerInstallation } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { compareSemverVersions } from "./semver.ts";
 
-const CLI_RELEASE_REPOSITORY = "pingdotgg/t3code";
+// The fork publishes its own `t3` builds; installing upstream's would replace the fork server.
+// scripts/install.sh and install.ps1 repeat it; scripts/install.test.ts keeps them in step.
+export const CLI_RELEASE_REPOSITORY = "jayleaton/ada";
 export const CLI_RELEASES_PAGE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/releases`;
+export const LICENSE_URL = `https://github.com/${CLI_RELEASE_REPOSITORY}/blob/main/LICENSE`;
 export const CLI_RELEASE_CHECKSUMS_FILE = "SHA256SUMS";
+/** The release's `t3` package manifest, listed in its checksums; read by npmReleaseDatabaseMigration. */
+export const CLI_RELEASE_MANIFEST_FILE = "t3-release.json";
 export const CLI_RELEASE_BASE_URL_ENV = "T3CODE_RELEASE_BASE_URL";
 
-// Keep archive keys aligned with the Linux matrix, Windows ARM64 build, and cli_archive rows in release.yml.
+// Keep archive keys aligned with the Linux matrix, Windows ARM64 build, and cli_archive rows in release.yml,
+// and with the SSH runner's host check in packages/ssh/src/tunnel.ts.
 // Node single-executables do not support darwin-x64 and segfault at startup.
 const CLI_ARCHIVE_PLATFORM_KEYS = [
   "darwin-arm64",
@@ -37,6 +44,7 @@ export function cliArchiveTarCommand(
   return `${systemRoot}\\System32\\tar.exe`;
 }
 
+// install.sh, install.ps1 and `t3 update` fetch this exact name, so it stays `t3-…` while desktop downloads say Ada.
 export function cliArchiveFileName(version: string, platformKey: CliArchivePlatformKey): string {
   return `t3-${version}-${platformKey}.${platformKey.startsWith("win32") ? "zip" : "tar.gz"}`;
 }
@@ -48,6 +56,22 @@ export function cliReleaseDownloadBaseUrl(
   baseUrl: string | undefined = CLI_RELEASE_DEFAULT_BASE_URL,
 ): string {
   return `${(baseUrl?.trim() || CLI_RELEASE_DEFAULT_BASE_URL).replace(/\/+$/, "")}/v${version}`;
+}
+
+/** `segments` added to `baseUrl`'s path, keeping its query, such as a signed mirror URL's token. */
+export function releaseAssetUrl(baseUrl: string, ...segments: ReadonlyArray<string>): string {
+  const url = new URL(baseUrl);
+  url.pathname = [url.pathname.replace(/\/+$/, ""), ...segments.map(encodeURIComponent)].join("/");
+  return url.toString();
+}
+
+/** A file of release `version`, from `baseUrl` laid out as GitHub's release downloads. */
+export function cliReleaseAssetUrl(
+  version: string,
+  fileName: string,
+  baseUrl: string | undefined = CLI_RELEASE_DEFAULT_BASE_URL,
+): string {
+  return releaseAssetUrl(baseUrl?.trim() || CLI_RELEASE_DEFAULT_BASE_URL, `v${version}`, fileName);
 }
 
 export function parseChecksums(text: string): ReadonlyMap<string, string> {
@@ -84,6 +108,21 @@ export function crossesReleaseTrack(fromVersion: string, toVersion: string): boo
 /** The desktop update track a build belongs to. Preview builds have no feed and read as Stable. */
 export function desktopUpdateChannelOf(version: string): "latest" | "nightly" {
   return cliReleaseChannelOf(version) === "nightly" ? "nightly" : "latest";
+}
+
+/**
+ * The update feed file a desktop app on this platform reads, which an update mirror publishes at
+ * its root beside the release's CLI archives.
+ */
+export function updateFeedFileName(
+  channel: "latest" | "nightly",
+  platform: NodeJS.Platform,
+  arch: string,
+): string {
+  if (platform === "darwin") return `${channel}-mac.yml`;
+  if (platform === "linux")
+    return arch === "arm64" ? `${channel}-linux-arm64.yml` : `${channel}-linux.yml`;
+  return `${channel}.yml`;
 }
 
 /** Whether a track switch may install `found` after its database check cleared `checked`: any build
@@ -125,6 +164,29 @@ const NpmReleaseMigrationManifest = Schema.Struct({
   t3code: Schema.Struct({ databaseMigration: Schema.Int }),
 });
 const decodeNpmReleaseMigrationManifest = Schema.decodeUnknownOption(NpmReleaseMigrationManifest);
+
+// Every fork release is a prerelease, so GitHub's /releases/latest/download never resolves.
+const CLI_INSTALL_SCRIPT_BASE_URL = `https://raw.githubusercontent.com/${CLI_RELEASE_REPOSITORY}/main/scripts`;
+
+/** The one-line install of the `t3` CLI, optionally pinned to `version`. */
+export function cliInstallCommand(platform: "win32" | "posix", version?: string): string {
+  if (platform === "win32") {
+    const pin = version === undefined ? "" : `$env:T3CODE_VERSION="${version}"; `;
+    return `${pin}irm ${CLI_INSTALL_SCRIPT_BASE_URL}/install.ps1 | iex`;
+  }
+  const pin = version === undefined ? "" : `T3CODE_VERSION=${version} `;
+  return `curl -fsSL ${CLI_INSTALL_SCRIPT_BASE_URL}/install.sh | ${pin}sh`;
+}
+
+/** What to run on a server machine that cannot update itself; npm and npx install upstream's server. */
+export function manualServerUpdateCommand(
+  targetVersion: string,
+  installation?: ServerInstallation,
+): string {
+  return installation?.kind === "linux-headless"
+    ? `t3-headless-update install ${targetVersion}`
+    : `t3 update ${targetVersion}`;
+}
 
 /** Highest database migration a release's server knows, from its npm `t3` manifest. */
 export function npmReleaseDatabaseMigration(manifest: unknown): number | undefined {

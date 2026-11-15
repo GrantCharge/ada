@@ -55,6 +55,8 @@ export type T3McpToolSummaryAction =
   | "environment-link"
   | "environment-unlink"
   | "environment-update"
+  | "theme-read"
+  | "theme-set"
   | "attachment-prepare"
   | "attachment-discard"
   | "attachment-send"
@@ -68,7 +70,8 @@ export type T3McpToolSummaryAction =
   | "browser"
   | "device"
   | "html-preview"
-  | "html-render";
+  | "html-render"
+  | "send-to-user";
 
 export interface T3McpToolDefinition {
   readonly displayName: string;
@@ -86,7 +89,14 @@ function tool(
   return { displayName, labels, icon, summaryAction };
 }
 
-const T3_MCP_SERVER_ALIASES = new Set(["t3-code", "t3_code", "t3code"]);
+// Codex registers "t3-code-direct" for T3 tools kept out of Code Mode.
+const T3_MCP_SERVER_ALIASES = new Set([
+  "t3-code",
+  "t3_code",
+  "t3code",
+  "t3-code-direct",
+  "t3_code_direct",
+]);
 
 const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   link_pull_request: tool(
@@ -152,21 +162,17 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   ),
   schedule_task: tool(["Schedule", "Scheduling", "Scheduled", "a task"], "schedule-create"),
   list_scheduled_tasks: tool(["List", "Listing", "Listed", "scheduled tasks"], "schedule-list"),
-  update_scheduled_task: tool(
-    ["Update", "Updating", "Updated", "a scheduled task"],
-    "schedule-update",
-  ),
   delete_scheduled_task: tool(
     ["Delete", "Deleting", "Requested deletion of", "a scheduled task"],
     "schedule-delete",
   ),
   request_secret: tool(["Ask for", "Asking for", "Asked for", "a secret"], "secret-request"),
-  create_threads: tool(["Create", "Creating", "Created", "T3 threads"], "thread-create"),
-  t3_thread_start: tool(["Start", "Starting", "Started", "a T3 thread"], "thread-create"),
-  t3_thread_list: tool(["List", "Listing", "Listed", "T3 threads"], "thread-list"),
-  t3_thread_read: tool(["Read", "Reading", "Read", "a T3 thread"], "thread-read"),
-  t3_thread_send: tool(["Send", "Sending", "Sent", "to a T3 thread"], "thread-send"),
-  t3_thread_wait: tool(["Wait", "Waiting", "Waited", "for a T3 thread"], "thread-wait"),
+  create_threads: tool(["Create", "Creating", "Created", "threads"], "thread-create"),
+  t3_thread_start: tool(["Start", "Starting", "Started", "a thread"], "thread-create"),
+  t3_thread_list: tool(["List", "Listing", "Listed", "threads"], "thread-list"),
+  t3_thread_read: tool(["Read", "Reading", "Read", "a thread"], "thread-read"),
+  t3_thread_send: tool(["Send", "Sending", "Sent", "to a thread"], "thread-send"),
+  t3_thread_wait: tool(["Wait", "Waiting", "Waited", "for a thread"], "thread-wait"),
   t3_workflow_stop: tool(
     ["Stop", "Stopping", "Requested a stop for", "a workflow"],
     "workflow-stop",
@@ -176,7 +182,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     "background-wait",
   ),
   t3_thread_interrupt: tool(
-    ["Interrupt", "Interrupting", "Requested an interrupt of", "a T3 thread"],
+    ["Interrupt", "Interrupting", "Requested an interrupt of", "a thread"],
     "thread-interrupt",
   ),
   t3_worktree_handoff: tool(
@@ -289,6 +295,23 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Run", "Running", "Requested a run of", "a scheduled task"],
     "schedule-run",
   ),
+  t3_list_scheduled_tasks: tool(["List", "Listing", "Listed", "scheduled tasks"], "schedule-list"),
+  t3_create_scheduled_task: tool(
+    ["Schedule", "Scheduling", "Scheduled", "a task"],
+    "schedule-create",
+  ),
+  t3_update_scheduled_task: tool(
+    ["Update", "Updating", "Updated", "a scheduled task"],
+    "schedule-update",
+  ),
+  t3_delete_scheduled_task: tool(
+    ["Delete", "Deleting", "Requested deletion of", "a scheduled task"],
+    "schedule-delete",
+  ),
+  t3_run_scheduled_task: tool(
+    ["Run", "Running", "Requested a run of", "a scheduled task"],
+    "schedule-run",
+  ),
   t3_queue: tool(["Manage", "Managing", "Managed", "queued messages"], "queue-edit"),
   t3_pending_request: tool(
     ["Handle", "Handling", "Handled", "pending questions"],
@@ -329,7 +352,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_thread_search: tool(["Search", "Searching", "Searched", "thread content"], "thread-search"),
   t3_thread_transfers: tool(["Read", "Reading", "Read", "thread transfers"], "thread-transfers"),
   t3_thread_organize: tool(["Organize", "Organizing", "Organized", "a thread"], "thread-organize"),
-  t3_thread_update: tool(["Update", "Updating", "Updated", "T3 thread metadata"], "thread-update"),
+  t3_thread_update: tool(["Update", "Updating", "Updated", "thread metadata"], "thread-update"),
   t3_worktree_list: tool(["List", "Listing", "Listed", "workspace branches"], "worktree-list"),
   t3_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),
   t3_preview_close: tool(["Close", "Closing", "Closed", "a preview tab"], "browser", "browser"),
@@ -357,6 +380,8 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Update", "Updating", "Updated", "environment preferences"],
     "environment-update",
   ),
+  t3_theme_read: tool(["Read", "Reading", "Read", "themes"], "theme-read"),
+  t3_theme_set: tool(["Set", "Setting", "Set", "the theme"], "theme-set"),
   t3_thread_launch: tool(["Launch", "Launching", "Launched", "a project thread"], "thread-create"),
   t3_project_list: tool(["List", "Listing", "Listed", "projects"], "project-list"),
   t3_project_read: tool(["Read", "Reading", "Read", "a project"], "project-read"),
@@ -375,6 +400,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   t3_thread_send_attachments: tool(["Send", "Sending", "Sent", "attachments"], "attachment-send"),
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
+  send_to_user: tool(["Send", "Sending", "Sent", "a message"], "send-to-user"),
 };
 
 export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(T3_MCP_TOOLS));
@@ -383,8 +409,24 @@ function normalizeT3McpToolLabel(value: string): string {
   return value.replace(/\s+(?:complete|completed)\s*$/i, "").trim();
 }
 
-// ACP tool prefixes vary; match loosely but require a known display-name entry.
+// Timelines resolve every work row's tool name on each update; names repeat across updates.
+// ACP titles can carry whole commands, so long labels are parsed but not kept.
+const toolNameCache = new Map<string, string | null>();
+const TOOL_NAME_CACHE_LIMIT = 10_000;
+const TOOL_NAME_CACHE_MAX_KEY_LENGTH = 256;
+
 function resolveT3McpToolName(value: string): string | null {
+  if (value.length > TOOL_NAME_CACHE_MAX_KEY_LENGTH) return parseT3McpToolName(value);
+  const cached = toolNameCache.get(value);
+  if (cached !== undefined) return cached;
+  const name = parseT3McpToolName(value);
+  if (toolNameCache.size >= TOOL_NAME_CACHE_LIMIT) toolNameCache.clear();
+  toolNameCache.set(value, name);
+  return name;
+}
+
+// ACP tool prefixes vary; match loosely but require a known display-name entry.
+function parseT3McpToolName(value: string): string | null {
   const label = normalizeT3McpToolLabel(value);
   const mcpMatch = /^mcp__(?<server>.+?)__(?<tool>.+)$/i.exec(label);
   if (mcpMatch?.groups) {
@@ -396,9 +438,10 @@ function resolveT3McpToolName(value: string): string | null {
       : null;
   }
 
-  const namespaceMatch = /^(?<server>t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(
-    label,
-  );
+  const namespaceMatch =
+    /^(?<server>t3[-_]code[-_]direct|t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(
+      label,
+    );
   if (namespaceMatch?.groups) {
     return namespaceMatch.groups.tool ?? null;
   }

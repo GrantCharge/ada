@@ -19,9 +19,12 @@ import {
 } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
+import { resolveTaggedSourceVersion } from "../../scripts/lib/tagged-source-version";
 import { thirdPartyLicensesPlugin } from "../../scripts/lib/third-party-licenses";
 import { tailwindPlugins } from "./vite/tailwind";
 import { warmBundledDevPlugin } from "./vite/warmBundledDev";
+import { APP_NAME } from "@t3tools/shared/branding";
+import { formatAppDisplayName, resolveWebAppStageLabel } from "./src/branding.logic";
 
 const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
@@ -34,17 +37,9 @@ const explicitHost = process.env.HOST?.trim();
 const host = explicitHost || "localhost";
 const configuredWsUrl = isSingleOriginDev ? undefined : process.env.VITE_WS_URL?.trim();
 const configuredHttpUrl = isSingleOriginDev ? undefined : process.env.VITE_HTTP_URL?.trim();
-const configuredRelayUrl = repoEnv.VITE_T3CODE_RELAY_URL?.trim() || "";
-const configuredClerkPublishableKey = repoEnv.VITE_CLERK_PUBLISHABLE_KEY?.trim() || "";
-const configuredClerkJwtTemplate = repoEnv.VITE_CLERK_JWT_TEMPLATE?.trim() || "";
-const configuredClerkCliOAuthClientId = repoEnv.VITE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() || "";
-const configuredRelayTracingUrl = repoEnv.VITE_RELAY_OTLP_TRACES_URL?.trim() || "";
-const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.trim() || "";
-const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
 const configuredReleaseChannel =
   process.env.T3CODE_BUILT_DEV === "1" ? "dev" : process.env.VITE_RELEASE_CHANNEL?.trim() || "";
-const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
 const configuredDesktopUpdateRepository =
   process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
   process.env.GITHUB_REPOSITORY?.trim() ||
@@ -72,6 +67,11 @@ const builtDev = process.env.T3CODE_BUILT_DEV === "1";
 const bundledDevEnv = process.env.T3CODE_BUNDLED_DEV?.trim().toLowerCase();
 const bundledDev = bundledDevEnv === "1" || bundledDevEnv === "true";
 
+// Bundled dev and `build --watch` pass Rolldown `exclude` but not Vite's default `ignored`, so
+// they watch node_modules. Those files are pnpm-store hardlinks shared by every worktree, so each
+// `vp i` or worktree removal elsewhere rebuilds every long-running server and leaks native memory.
+const rolldownWatchExclude = [/[\\/]node_modules[\\/]/];
+
 const buildSourcemap: boolean | "hidden" =
   sourcemapEnv === "0" || sourcemapEnv === "false"
     ? false
@@ -96,6 +96,8 @@ const unitTestProject = {
 
 // Hash checkout paths to ports 61000-64999; Vitest's fixed port collides under inherited strictPort.
 const browserTestApiPort = 61_000 + ((Hash.string(import.meta.dirname) >>> 0) % 4_000);
+
+const lastGarbageCollection = new WeakMap<object, number>();
 
 const browserTestProject = {
   extends: true,
@@ -141,6 +143,21 @@ const browserTestProject = {
         // position starts hovered. test/browserSetup.ts parks it off the page before each test.
         resetPointer: async ({ page }) => {
           await page.mouse.move(-1, -1);
+        },
+        // Finished files' iframes hold Chromium shared memory until V8 collects them; minutes of it
+        // break the data pipes under the page's long-lived sockets and Vitest loses the browser
+        // (crbug.com/530892387). Vitest's own workaround only fires on low disk space. A full GC
+        // costs up to ~0.5s on CI, so collect at most every 15s per page.
+        collectGarbage: async ({ page }) => {
+          const now = Date.now();
+          if (now - (lastGarbageCollection.get(page) ?? 0) < 15_000) return;
+          lastGarbageCollection.set(page, now);
+          const cdp = await page.context().newCDPSession(page);
+          try {
+            await cdp.send("HeapProfiler.collectGarbage");
+          } finally {
+            await cdp.detach();
+          }
         },
       },
     },
@@ -246,6 +263,42 @@ function chunkCycleGuardPlugin(): Plugin {
   };
 }
 
+// Bundled dev never evicts emitted files from memory (vitejs/vite#23781), so hashed names keep
+// a copy of every changed chunk from every rebuild. Fixed names overwrite the previous copy.
+function bundledDevStableNamesPlugin(): Plugin {
+  return {
+    name: "t3code:bundled-dev-stable-names",
+    apply: "serve",
+    outputOptions: (options) => ({
+      ...options,
+      chunkFileNames: "assets/[name].js",
+      assetFileNames: "assets/[name][extname]",
+    }),
+  };
+}
+
+// Stamps index.html's title with the name branding.ts resolves once the app
+// loads, so a tab opens on the right channel instead of flashing another's.
+// Desktop swaps in its injected branding from an inline script in index.html.
+function bootstrapTitlePlugin(): Plugin {
+  let development = false;
+  return {
+    name: "t3code:bootstrap-title",
+    configResolved(config) {
+      // The same flag Vite exposes to the app as import.meta.env.DEV.
+      development = !config.isProduction;
+    },
+    transformIndexHtml(html) {
+      const stageLabel = resolveWebAppStageLabel({
+        hostedAppChannel: configuredHostedAppChannel,
+        development,
+      });
+      const title = formatAppDisplayName({ baseName: APP_NAME, stageLabel });
+      return html.replace(/<title>[^<]*<\/title>/, `<title>${title}</title>`);
+    },
+  };
+}
+
 // Allow Tailnet hosts for sharing; Tailscale-controlled DNS prevents attacker rebinding.
 const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .split(",")
@@ -253,19 +306,27 @@ const configuredAllowedHosts = (process.env.T3CODE_DEV_ALLOWED_HOSTS ?? "")
   .filter((entry) => entry.length > 0);
 const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
-export default defineConfig(() => {
+export default defineConfig(({ command }) => {
+  // `vp dev` and `--built` dev pair this client with a server run from source, which reports the
+  // manifest version. Only a production build is paired with a packed server.
+  const configuredAppVersion =
+    process.env.APP_VERSION?.trim() ||
+    (command === "build" && !builtDev
+      ? resolveTaggedSourceVersion(`${import.meta.dirname}/../..`, pkg.version)
+      : pkg.version);
   return {
     run: {
       tasks: {
-        // tsc (tsc-rs) rewrites the tsbuildinfo it reads, which keeps a task out of the cache.
+        // A local tsbuildinfo is leftover build state, not a typecheck input.
         typecheck: {
-          command: "tsc --noEmit",
+          command: "effect-tsgo tsrs --noEmit",
           cache: { input: [{ auto: true }, "!*.tsbuildinfo"] },
         },
       },
     },
     assetsInclude: ["**/*.wasm"],
     plugins: [
+      bootstrapTitlePlugin(),
       devCompressionPlugin(),
       chunkCycleGuardPlugin(),
       builtDev
@@ -283,11 +344,10 @@ export default defineConfig(() => {
       react({ compiler: true }),
       tailwindPlugins(bundledDev),
       warmBundledDevPlugin(),
+      bundledDev ? bundledDevStableNamesPlugin() : undefined,
     ],
     optimizeDeps: {
       include: [
-        "@clerk/clerk-js",
-        "@clerk/react/internal",
         "@pierre/diffs",
         "@pierre/diffs/edit",
         "@pierre/diffs/react",
@@ -301,17 +361,6 @@ export default defineConfig(() => {
       "import.meta.env.VITE_WS_URL": JSON.stringify(configuredWsUrl ?? ""),
       // Override .env URLs with empty values in single-origin dev so clients use window.location.origin.
       "import.meta.env.VITE_HTTP_URL": JSON.stringify(configuredHttpUrl ?? ""),
-      "import.meta.env.VITE_T3CODE_RELAY_URL": JSON.stringify(configuredRelayUrl),
-      "import.meta.env.VITE_CLERK_PUBLISHABLE_KEY": JSON.stringify(configuredClerkPublishableKey),
-      "import.meta.env.VITE_CLERK_JWT_TEMPLATE": JSON.stringify(configuredClerkJwtTemplate),
-      "import.meta.env.VITE_CLERK_CLI_OAUTH_CLIENT_ID": JSON.stringify(
-        configuredClerkCliOAuthClientId,
-      ),
-      "import.meta.env.VITE_RELAY_OTLP_TRACES_URL": JSON.stringify(configuredRelayTracingUrl),
-      "import.meta.env.VITE_RELAY_OTLP_TRACES_DATASET": JSON.stringify(
-        configuredRelayTracingDataset,
-      ),
-      "import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN": JSON.stringify(configuredRelayTracingToken),
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
       "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
       "import.meta.env.T3CODE_DESKTOP_UPDATE_REPOSITORY": JSON.stringify(
@@ -323,12 +372,6 @@ export default defineConfig(() => {
     },
     resolve: {
       tsconfigPaths: true,
-      alias: {
-        "@betteroffice/fonts-cjk": new URL(
-          "./src/components/files/office/fonts-cjk.ts",
-          import.meta.url,
-        ).pathname,
-      },
       dedupe: ["react", "react-dom"],
     },
     experimental: {
@@ -344,6 +387,7 @@ export default defineConfig(() => {
       warmup: {
         clientFiles: ["./src/main.tsx"],
       },
+      watch: { exclude: rolldownWatchExclude },
       ...(devProxyTarget
         ? {
             // Share prefixes with the backend catch-all so the proxy and 404 lists cannot drift.
@@ -379,6 +423,7 @@ export default defineConfig(() => {
       emptyOutDir: true,
       manifest: true,
       sourcemap: buildSourcemap,
+      ...(builtDev ? { watch: { exclude: rolldownWatchExclude } } : {}),
       rolldownOptions: {
         output: {
           // PDF.js resolves decoder modules and ICC data relative to wasmUrl.

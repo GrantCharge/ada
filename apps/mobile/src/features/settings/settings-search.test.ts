@@ -6,16 +6,14 @@ const SECTIONS = [
   { rows: [{ id: "usage", label: "Usage" }] },
   {
     title: "Connections",
-    rows: [
-      { id: "account", label: "T3 Account" },
-      { id: "SettingsEnvironments", label: "Environments" },
-    ],
+    rows: [{ id: "SettingsEnvironments", label: "Environments" }],
   },
   {
     title: "Interface",
     rows: [
       { id: "SettingsAppearance", label: "Appearance" },
       { id: "SettingsKeyboard", label: "Keyboard" },
+      { id: "SettingsVoice", label: "Voice" },
     ],
   },
   {
@@ -47,6 +45,7 @@ describe("filterSettingsSections", () => {
     { query: "appear", expected: [["Interface", ["Appearance"]]] },
     { query: "KEYBOARD", expected: [["Interface", ["Keyboard"]]] },
     { query: "dark mode", expected: [["Interface", ["Appearance"]]] },
+    { query: "microphone", expected: [["Interface", ["Voice"]]] },
     { query: "agent credits", expected: [["Server settings", ["Source control"]]] },
     {
       query: "server settings",

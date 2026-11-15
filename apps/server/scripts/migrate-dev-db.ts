@@ -17,13 +17,7 @@ import { Command, Flag } from "effect/cli";
 
 import * as ProjectionStore from "../src/orchestration-v2/ProjectionStore.ts";
 import { rebuildMessageSearch } from "../src/orchestration-v2/messageSearchIndex.ts";
-import {
-  forkMigrationManifest,
-  isKnownMigrationName,
-  migrationManifest,
-  runMigrations,
-} from "../src/persistence/Migrations.ts";
-import { FORK_MIGRATIONS_TABLE } from "../src/persistence/splitLegacyForkLedger.ts";
+import { runMigrations } from "../src/persistence/Migrations.ts";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 export class MigrateDevDbNotInWorktreeError extends Schema.TaggedError<MigrateDevDbNotInWorktreeError>()(
@@ -66,6 +60,18 @@ export class MigrateDevDbSourceIsDestinationError extends Schema.TaggedError<Mig
   }
 }
 
+export class MigrateDevDbLegacySourceError extends Schema.TaggedError<MigrateDevDbLegacySourceError>()(
+  "MigrateDevDbLegacySourceError",
+  {
+    sourcePath: Schema.String,
+    legacyThreads: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return `Source database '${this.sourcePath}' holds ${this.legacyThreads} legacy threads the server has not imported into V2 yet, which this command cannot carry over. Start a server once on a T3 home holding a copy of it so it imports them, then pass the userdata/statev2.sqlite that server leaves behind as --source.`;
+  }
+}
+
 export class MigrateDevDbServerRunningError extends Schema.TaggedError<MigrateDevDbServerRunningError>()(
   "MigrateDevDbServerRunningError",
   {
@@ -95,23 +101,10 @@ export class MigrateDevDbDestinationBusyError extends Schema.TaggedError<Migrate
   }
 }
 
-export class MigrateDevDbSlotCollisionError extends Schema.TaggedError<MigrateDevDbSlotCollisionError>()(
-  "MigrateDevDbSlotCollisionError",
-  {
-    slot: Schema.Number,
-    codeName: Schema.String,
-    appliedName: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Migration slot collision at ${this.slot}: this checkout registers '${this.codeName}' but the database already applied '${this.appliedName}' in that slot. Renumber the new migration to a free slot.`;
-  }
-}
-
 export class MigrateDevDbPhaseError extends Schema.TaggedError<MigrateDevDbPhaseError>()(
   "MigrateDevDbPhaseError",
   {
-    phase: Schema.Literals(["snapshot", "prune", "compact", "migrate", "verify"]),
+    phase: Schema.Literals(["snapshot", "prune", "compact", "migrate"]),
     databasePath: Schema.String,
     cause: Schema.Defect(),
   },
@@ -235,8 +228,9 @@ const rootIsVisible = (sql: SqlClient.SqlClient) => sql`
 const COPY_CHUNK_ROWIDS = 1000;
 
 /**
- * Rows written while the copy runs may be partly copied. Those belong to
- * running threads, which the prune step drops.
+ * Rows written mid-copy belong to running threads, which the prune drops. The copy keeps only
+ * threads with V2 rows, so the legacy guard refuses sources whose unimported V1 threads would
+ * vanish (see LegacyV1ThreadImporter.pendingThreadCount).
  */
 const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath: string) {
   const sql = yield* SqlClient.SqlClient;
@@ -273,6 +267,27 @@ const copySourceSlice = Effect.fn("copyDevDbSourceSlice")(function* (sourcePath:
         cleared.add(name);
         grew = true;
       }
+    }
+  }
+
+  if (tables.some((table) => table.name === "projection_threads")) {
+    // The V2 tables, application_event_version, and the partial index arrive in
+    // the same migration. Without the hint SQLite scans each thread's stream.
+    const [pending] = filtered
+      ? yield* sql<{ count: number }>`
+          SELECT COUNT(*) AS count FROM src.projection_threads AS thread
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM src.orchestration_events AS event INDEXED BY orchestration_events_v2_created_threads_idx
+            WHERE event.application_event_version = 2
+              AND event.aggregate_kind = 'thread'
+              AND event.stream_id = thread.thread_id
+              AND event.event_type = 'thread.created'
+          )`
+      : yield* sql<{ count: number }>`SELECT COUNT(*) AS count FROM src.projection_threads`;
+    const legacyThreads = Number(pending?.count ?? 0);
+    if (legacyThreads > 0) {
+      return yield* new MigrateDevDbLegacySourceError({ sourcePath, legacyThreads });
     }
   }
 
@@ -422,6 +437,21 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
             AND stream_id NOT IN (SELECT thread_id FROM kept_threads))
            OR (aggregate_kind = 'project'
             AND stream_id NOT IN (SELECT project_id FROM kept_projects))`;
+      yield* sql`UPDATE orchestration_v2_projection_threads
+        SET payload_json = json_set(payload_json, '$.pullRequests', json((
+          SELECT json_group_array(json_remove(link.value, '$.watch') ORDER BY link.key)
+          FROM json_each(payload_json, '$.pullRequests') AS link)))
+        WHERE EXISTS (
+          SELECT 1 FROM json_each(payload_json, '$.pullRequests') AS link
+          WHERE json_extract(link.value, '$.watch') IS NOT NULL)`;
+      // Copied threads keep their real worktree paths, where a settle script would run.
+      yield* sql`UPDATE projection_projects
+        SET scripts_json = (
+          SELECT json_group_array(json_remove(script.value, '$.runOnSettle') ORDER BY script.key)
+          FROM json_each(scripts_json) AS script)
+        WHERE EXISTS (
+          SELECT 1 FROM json_each(scripts_json) AS script
+          WHERE json_extract(script.value, '$.runOnSettle') IS NOT NULL)`;
       for (const table of CLEARED_TABLES) {
         yield* sql`DELETE FROM ${sql(table)}`;
       }
@@ -444,32 +474,31 @@ const pruneSnapshot = Effect.fn("pruneDevDbSnapshot")(function* (input: RunMigra
   };
 });
 
-const verifyMigrationSlots = Effect.fn("verifyMigrationSlots")(function* () {
+// Peer links preview builds recorded 68-70 before main took those slots for other migrations.
+// A snapshot with exactly that history drops the preview's schema so main's 68+ can run.
+const PEER_LINKS_PREVIEW_HISTORY = [
+  "68:PeerLinks",
+  "69:PeerLinkFence",
+  "70:WaitingLinkRequestIndex",
+];
+
+const forgetPeerLinksPreviewHistory = Effect.fn("forgetPeerLinksPreviewHistory")(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const ledgers = [
-    { ledger: "upstream", table: "effect_sql_migrations", manifest: migrationManifest, prefix: "" },
-    {
-      ledger: "fork",
-      table: FORK_MIGRATIONS_TABLE,
-      manifest: forkMigrationManifest.map(([id, name]) => [id, name] as const),
-      prefix: "fork/",
-    },
-  ] as const;
-  for (const { ledger, table, manifest, prefix } of ledgers) {
-    const applied = yield* sql<{ migration_id: number; name: string }>`
-      SELECT migration_id, name FROM ${sql(table)}`;
-    const appliedById = new Map(applied.map((row) => [Number(row.migration_id), row.name]));
-    for (const [slot, codeName] of manifest) {
-      const appliedName = appliedById.get(slot);
-      if (appliedName !== undefined && !isKnownMigrationName(ledger, slot, appliedName)) {
-        return yield* new MigrateDevDbSlotCollisionError({
-          slot,
-          codeName: `${prefix}${codeName}`,
-          appliedName,
-        });
-      }
-    }
-  }
+  const tables = yield* sql`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'effect_sql_migrations'`;
+  if (tables.length === 0) return;
+  const tail = yield* sql<{ migration_id: number; name: string }>`
+    SELECT migration_id, name FROM effect_sql_migrations WHERE migration_id >= 68
+    ORDER BY migration_id`;
+  const history = tail.map((row) => `${row.migration_id}:${row.name}`);
+  if (history.join() !== PEER_LINKS_PREVIEW_HISTORY.join()) return;
+  yield* sql.withTransaction(
+    Effect.gen(function* () {
+      yield* sql`DROP INDEX IF EXISTS orchestration_v2_projection_turn_items_waiting_link_idx`;
+      yield* sql`DROP TABLE IF EXISTS peer_environment_links`;
+      yield* sql`DELETE FROM effect_sql_migrations WHERE migration_id >= 68`;
+    }),
+  );
 });
 
 export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
@@ -523,7 +552,6 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
   }
 
   yield* fs.makeDirectory(stateDir, { recursive: true });
-  yield* ensureNotInUse(databasePath);
 
   const wrapPhase =
     (phase: MigrateDevDbPhaseError["phase"], phaseDatabasePath: string) =>
@@ -539,29 +567,26 @@ export const runMigrateDevDb = Effect.fn("runMigrateDevDb")(function* (
     yield* Console.log(`Copying visible threads from ${sourcePath} (read-only)...`);
     yield* copySourceSlice(sourcePath).pipe(
       Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),
-      wrapPhase("snapshot", sourcePath),
+      Effect.catchTags({
+        SqlError: (cause) =>
+          Effect.fail(
+            new MigrateDevDbPhaseError({ phase: "snapshot", databasePath: sourcePath, cause }),
+          ),
+      }),
     );
+    // Checkpoints the destination, so it runs after the copy's legacy guard.
+    yield* ensureNotInUse(databasePath);
 
     // Migrate first so prune queries can use columns missing from older sources.
     yield* Console.log("Running migrations on the snapshot...");
     const executed = yield* Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
       yield* sql.unsafe("PRAGMA foreign_keys = ON").unprepared;
+      yield* forgetPeerLinksPreviewHistory();
       return yield* runMigrations();
     }).pipe(
       Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),
       wrapPhase("migrate", snapshotPath),
-    );
-
-    // Detect migration slot collisions before replacing the worktree database.
-    yield* verifyMigrationSlots().pipe(
-      Effect.provide(NodeSqliteClient.layer({ filename: snapshotPath })),
-      Effect.catchTags({
-        SqlError: (cause) =>
-          Effect.fail(
-            new MigrateDevDbPhaseError({ phase: "verify", databasePath: snapshotPath, cause }),
-          ),
-      }),
     );
 
     yield* Console.log(

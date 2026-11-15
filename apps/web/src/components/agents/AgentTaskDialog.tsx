@@ -40,6 +40,7 @@ import {
   sortProfilesByNewChatPick,
   sortProjectsByNewChatPick,
 } from "./agentNewChat.logic";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const NEW_CHAT_HISTORY_KEY = "t3code:agents:new-chat-history";
 const COLLAPSED_CHOICES = 4;
@@ -145,7 +146,7 @@ export function AgentTaskDialog({
                     disabled={item.runtimeMode === "read-only"}
                     onChange={() => setProfileId(item.profileId)}
                   />
-                  <AgentIcon icon={item.icon} />
+                  <AgentIcon icon={item.icon} iconId={item.iconId} />
                   <span className="agent-choice-body">
                     <span className="agent-choice-name">{item.name}</span>
                     {item.description && (
@@ -450,7 +451,7 @@ function AgentTaskForm({
       </div>
       {target && !supportsAgentDrafts && (
         <p role="status">
-          Update this machine’s T3 Agents server to send from this dialog. You can still create an
+          Update this machine’s {APP_NAME} server to send from this dialog. You can still create an
           empty chat.
         </p>
       )}

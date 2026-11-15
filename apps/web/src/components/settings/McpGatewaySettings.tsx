@@ -1,10 +1,25 @@
+import { useAtomValue } from "@effect/atom-react";
 import { Link } from "@tanstack/react-router";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import { type GatewayScope, type GatewayStatusSnapshot } from "@t3tools/client-runtime/gateway";
+import {
+  type GatewayScope,
+  type GatewayStatusSnapshot,
+  relayGrantsProblem,
+} from "@t3tools/client-runtime/gateway";
+import {
+  EnvironmentId,
+  type McpGatewayRelayPreview,
+  MCP_GATEWAY_RELAY_GRANTS_MAX,
+  WS_METHODS,
+} from "@t3tools/contracts";
+import { createEnvironmentRpcQueryAtomFamily } from "@t3tools/client-runtime/state/runtime";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
+import * as Atom from "effect/reactivity/Atom";
 import { ChevronDownIcon } from "lucide-react";
 import { useState, useSyncExternalStore } from "react";
 
 import { useEnvironments } from "../../state/environments";
+import { connectionAtomRuntime } from "../../connection/runtime";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
@@ -24,6 +39,7 @@ import {
 } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "./settingsLayout";
+import { ServerAgentGatewaySettings } from "./ServerAgentGatewaySettings";
 import {
   getMcpGatewayConfiguration,
   getMcpGatewayPort,
@@ -32,6 +48,7 @@ import {
   getMcpGatewayStatusSnapshot,
   MCP_GATEWAY_BASELINE_SCOPES,
   MCP_GATEWAY_CONFIGURABLE_SCOPES,
+  MCP_GATEWAY_SCOPE_LABELS,
   publishMcpGatewayStatus,
   subscribeMcpGatewayStatus,
   subscribeMcpGatewayStatusSnapshot,
@@ -43,35 +60,80 @@ import {
   setMcpGatewayToken,
   subscribeMcpGatewayConfiguration,
 } from "../../mcpGatewayState";
-
-/**
- * Least-privilege scopes applied by the machine-level `On` baseline. The
- * per-machine menu exposes the full v3 contract separately so additional
- * authority is never granted implicitly.
- */
-const SCOPE_LABELS: Record<GatewayScope, string> = {
-  read: "Read environments and threads",
-  create: "Create threads",
-  send: "Send messages",
-  control: "Control active work",
-  lifecycle: "Pause, retry, and restart work",
-  approval: "Review and decide approvals",
-  artifact: "Retrieve thread artifacts",
-  review: "Read and update code reviews",
-  admin: "Change repositories and access",
-  delivery: "Manage subscriptions and webhooks",
-};
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const ADVANCED_SCOPES = MCP_GATEWAY_CONFIGURABLE_SCOPES.filter(
   (scope) => !MCP_GATEWAY_BASELINE_SCOPES.includes(scope),
 );
+
+/** The scopes a server would still honor for this app on an environment, and why no more. */
+export interface McpGrantCeiling {
+  readonly scopes: ReadonlyArray<GatewayScope>;
+  readonly reason: string;
+}
 
 export interface McpGrantEnvironmentRow {
   readonly environmentId: string;
   readonly label: string;
   readonly connectionState: string;
   readonly failureReason?: EnvironmentConnectionPresentation["failureReason"];
+  readonly ceiling?: McpGrantCeiling | undefined;
 }
+
+/**
+ * What servers would relay for this app on each environment, from their own answers: a scope is
+ * open where any other server would honor it, and the reason is a server's own.
+ */
+export function mcpGrantCeilings(
+  previews: ReadonlyArray<{ readonly serverId: string; readonly preview: McpGatewayRelayPreview }>,
+  environmentIds: ReadonlyArray<string>,
+): Record<string, McpGrantCeiling | undefined> {
+  return Object.fromEntries(
+    environmentIds.map((environmentId) => {
+      const others = previews.filter(({ serverId }) => serverId !== environmentId);
+      const scopes = [
+        ...new Set(others.flatMap(({ preview }) => preview.grants[environmentId] ?? [])),
+      ];
+      if (others.length === 0 || MCP_GATEWAY_CONFIGURABLE_SCOPES.every((s) => scopes.includes(s))) {
+        return [environmentId, undefined];
+      }
+      const reason =
+        others.map(({ preview }) => preview.refusals[environmentId]).find((r) => r !== undefined) ??
+        others.map(({ preview }) => preview.limit).find((r) => r !== undefined) ??
+        "No connected server relays more here through this app.";
+      return [environmentId, { scopes, reason }];
+    }),
+  );
+}
+
+const relayPreview = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "mcp-gateway:relay-preview",
+  tag: WS_METHODS.mcpGatewayPreview,
+  staleTimeMs: 10_000,
+});
+
+const grantCeilingsAtom = Atom.family((key: string) =>
+  Atom.make((get) => {
+    const { servers, environments } = JSON.parse(key) as {
+      readonly servers: ReadonlyArray<string>;
+      readonly environments: ReadonlyArray<string>;
+    };
+    const grants = Object.fromEntries(
+      environments
+        .slice(0, MCP_GATEWAY_RELAY_GRANTS_MAX)
+        .map((environmentId) => [environmentId, MCP_GATEWAY_CONFIGURABLE_SCOPES]),
+    );
+    // A server too old to answer is left out; it still checks each call itself.
+    const previews = servers.flatMap((serverId) => {
+      const answer = AsyncResult.getOrElse(
+        get(relayPreview({ environmentId: EnvironmentId.make(serverId), input: { grants } })),
+        () => null,
+      );
+      return answer === null ? [] : [{ serverId, preview: answer }];
+    });
+    return mcpGrantCeilings(previews, environments);
+  }),
+);
 
 function deviceConnectionText(environment: McpGrantEnvironmentRow): string {
   if (environment.connectionState === "connected") return "Connected";
@@ -92,8 +154,6 @@ function deviceConnectionText(environment: McpGrantEnvironmentRow): string {
         return "Connection timed out: check the remote server and connection route.";
       case "network":
         return "Network unavailable: check network connectivity.";
-      case "relay-unavailable":
-        return "Relay unavailable: check T3 Connect in Settings → Connections.";
       case "endpoint-unavailable":
       case "remote-unavailable":
         return "Remote unavailable: check the remote server and connection route.";
@@ -242,6 +302,9 @@ export function McpEnvironmentGrantMatrix({
       {visibleEnvironments.map((environment) => {
         const on = isGrantOn(grants, environment.environmentId);
         const scopes = scopesFor(grants, environment.environmentId);
+        const ceiling = environment.ceiling;
+        const refused = (scope: GatewayScope) =>
+          ceiling !== undefined && !ceiling.scopes.includes(scope);
         return (
           <div key={environment.environmentId} className="rounded-lg border p-3">
             <div className="flex items-center justify-between gap-3">
@@ -291,8 +354,15 @@ export function McpEnvironmentGrantMatrix({
                     }}
                   >
                     <MenuRadioItem value="off">Off</MenuRadioItem>
-                    <MenuRadioItem value="on">On (default access)</MenuRadioItem>
-                    <MenuRadioItem value="all">All capabilities</MenuRadioItem>
+                    <MenuRadioItem value="on" disabled={MCP_GATEWAY_BASELINE_SCOPES.some(refused)}>
+                      On (default access)
+                    </MenuRadioItem>
+                    <MenuRadioItem
+                      value="all"
+                      disabled={MCP_GATEWAY_CONFIGURABLE_SCOPES.some(refused)}
+                    >
+                      All capabilities
+                    </MenuRadioItem>
                   </MenuRadioGroup>
                   <MenuSeparator />
                   <MenuGroup>
@@ -301,6 +371,7 @@ export function McpEnvironmentGrantMatrix({
                       <MenuCheckboxItem
                         key={scope}
                         checked={scopes.includes(scope)}
+                        disabled={refused(scope) && !scopes.includes(scope)}
                         onCheckedChange={(checked) => {
                           onChange(
                             updateMcpGatewayGrant(
@@ -312,7 +383,7 @@ export function McpEnvironmentGrantMatrix({
                           );
                         }}
                       >
-                        {SCOPE_LABELS[scope] ?? scope}
+                        {MCP_GATEWAY_SCOPE_LABELS[scope] ?? scope}
                       </MenuCheckboxItem>
                     ))}
                   </MenuGroup>
@@ -323,6 +394,7 @@ export function McpEnvironmentGrantMatrix({
                       <MenuCheckboxItem
                         key={scope}
                         checked={scopes.includes(scope)}
+                        disabled={refused(scope) && !scopes.includes(scope)}
                         onCheckedChange={(checked) => {
                           onChange(
                             updateMcpGatewayGrant(
@@ -334,7 +406,7 @@ export function McpEnvironmentGrantMatrix({
                           );
                         }}
                       >
-                        {SCOPE_LABELS[scope]}
+                        {MCP_GATEWAY_SCOPE_LABELS[scope]}
                       </MenuCheckboxItem>
                     ))}
                   </MenuGroup>
@@ -343,8 +415,11 @@ export function McpEnvironmentGrantMatrix({
             </div>
             {scopes.length > 0 ? (
               <div className="mt-2 text-xs text-muted-foreground">
-                {scopes.map((scope) => SCOPE_LABELS[scope] ?? scope).join(", ")}
+                {scopes.map((scope) => MCP_GATEWAY_SCOPE_LABELS[scope] ?? scope).join(", ")}
               </div>
+            ) : null}
+            {ceiling !== undefined ? (
+              <div className="mt-1 text-xs text-muted-foreground">{ceiling.reason}</div>
             ) : null}
           </div>
         );
@@ -490,8 +565,43 @@ export function McpGatewayOperationalStatus({
   );
 }
 
-/** The gateway's rows; Environments shows them in a fold. */
+function McpGatewayAgentsRow() {
+  return (
+    <SettingsRow
+      id="mcp-gateway-agents"
+      title="Agents"
+      description="MCP uses the shared Agents library for instructions, provider, model, and execution settings. Changes apply to new chats; existing chats keep their instructions."
+      control={
+        <Link to="/agents" className="text-sm underline underline-offset-4">
+          Manage agents
+        </Link>
+      }
+    />
+  );
+}
+
+/**
+ * The gateway's rows; Environments shows them in a fold. The desktop app hosts its own gateway
+ * for every granted environment; each server can also host one for itself, without the app.
+ */
 export function McpGatewaySettings() {
+  const [desktop] = useState(
+    () => (window.desktopBridge?.getMcpGatewayLaunchConfig?.() ?? null) !== null,
+  );
+  return desktop ? (
+    <>
+      <DesktopMcpGatewaySettings />
+      <ServerAgentGatewaySettings includeDesktopHosted={false} />
+    </>
+  ) : (
+    <>
+      <ServerAgentGatewaySettings includeDesktopHosted />
+      <McpGatewayAgentsRow />
+    </>
+  );
+}
+
+function DesktopMcpGatewaySettings() {
   const { environments, isReady: registryReady } = useEnvironments();
   const configuration = useSyncExternalStore(
     subscribeMcpGatewayConfiguration,
@@ -538,15 +648,27 @@ export function McpGatewaySettings() {
     copyToClipboard(value, value);
   };
 
+  const grantsProblem = relayGrantsProblem(pendingGrants ?? savedGrants);
   const grantsDirty =
     pendingGrants !== null && JSON.stringify(pendingGrants) !== JSON.stringify(savedGrants);
 
+  const ceilings = useAtomValue(
+    grantCeilingsAtom(
+      JSON.stringify({
+        servers: environments
+          .filter((environment) => environment.connection.phase === "connected")
+          .map((environment) => environment.environmentId),
+        environments: environments.map((environment) => environment.environmentId),
+      }),
+    ),
+  );
   const environmentRows: ReadonlyArray<McpGrantEnvironmentRow> = environments.map(
     (environment) => ({
       environmentId: environment.environmentId,
       label: environment.label,
       connectionState: environment.connection.phase,
       failureReason: environment.connection.failureReason,
+      ceiling: ceilings[environment.environmentId],
     }),
   );
 
@@ -556,7 +678,7 @@ export function McpGatewaySettings() {
       <SettingsRow
         id="enable-mcp-gateway"
         title="Enable MCP Gateway"
-        description="Start the desktop gateway and make it available to new T3-managed agent sessions on granted local and remote environments. Restart existing agent sessions to attach the gateway."
+        description={`Start the desktop gateway and make it available to new ${APP_NAME}-managed agent sessions on granted local and remote environments. Restart existing agent sessions to attach the gateway.`}
         status={`Status: ${status}`}
         control={
           <Switch
@@ -625,7 +747,7 @@ export function McpGatewaySettings() {
       <SettingsRow
         id="mcp-gateway-environment-grants"
         title="Environment grants"
-        description="One access control per machine: off by default, or on with the baseline capabilities. Fine-grained tweaks live in each machine's menu. Changes apply when you save."
+        description="One access control per machine, off by default; tweak it in each machine's menu and save. Agents on a machine below full access in your device network can only read elsewhere."
         status={
           grantsDirty
             ? "Unsaved changes"
@@ -663,6 +785,11 @@ export function McpGatewaySettings() {
           ) : undefined
         }
       >
+        {grantsProblem !== undefined ? (
+          <p role="alert" className="mb-3 text-sm text-destructive">
+            {grantsProblem}
+          </p>
+        ) : null}
         <McpEnvironmentGrantMatrix
           environments={environmentRows}
           registryReady={registryReady}
@@ -686,19 +813,10 @@ export function McpGatewaySettings() {
           }}
         />
       </SettingsRow>
-      <SettingsRow
-        id="mcp-gateway-agents"
-        title="Agents"
-        description="MCP uses the shared Agents library for instructions, provider, model, and execution settings. Changes apply to new chats; existing chats keep their instructions."
-        control={
-          <Link to="/agents" className="text-sm underline underline-offset-4">
-            Manage agents
-          </Link>
-        }
-      />
+      <McpGatewayAgentsRow />
       <SettingsRow
         title="External MCP hosts"
-        description="For assistants outside T3 Code, merge this configuration into their MCP settings on this computer, preserving existing servers, then reconnect the assistant. For OpenCode, use the OpenCode configuration in ~/.config/opencode/opencode.jsonc. The copied configuration includes your bridge token."
+        description={`Merge this into the MCP settings of assistants outside ${APP_NAME} on this computer, keeping existing servers, then reconnect. OpenCode uses ~/.config/opencode/opencode.jsonc. Includes your bridge token.`}
         status={
           launch === null
             ? "Available in the installed desktop app."
@@ -733,7 +851,7 @@ export function McpGatewaySettings() {
       </SettingsRow>
       <SettingsRow
         title="Companion endpoint"
-        description="The desktop starts the companion when enabled. Managed agents reach it through their T3 environment connection, including remote and relay connections. External MCP hosts can use the configuration above."
+        description={`The desktop starts the companion when enabled. Managed agents reach it through their ${APP_NAME} environment connection, including remote connections. External MCP hosts can use the configuration above.`}
         status={`ws://127.0.0.1:${getMcpGatewayPort()}`}
       />
     </>

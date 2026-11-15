@@ -17,6 +17,11 @@ export const ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
 /** Asks the server to deflate large RPC frames itself, for WebSocket stacks without permessage-deflate (iOS). */
 export const DEFLATED_RPC_FRAMES_QUERY_PARAM = "deflatedFrames";
 
+/** Wire shapes a client understands, comma-separated; a client that omits one gets the older shape. */
+export const CLIENT_CAPABILITIES_QUERY_PARAM = "clientCapabilities";
+/** Secret fields may hold a secret provider reference instead of a string. */
+export const SETTINGS_SECRET_REFERENCES_CAPABILITY = "settingsSecretReferences";
+
 export const ExecutionEnvironmentPlatformOs = Schema.Literals([
   "darwin",
   "linux",
@@ -58,9 +63,19 @@ export type ExecutionEnvironmentPlatform = typeof ExecutionEnvironmentPlatform.T
 export const ServerSelfUpdateMethod = Schema.Literals(["boot-service", "respawn", "desktop-app"]);
 export type ServerSelfUpdateMethod = typeof ServerSelfUpdateMethod.Type;
 
+// Not trimmed: a path that differs from the installed one would update the wrong home.
+const InstalledPath = Schema.String.check(Schema.isNonEmpty());
+
 export const ServerInstallation = Schema.Union([
-  Schema.Struct({ kind: Schema.Literals(["npx", "pnpm-dlx", "bunx"]) }),
+  // npm kinds come from servers before the fork stopped offering npm updates.
+  Schema.Struct({ kind: Schema.Literals(["npx", "pnpm-dlx", "bunx", "linux-headless"]) }),
   Schema.Struct({ kind: Schema.Literal("npm-global"), prefix: TrimmedNonEmptyString }),
+  // A launcher symlink into a downloaded runtime, as the install script and `t3 update` leave.
+  Schema.Struct({
+    kind: Schema.Literal("t3-launcher"),
+    launcher: InstalledPath,
+    baseDir: InstalledPath,
+  }),
 ]);
 export type ServerInstallation = typeof ServerInstallation.Type;
 
@@ -85,6 +100,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   pullRequestChecks: Schema.optionalKey(Schema.Boolean),
   /** Side chats: hidden `lineage.sideChat` forks. Older servers ignore the fork flag. */
   sideChats: Schema.optionalKey(Schema.Boolean),
+  vcsBranchStatus: Schema.optionalKey(Schema.Boolean),
   /** Every protocol-2 server sends this; older mobile builds still read it. */
   inlineMessageContext: Schema.optionalKey(Schema.Boolean),
   requiredWorktreeBootstrap: Schema.optionalKey(Schema.Boolean),
@@ -94,15 +110,27 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Shared skill content and live agent instruction refresh. */
   agentSkillsSync: Schema.optionalKey(Schema.Boolean),
   agentSkillResources: Schema.optionalKey(Schema.Boolean),
+  /** Honors `agentSkillBodiesOnDemand` and serves `server.getAgentSkills`. */
+  agentSkillBodiesOnDemand: Schema.optionalKey(Schema.Boolean),
+  /** Serves `server.mutateAgentLibrary` and keeps `iconId`/`tags`. */
+  agentLibraryMutations: Schema.optionalKey(Schema.Boolean),
+  /** `server.mutateAgentLibrary` applies every write and no longer needs `baseRevision`. */
+  agentLibraryLastWriteWins: Schema.optionalKey(Schema.Boolean),
   /** First-turn bootstrap retains the selected agent profile. Missing means update before sending agent drafts. */
   agentThreadBootstrap: Schema.optionalKey(Schema.Boolean),
   storageCleanup: Schema.optionalKey(Schema.Boolean),
   storageCleanupRun: Schema.optionalKey(Schema.Boolean),
   databaseStorage: Schema.optionalKey(Schema.Boolean),
+  /** Serves the `server.*AgentGateway*` methods. */
+  agentGateway: Schema.optionalKey(Schema.Boolean),
   otlpEndpointCheck: Schema.optionalKey(Schema.Boolean),
+  /** Serves `server.checkSecretSource`; hide the secret check where it is absent. */
+  secretSourceCheck: Schema.optionalKey(Schema.Boolean),
   projectWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
   settledWorktreeCleanup: Schema.optionalKey(Schema.Boolean),
   worktreesDirectory: Schema.optionalKey(Schema.Boolean),
+  /** Sent by macOS servers, which honor the fastWorktreeCheckout setting. */
+  fastWorktreeCheckout: Schema.optionalKey(Schema.Boolean),
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
@@ -116,6 +144,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   usageLimitSources: Schema.optionalKey(Schema.Boolean),
   /** Honors `workspaceSnapshotsOnDemand`; older servers send every snapshot and drop them in the stream. */
   providerWorkspaceSnapshotsOnDemand: Schema.optionalKey(Schema.Boolean),
+  /** Honors `modelCatalogOnly`; older servers drop the field and probe every provider. */
+  modelCatalogRefresh: Schema.optionalKey(Schema.Boolean),
   usagePriceOverrides: Schema.optionalKey(Schema.Boolean),
   usageModelAliases: Schema.optionalKey(Schema.Boolean),
   threadPinning: Schema.optionalKey(Schema.Boolean),
@@ -138,14 +168,12 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   threadPullRequestWatch: Schema.optionalKey(Schema.Boolean),
   pullRequestStackActions: Schema.optionalKey(Schema.Boolean),
   serverSelfUpdate: Schema.optionalKey(ServerSelfUpdateCapability),
-  /** Server answers server.getNpmRelease using its configured npm registry. */
+  /** Server answers server.getNpmRelease from the fork's GitHub releases. */
   npmReleaseLookup: Schema.optionalKey(Schema.Boolean),
   /** Manual commands must update this install, not the host's default global prefix. */
   serverInstallation: ForwardCompatibleOptional(ServerInstallation),
   serverSelfUpdateProgress: Schema.optionalKey(Schema.Boolean),
   serverUpdateThreadContinuation: Schema.optionalKey(Schema.Boolean),
-  /** Only explicit false skips Live Activity seeding; older servers may still publish. */
-  agentActivityPublishing: Schema.optionalKey(Schema.Boolean),
   projectCloneTracking: Schema.optionalKey(Schema.Boolean),
   /** Server runs scheduled tasks (`scheduledTasks.*`). */
   scheduledTasks: Schema.optionalKey(Schema.Boolean),
@@ -157,6 +185,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   projectOrganization: Schema.optionalKey(Schema.Boolean),
   /** Server answers projects.listIgnoredFiles. */
   ignoredFileListing: Schema.optionalKey(Schema.Boolean),
+  /** projects.listIgnoredFiles honors `query`. Older servers ignore it. */
+  ignoredFileSearch: Schema.optionalKey(Schema.Boolean),
   environmentIcon: Schema.optionalKey(Schema.Boolean),
   desktopAppUpdate: Schema.optionalKey(Schema.Boolean),
   /** The desktop app switches update tracks when a server update request names one. */
@@ -177,10 +207,29 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       (`linkOrigin`). Another environment links to this one only when it is
       set, since without it that work could change the user's own threads. */
   linkFence: Schema.optionalKey(Schema.Boolean),
+  /** Mints pairing codes that approve one agent sign-in at a set level (`AUTO-…`). */
+  mcpApprovalCodes: Schema.optionalKey(Schema.Boolean),
   /** Server answers server.prepareTriage. */
   triage: Schema.optionalKey(Schema.Boolean),
   /** Server accepts `{ type: "once" }` scheduled tasks; older servers reject them on save. */
   oneTimeSchedules: Schema.optionalKey(Schema.Boolean),
+  /** Server honors `freshContext` on sends; older servers ignore it and keep the old context. */
+  freshContext: Schema.optionalKey(Schema.Boolean),
+  /** Server saves and runs scheduled task `threadMode`; older servers ignore it. */
+  scheduledTaskThreadModes: Schema.optionalKey(Schema.Boolean),
+  /** Server sends Expo pushes to phones that call pushRegistrations.register. */
+  pushNotifications: Schema.optionalKey(Schema.Boolean),
+  /** Server can transcribe 16 kHz mono PCM audio on the environment machine. */
+  voiceTranscription: Schema.optionalKey(Schema.Boolean),
+  cloudVoiceTranscription: Schema.optionalKey(Schema.Boolean),
+  /**
+   * The server config's flags of the same names. A server that names them here lets a client
+   * load the shell snapshot before the socket opens, and answers its `resumeFrom`.
+   */
+  shellThreadFamilies: Schema.optionalKey(Schema.Boolean),
+  shellOlderSettled: Schema.optionalKey(Schema.Boolean),
+  /** Publishes a pull request refresh when linked-thread answers change; older servers need polling. */
+  linkedThreadRefreshes: Schema.optionalKey(Schema.Boolean),
 });
 export type ExecutionEnvironmentCapabilities = typeof ExecutionEnvironmentCapabilities.Type;
 

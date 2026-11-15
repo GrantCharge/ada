@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as ProcessRunner from "../processRunner.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 interface ResolveServerEnvironmentLabelInput {
   readonly cwdBaseName: string;
@@ -116,6 +117,8 @@ const runFriendlyLabelCommand = Effect.fn("runFriendlyLabelCommand")(function* (
     .run({
       command: input.command,
       args: input.args,
+      // Server startup waits on this; hostnamectl can block on D-Bus when hostnamed is down.
+      timeout: "5 seconds",
       timeoutBehavior: "timedOutResult",
     })
     .pipe(
@@ -192,5 +195,5 @@ export const resolveServerEnvironmentLabel = Effect.fn("resolveServerEnvironment
     return hostname;
   }
 
-  return normalizeLabel(input.cwdBaseName) ?? "T3 environment";
+  return normalizeLabel(input.cwdBaseName) ?? `${APP_NAME} environment`;
 });

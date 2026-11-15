@@ -6,10 +6,12 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { describe, expect, it, vi } from "@effect/vitest";
-import { connectGatewayBridge } from "@t3tools/client-runtime/gateway";
+import { connectGatewayBridge, type GatewayBridgeState } from "@t3tools/client-runtime/gateway";
+import { ThreadTaskError } from "@t3tools/contracts";
 import WebSocket, { WebSocketServer } from "ws";
 
 import { createBridgeRuntimePort } from "./bridge.ts";
+import { failure as catalogFailure, requestContext } from "./catalog.ts";
 import { createGatewayEventStore } from "./events.ts";
 import type { GatewayMutationResult, GatewayRuntimePort } from "./port.ts";
 import { callGatewayTool } from "./tools.ts";
@@ -88,7 +90,7 @@ describe("gateway bridge", () => {
     await opened(unauthenticated);
     await challenged;
     await closed(unauthenticated);
-    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured T3 client");
+    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured Ada client");
 
     const client = new WebSocket(`ws://127.0.0.1:${port}`);
     const authenticated = authenticate(client, (message) => {
@@ -155,6 +157,93 @@ describe("gateway bridge", () => {
       );
     } finally {
       client.close();
+      await bridge.close();
+    }
+  });
+
+  it("keeps a task error typed across the client bridge, and only a task error", async () => {
+    const port = await unusedPort();
+    const bridge = createBridgeRuntimePort({ port, token: TOKEN });
+    await bridge.ready;
+    let failure: unknown;
+    let running = () => {};
+    const ready = new Promise<void>((resolve) => (running = resolve));
+    const client = connectGatewayBridge({
+      port: {
+        threadTask: async () => {
+          throw failure;
+        },
+      } as unknown as GatewayRuntimePort,
+      grants: { local: ["read"] },
+      url: `ws://127.0.0.1:${port}`,
+      token: TOKEN,
+      onState: (state) => state === "running" && running(),
+    });
+    const readTask = async (thrown: unknown) => {
+      failure = thrown;
+      const args = { environmentId: "local", threadId: "helper" };
+      const outcome = await callGatewayTool(
+        { port: bridge.port, grants: { local: ["read"] as const } },
+        "t3_task_read",
+        args,
+      ).then(
+        () => undefined,
+        (error: unknown) => catalogFailure(error, requestContext(args)).structuredContent.error,
+      );
+      return outcome;
+    };
+    try {
+      await ready;
+      await expect(
+        readTask(new ThreadTaskError({ code: "task_not_found", detail: "No task for helper." })),
+      ).resolves.toMatchObject({
+        code: "upstream_failure",
+        retryable: false,
+        details: { taskErrorCode: "task_not_found", detail: "No task for helper." },
+      });
+      await expect(
+        readTask(new ThreadTaskError({ code: "scope_denied", detail: "Not your task." })),
+      ).resolves.toMatchObject({ retryable: false, details: { taskErrorCode: "scope_denied" } });
+      await expect(
+        readTask(
+          new Error("Task call failed.", {
+            cause: new ThreadTaskError({ code: "task_not_found", detail: "Wrapped." }),
+          }),
+        ),
+      ).resolves.toMatchObject({ retryable: false, details: { taskErrorCode: "task_not_found" } });
+      // Text that only reads like a task error, or a task shape the schema rejects, stays untyped.
+      const lookalike = { _tag: "ThreadTaskError", code: "bogus", detail: "No task for helper." };
+      for (const thrown of [
+        new Error("task_not_found: No task for helper."),
+        Object.assign(new Error("task_not_found"), lookalike),
+      ]) {
+        const untyped = await readTask(thrown);
+        expect(untyped).toMatchObject({ code: "upstream_failure", retryable: true });
+        expect(untyped).not.toHaveProperty("details");
+      }
+
+      // An older client sends only the message; a malformed taskError is ignored the same way.
+      client.stop();
+      const raw = new WebSocket(`ws://127.0.0.1:${port}`);
+      let taskError: unknown;
+      const authenticated = authenticate(raw, (message) => {
+        if (message.method !== "threadTask") return;
+        raw.send(JSON.stringify({ id: message.id, error: "task_not_found: gone", taskError }));
+      });
+      await opened(raw);
+      await authenticated;
+      try {
+        for (const wire of [undefined, lookalike, { _tag: "ThreadTaskError" }, "task_not_found"]) {
+          taskError = wire;
+          const untyped = await readTask(undefined);
+          expect(untyped).toMatchObject({ code: "upstream_failure", retryable: true });
+          expect(untyped).not.toHaveProperty("details");
+        }
+      } finally {
+        raw.close();
+      }
+    } finally {
+      client.stop();
       await bridge.close();
     }
   });
@@ -230,13 +319,13 @@ describe("gateway bridge", () => {
     await opened(client);
     await authenticated;
 
-    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured T3 client");
+    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured Ada client");
     expect(onRequest).not.toHaveBeenCalled();
 
     const closedClient = closed(client);
     client.send(JSON.stringify({ type: "configure", grants: { stale: ["unknown-scope"] } }));
     await closedClient;
-    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured T3 client");
+    await expect(bridge.port.listEnvironments()).rejects.toThrow("No configured Ada client");
     await bridge.close();
   });
 
@@ -725,7 +814,7 @@ describe("gateway bridge", () => {
 });
 
 describe("standby gateway runtime", () => {
-  type State = "connecting" | "running" | "degraded" | "disabled";
+  type State = GatewayBridgeState;
   function trackStates() {
     const seen: Array<State> = [];
     const waiters: Array<{ state: State; after: number; resolve: () => void }> = [];
@@ -769,7 +858,7 @@ describe("standby gateway runtime", () => {
     await appRunning;
 
     const standbyStates = trackStates();
-    const turnedAway = standbyStates.next("degraded");
+    const turnedAway = standbyStates.next("standby");
     const standby = connectGatewayBridge({
       port: runtimePort("headless"),
       url,
@@ -786,6 +875,8 @@ describe("standby gateway runtime", () => {
       const standbyServing = standbyStates.next("running");
       app.stop();
       await standbyServing;
+      // Retries while standing by stay quiet, so the host's status does not flicker.
+      expect(standbyStates.seen).toEqual(["connecting", "standby", "running"]);
       await expect(bridge.port.listEnvironments()).resolves.toEqual([
         { environmentId: "headless" },
       ]);

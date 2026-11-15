@@ -2,9 +2,11 @@ import * as Schema from "effect/Schema";
 import { GitPreparePullRequestThreadInput, GitRunStackedActionInput } from "./git.ts";
 import {
   AuthAccessWriteScope,
+  AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   AuthSourceControlWriteScope,
   AuthTerminalOperateScope,
@@ -15,13 +17,22 @@ import { WS_METHODS } from "./rpc.ts";
 
 /** Incremental client enforcement; the server still authorizes every request. */
 export const CLIENT_GUARDED_RPC_SCOPES = {
+  [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   // Stopping a server signals its processes, as closing a terminal does.
   [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
+  // Agent and skill edits are settings writes, as the whole-library settings patch is.
+  [WS_METHODS.serverMutateAgentLibrary]: AuthSettingsWriteScope,
+  // Restarts the server, as an update does.
+  [WS_METHODS.serverReclaimDatabaseSpace]: AuthEnvironmentMaintainScope,
   // Rewriting a draft runs a model on this environment's providers.
   [WS_METHODS.serverRewriteDraft]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverCheckOtlpEndpoint]: AuthSettingsWriteScope,
+  [WS_METHODS.serverCheckSecretSource]: AuthSettingsWriteScope,
+  // Listing models spends the stored API key, so only those who can choose a model may.
+  [WS_METHODS.serverListTextGeneratorModels]: AuthSettingsWriteScope,
+  [WS_METHODS.serverRefreshProviders]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsRunAction]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsUpdate]: AuthSourceControlWriteScope,
   [WS_METHODS.pullRequestsComment]: AuthSourceControlWriteScope,
@@ -38,6 +49,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.projectsCreateFromThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.sourceControlCloneRepository]: AuthSourceControlWriteScope,
   [WS_METHODS.sourceControlPublishRepository]: AuthSourceControlWriteScope,
+  [WS_METHODS.sourceControlStar]: AuthSourceControlWriteScope,
   // Signing in replaces the server's GitHub credential, as saving a token in Settings does.
   [WS_METHODS.sourceControlSignInStart]: AuthSettingsWriteScope,
   [WS_METHODS.sourceControlSignInWait]: AuthSettingsWriteScope,
@@ -65,16 +77,28 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   // Force stop kills agent processes, as Stop on a terminal does.
   [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: AuthOrchestrationOperateScope,
   // A guest link hands thread access to someone outside, like a pairing link.
-  [WS_METHODS.guestShareCreate]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksLink]: AuthAccessWriteScope,
   [WS_METHODS.peerLinksUnlink]: AuthAccessWriteScope,
   // A link lets every agent here reach the other environment: Settings' bar.
   [WS_METHODS.peerLinksAnswerRequest]: AuthAccessWriteScope,
   // Device access and tailnet device settings replicate to every one of my devices.
   [WS_METHODS.tailnetDevicesSetAccess]: AuthAccessWriteScope,
-  [WS_METHODS.tailnetDevicesUpdateSettings]: AuthAccessWriteScope,
-  // Hands the app a session on another device, as a pairing link does.
-  [WS_METHODS.tailnetDevicesOpenDevice]: AuthAccessWriteScope,
+  [WS_METHODS.tailnetDevicesAdmit]: AuthAccessWriteScope,
+  [WS_METHODS.tailnetDevicesSetAppAccess]: AuthAccessWriteScope,
+  [WS_METHODS.tailnetDevicesForget]: AuthAccessWriteScope,
+  [WS_METHODS.tailnetDevicesForgetApp]: AuthAccessWriteScope,
+  [WS_METHODS.tailnetDevicesSetLimit]: AuthAccessWriteScope,
+  [WS_METHODS.tailnetDevicesLeave]: AuthAccessWriteScope,
+  [WS_METHODS.tailnetDevicesAllowJoin]: AuthAccessWriteScope,
+  // The server-hosted agent gateway lets outside agents act here, as a pairing link does.
+  [WS_METHODS.serverUpdateAgentGateway]: AuthAccessWriteScope,
+  [WS_METHODS.serverRevealAgentGatewayToken]: AuthAccessWriteScope,
+  [WS_METHODS.serverRotateAgentGatewayToken]: AuthAccessWriteScope,
+  // A push carries only thread titles and states that a reader already sees.
+  [WS_METHODS.pushRegistrationsRegister]: AuthOrchestrationReadScope,
+  [WS_METHODS.pushRegistrationsUnregister]: AuthOrchestrationReadScope,
+  // A session on another member, never past the caller's own grant; the server decides who may.
+  [WS_METHODS.tailnetDevicesOpenDevice]: AuthOrchestrationReadScope,
 } as const;
 export type ClientGuardedRpcTag = keyof typeof CLIENT_GUARDED_RPC_SCOPES;
 

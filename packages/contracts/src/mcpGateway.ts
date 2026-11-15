@@ -1,21 +1,147 @@
 import * as Schema from "effect/Schema";
 
+import {
+  AuthAccessReadScope,
+  AuthDiagnosticsReadScope,
+  AuthFilesystemReadScope,
+  type AuthGrantScope,
+  type AuthMcpClientAccess,
+  AuthOrchestrationReadScope,
+  AuthStandardClientScopes,
+} from "./auth.ts";
 import { EnvironmentId, MessageId, ProjectId, RunId, ThreadId } from "./baseSchemas.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
+import type { TailnetDeviceAccess } from "./tailnetDevices.ts";
 
 export class McpGatewayUnavailableError extends Schema.TaggedError<McpGatewayUnavailableError>()(
   "McpGatewayUnavailableError",
   { message: Schema.String },
 ) {}
 
+export const GATEWAY_SCOPE_VALUES = [
+  "read",
+  "create",
+  "send",
+  "control",
+  "lifecycle",
+  "approval",
+  "artifact",
+  "review",
+  "admin",
+  "delivery",
+] as const;
+export const GatewayScope = Schema.Literals(GATEWAY_SCOPE_VALUES);
+export type GatewayScope = typeof GatewayScope.Type;
+
+/** Agents' access when a server first hosts the gateway: read threads and manage webhooks. */
+export const AGENT_GATEWAY_DEFAULT_SCOPES: ReadonlyArray<GatewayScope> = ["read", "delivery"];
+
+/** The server-hosted gateway: whether it runs and what outside agents may do in this environment. */
+export const AgentGatewaySettings = Schema.Struct({
+  enabled: Schema.Boolean,
+  scopes: Schema.Array(GatewayScope).check(Schema.isMaxLength(GATEWAY_SCOPE_VALUES.length)),
+});
+export type AgentGatewaySettings = typeof AgentGatewaySettings.Type;
+
+export const AgentGatewayUpdateInput = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  scopes: Schema.optionalKey(AgentGatewaySettings.fields.scopes),
+});
+export type AgentGatewayUpdateInput = typeof AgentGatewayUpdateInput.Type;
+
+export const AgentGatewayStatus = Schema.Struct({
+  /** `desktop`: the desktop app's own gateway serves this environment and the setting does not apply. */
+  host: Schema.Literals(["server", "desktop"]),
+  enabled: Schema.Boolean,
+  scopes: Schema.Array(GatewayScope),
+  /** The server's runtime connection to the gateway on its machine. */
+  state: Schema.Literals(["disabled", "connecting", "running", "standby", "degraded"]),
+  /** Why an enabled gateway is not running. */
+  problem: Schema.optionalKey(Schema.String),
+  /** The loopback port MCP launchers on the server's machine use. */
+  port: Schema.Number,
+});
+export type AgentGatewayStatus = typeof AgentGatewayStatus.Type;
+
+/** The bridge token MCP launchers on the server's machine authenticate with. */
+export const AgentGatewayToken = Schema.Struct({ token: Schema.String });
+export type AgentGatewayToken = typeof AgentGatewayToken.Type;
+
+export class AgentGatewaySettingError extends Schema.TaggedError<AgentGatewaySettingError>()(
+  "AgentGatewaySettingError",
+  {
+    reason: Schema.Literals(["desktop-hosted", "missing-read-scope", "token-file", "settings"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    switch (this.reason) {
+      case "desktop-hosted":
+        return "The desktop app hosts this environment's agent gateway. Change it in that app's settings.";
+      case "missing-read-scope":
+        return "Agents need the read scope to use the gateway.";
+      case "token-file":
+        return "Could not read or write ~/.config/t3code/mcp-gateway.env on the server.";
+      case "settings":
+        return "Could not save the agent gateway setting.";
+    }
+  }
+}
+
+const APP_READ_SCOPES: ReadonlyArray<AuthGrantScope> = [
+  AuthOrchestrationReadScope,
+  AuthFilesystemReadScope,
+  AuthDiagnosticsReadScope,
+  AuthAccessReadScope,
+];
+const READ_ONLY = { app: APP_READ_SCOPES, gateway: ["read"] } as const;
+
+/**
+ * The one ceiling a network access level sets, per surface. MCP sessions enforce agent modes, so
+ * they keep the level as their `mode` ceiling. App sessions and relayed gateway calls carry no
+ * mode ceiling, so anything short of full access only reads. `revoked` grants nothing anywhere.
+ */
+export const NETWORK_ACCESS_CEILING = {
+  revoked: { mode: null, app: [], gateway: [] },
+  "read-only": { mode: "read-only", ...READ_ONLY },
+  "approval-required": { mode: "approval-required", ...READ_ONLY },
+  "auto-accept-edits": { mode: "auto-accept-edits", ...READ_ONLY },
+  auto: { mode: "auto", ...READ_ONLY },
+  "full-access": {
+    mode: "full-access",
+    app: AuthStandardClientScopes,
+    gateway: GATEWAY_SCOPE_VALUES,
+  },
+} as const satisfies Record<
+  TailnetDeviceAccess,
+  {
+    readonly mode: AuthMcpClientAccess | null;
+    readonly app: ReadonlyArray<AuthGrantScope>;
+    readonly gateway: ReadonlyArray<GatewayScope>;
+  }
+>;
+
 /** Per-environment T3 Agents scopes a connected app grants to agents relayed through it. */
-export const McpGatewayRelayGrants = Schema.Record(Schema.String, Schema.Array(Schema.String));
+/** The most environments one app may relay; a larger registration is refused whole. */
+export const MCP_GATEWAY_RELAY_GRANTS_MAX = 256;
+export const McpGatewayRelayGrants = Schema.Record(
+  Schema.String,
+  Schema.Array(GatewayScope).check(Schema.isMaxLength(GATEWAY_SCOPE_VALUES.length)),
+).check(Schema.isMaxProperties(MCP_GATEWAY_RELAY_GRANTS_MAX));
 export type McpGatewayRelayGrants = typeof McpGatewayRelayGrants.Type;
 
 export const McpGatewayConnectInput = Schema.Struct({ grants: McpGatewayRelayGrants });
 export type McpGatewayConnectInput = typeof McpGatewayConnectInput.Type;
+
+/** What a server would relay for the asking app under these grants, and why not the rest. */
+export const McpGatewayRelayPreview = Schema.Struct({
+  grants: Schema.Record(Schema.String, Schema.Array(GatewayScope)),
+  refusals: Schema.Record(Schema.String, Schema.String),
+  limit: Schema.optionalKey(Schema.String),
+});
+export type McpGatewayRelayPreview = typeof McpGatewayRelayPreview.Type;
 
 /** A runtime port call an agent on this server needs a connected app to run on another environment. */
 export const McpGatewayRelayEvent = Schema.Struct({
@@ -24,6 +150,13 @@ export const McpGatewayRelayEvent = Schema.Struct({
   invocationId: Schema.String,
   method: Schema.String,
   args: Schema.Array(Schema.Unknown),
+  /**
+   * The calling chat's modes. The app answering the call applies them against its own reads of
+   * the target, since the relaying server's view of a remote thread is only what an app told it.
+   */
+  modeCeiling: Schema.optionalKey(
+    Schema.Struct({ runtimeMode: RuntimeMode, interactionMode: ProviderInteractionMode }),
+  ),
 });
 export type McpGatewayRelayEvent = typeof McpGatewayRelayEvent.Type;
 
@@ -32,6 +165,10 @@ export const McpGatewayRelayResponse = Schema.Struct({
   invocationId: Schema.String,
   result: Schema.optionalKey(Schema.Unknown),
   error: Schema.optionalKey(Schema.String),
+  /** With `error`: the app did not run the call, because it cannot reach or was not granted it. */
+  unreachable: Schema.optionalKey(Schema.Literal(true)),
+  /** With `error`: the encoded `ThreadTaskError` it failed with. Ignored when it does not decode. */
+  taskError: Schema.optionalKey(Schema.Unknown),
 });
 export type McpGatewayRelayResponse = typeof McpGatewayRelayResponse.Type;
 

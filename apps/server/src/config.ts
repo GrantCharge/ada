@@ -21,7 +21,6 @@ import { type ReleaseChannel, releaseResourceAttributes } from "@t3tools/shared/
 import packageJson from "../package.json" with { type: "json" };
 
 // Official release workflows set this telemetry channel; other builds report dev.
-// Unlike __T3CODE_BUILD_CHANNEL__, this is not the sign-in page's latest/nightly channel.
 declare const __T3CODE_TELEMETRY_CHANNEL__: ReleaseChannel | undefined;
 export const telemetryChannel: ReleaseChannel =
   typeof __T3CODE_TELEMETRY_CHANNEL__ === "undefined" ? "dev" : __T3CODE_TELEMETRY_CHANNEL__;
@@ -42,6 +41,7 @@ export interface ServerDerivedPaths {
   readonly environmentThemesDir: string;
   readonly providerStatusCacheDir: string;
   readonly worktreesDir: string;
+  readonly worktreeCheckoutCacheDir: string;
   readonly attachmentsDir: string;
   readonly browserArtifactsDir: string;
   readonly logsDir: string;
@@ -101,6 +101,7 @@ export class ServerConfig extends Context.Service<
     readonly shellEnvironmentPrepared?: boolean | undefined;
     readonly desktopTelemetryFd?: number | undefined;
     readonly desktopTelemetryControlFd?: number | undefined;
+    readonly desktopAppUpdate?: boolean | undefined;
     readonly desktopBrowserFd?: number | undefined;
     readonly desktopBrowserControlFd?: number | undefined;
     readonly resourceMonitorPath?: string | undefined;
@@ -161,6 +162,7 @@ export const deriveServerPaths = Effect.fn(function* (
     environmentThemesDir: join(stateDir, "themes"),
     providerStatusCacheDir,
     worktreesDir: join(baseDir, "worktrees"),
+    worktreeCheckoutCacheDir: join(providerStatusCacheDir, "worktree-checkouts"),
     attachmentsDir,
     browserArtifactsDir: join(stateDir, "browser-artifacts"),
     logsDir,

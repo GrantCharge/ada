@@ -18,16 +18,22 @@ vi.mock(import("@effect/atom-react"), async (original) => ({
   useAtomValue: (() => []) as never,
 }));
 vi.mock("../../hooks/useThreadVisitedMigration", () => ({ useThreadVisitedMigration: () => {} }));
-vi.mock("../../state/server", () => ({ primaryServerKeybindingsAtom: {} }));
-vi.mock("../../hooks/useSettings", () => ({
-  useLegacySidebarEnabled: () => false,
-  useEnvironmentIdentificationMode: () => "none",
-}));
+vi.mock("../../state/server", () => ({ primaryServerKeybindingsAtom: {}, serverEnvironment: {} }));
+vi.mock("../../hooks/useSettings", async () => {
+  const { DEFAULT_CLIENT_SETTINGS } = await import("@t3tools/contracts");
+  return {
+    useLegacySidebarEnabled: () => false,
+    useEnvironmentIdentificationMode: () => "none",
+    useClientSettings: <T,>(select?: (settings: typeof DEFAULT_CLIENT_SETTINGS) => T) =>
+      select ? select(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS,
+  };
+});
 vi.mock("../../state/entities", () => ({
   useProjects: () => [],
   useThreadShell: () => ({}),
   useThreadDetail: () => ({}),
   useThreadStatus: () => "ready",
+  useQuietThreadShell: () => null,
   useQuietThreadShells: () => [],
 }));
 vi.mock("../../panelAnimations", () => ({
@@ -73,6 +79,8 @@ describe("Agents route shell", () => {
     async (pathname) => {
       // Below the mobile breakpoint the sidebar is a sheet, not the layout under test.
       await page.viewport(1280, 900);
+      // The open state persists, so an earlier case's toggle would carry over.
+      localStorage.removeItem("chat_thread_sidebar_open");
       route.pathname = pathname;
       await using screen = await render(
         <AppSidebarLayout>

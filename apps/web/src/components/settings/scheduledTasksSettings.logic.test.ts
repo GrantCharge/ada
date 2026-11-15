@@ -6,6 +6,7 @@ import {
   ProviderInstanceId,
   ScheduledTaskId,
   type ScheduledTask,
+  ThreadId,
 } from "@t3tools/contracts";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
@@ -20,9 +21,14 @@ import {
   scheduledTaskDefaultModel,
   defaultScheduledTaskProjectId,
   matchesScheduledTaskScope,
+  moveDraftOffAgent,
+  moveDraftToAgent,
   newScheduledTaskEnvironment,
+  scheduledTaskDraftRouting,
   scheduleFromDraft,
+  scheduleLabel,
   taskToDraft,
+  unbindDraftFromThread,
 } from "./scheduledTasksSettings.logic";
 
 const laptopId = EnvironmentId.make("laptop");
@@ -171,6 +177,129 @@ describe("editing scheduled task branch settings", () => {
   });
 });
 
+describe("fixed-time scheduled tasks", () => {
+  it("pads a stored single-digit hour so the time input shows it", () => {
+    const draft = taskToDraft({
+      ...legacyTask,
+      schedule: { type: "fixed_time", timeOfDay: "9:05" },
+    });
+    expect(draft.timeOfDay).toBe("09:05");
+  });
+});
+
+describe("scheduled task destination", () => {
+  it("unbinding leaves the shared checkout for a new worktree from the remote", () => {
+    const rootBound = taskToDraft({
+      ...legacyTask,
+      threadId: ThreadId.make("thread:bound"),
+      workspaceStrategy: { type: "root" },
+    });
+    expect(unbindDraftFromThread(rootBound)).toMatchObject({
+      threadId: "",
+      workspaceMode: "worktree",
+      startFromOrigin: true,
+    });
+  });
+});
+
+describe("cron scheduled tasks", () => {
+  it("reopens a cron task on its preset and saves edits as cron", () => {
+    const draft = taskToDraft({
+      ...legacyTask,
+      schedule: { type: "cron", expression: "30 8 * * 1-5", timezone: "Europe/London" },
+    });
+    expect(draft.scheduleMode).toBe("cron");
+    expect(draft.cron).toMatchObject({ preset: "weekdays", time: "08:30" });
+    expect(scheduleFromDraft(draft)).toEqual({
+      type: "cron",
+      expression: "30 8 * * 1-5",
+      timezone: "Europe/London",
+    });
+    expect(
+      scheduleFromDraft({ ...draft, cron: { ...draft.cron, preset: "weekly", weekday: 3 } }),
+    ).toMatchObject({ expression: "30 8 * * 3" });
+    expect(
+      scheduleFromDraft({ ...draft, cron: { ...draft.cron, preset: "custom", expression: " " } }),
+    ).toBeNull();
+  });
+});
+
+describe("scheduled task agent destination", () => {
+  const profiles = [
+    {
+      profileId: "reviewer",
+      name: "Reviewer",
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+    },
+  ] as unknown as Parameters<typeof scheduledTaskDraftRouting>[2]["profiles"];
+  const providers = [
+    {
+      instanceId: ProviderInstanceId.make("codex"),
+      enabled: true,
+      status: "ready",
+      models: [{ slug: "gpt-5.4" }],
+    },
+  ] as unknown as Parameters<typeof scheduledTaskDraftRouting>[2]["providers"];
+  const context = { profiles, providers, modelSelection: null, offersThreadModes: true };
+  const agentTask: ScheduledTask = {
+    ...legacyTask,
+    profileId: "reviewer",
+    threadId: ThreadId.make("agent-thread"),
+    threadMode: "continue",
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "kept-model" },
+  };
+
+  it("opens an agent task on its agent and keeps its thread and model while the agent stays", () => {
+    const draft = taskToDraft(agentTask);
+    expect(draft.profileId).toBe("reviewer");
+    expect(scheduledTaskDraftRouting(draft, agentTask, context)).toMatchObject({
+      profileId: "reviewer",
+      threadId: "agent-thread",
+      modelSelection: { model: "kept-model" },
+    });
+  });
+
+  it("takes model and modes from a newly chosen agent, in a thread it starts", () => {
+    const draft = moveDraftToAgent(taskToDraft(legacyTask), "reviewer", legacyTask);
+    expect(draft).toMatchObject({ threadId: "", threadMode: "continue" });
+    expect(scheduledTaskDraftRouting(draft, legacyTask, context)).toEqual({
+      profileId: "reviewer",
+      threadId: null,
+      modelSelection: { instanceId: "codex", model: "gpt-5.4" },
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    });
+    expect(scheduledTaskDraftRouting(moveDraftToAgent(draft, "missing", null), null, context)).toBe(
+      "Agent missing was not found.",
+    );
+  });
+
+  it("clears the agent and its thread when the task moves to a plain thread", () => {
+    const draft = {
+      ...moveDraftOffAgent(taskToDraft(agentTask)),
+      threadMode: "new_thread" as const,
+    };
+    const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" };
+    expect(scheduledTaskDraftRouting(draft, agentTask, { ...context, modelSelection })).toEqual({
+      profileId: null,
+      threadId: null,
+      threadMode: "new_thread",
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+    });
+    expect(
+      scheduledTaskDraftRouting(taskToDraft(legacyTask), legacyTask, {
+        ...context,
+        modelSelection,
+      }),
+    ).not.toHaveProperty("profileId");
+    expect(scheduledTaskDraftRouting(draft, agentTask, context)).toBe("Choose a model.");
+  });
+});
+
 describe("one-time scheduled tasks", () => {
   afterEach(() => vi.unstubAllEnvs());
 
@@ -204,6 +333,19 @@ describe("one-time scheduled tasks", () => {
       type: "once",
       runAt: "2026-11-01T09:35:00.000Z",
     });
+  });
+});
+
+describe("archived scheduled tasks", () => {
+  it("opens an archived task enabled, since saving restores it", () => {
+    const archived: ScheduledTask = {
+      ...legacyTask,
+      enabled: false,
+      archivedAt: "2026-11-01T00:00:00.000Z",
+      archiveReason: "paused",
+    };
+    expect(taskToDraft(archived).enabled).toBe(true);
+    expect(taskToDraft({ ...legacyTask, enabled: false }).enabled).toBe(false);
   });
 });
 
@@ -259,33 +401,13 @@ describe("webhook scheduled tasks", () => {
     expect(scheduleFromDraft(draft)).toEqual({
       type: "webhook",
       signature,
-      maxDeliveryAgeMinutes: null,
       dedupe: {},
     });
     expect(scheduleFromDraft({ ...draft, signatureSecret: " new " })).toEqual({
       type: "webhook",
       signature: { ...signature, secret: "new" },
-      maxDeliveryAgeMinutes: null,
       dedupe: {},
     });
-  });
-
-  it("round-trips the max age, treats blank as no limit, and rejects an invalid limit", () => {
-    const draft = taskToDraft({
-      ...webhookTask,
-      schedule: { type: "webhook", signature: null, maxDeliveryAgeMinutes: 90 },
-    });
-    expect(draft.maxDeliveryAgeMinutes).toBe("90");
-    expect(scheduleFromDraft(draft)).toMatchObject({ maxDeliveryAgeMinutes: 90 });
-    for (const blank of ["", "  "]) {
-      expect(scheduleFromDraft({ ...draft, maxDeliveryAgeMinutes: blank })).toMatchObject({
-        maxDeliveryAgeMinutes: null,
-        dedupe: {},
-      });
-    }
-    for (const invalid of ["0", "-5", "1.5", "abc", "1441"]) {
-      expect(scheduleFromDraft({ ...draft, maxDeliveryAgeMinutes: invalid })).toBeNull();
-    }
   });
 
   it("sends filters only when the form changed them", () => {
@@ -402,4 +524,16 @@ describe("new scheduled task environment", () => {
     );
     expect(newScheduledTaskEnvironment(undefined, [threadHost], null)).toBe(threadHost);
   });
+});
+
+it("appends the server zone only to fixed-time schedule labels", () => {
+  expect(scheduleLabel({ type: "fixed_time", timeOfDay: "16:31" }, "Etc/UTC")).toBe(
+    "Daily at 16:31 UTC",
+  );
+  expect(scheduleLabel({ type: "fixed_time", timeOfDay: "09:00" })).toBe("Daily at 09:00");
+  expect(scheduleLabel({ type: "interval", everyMs: 60_000 }, "Etc/UTC")).toBe("Every 1 min");
+  expect(scheduleLabel({ type: "webhook", signature: null }, "Etc/UTC")).toBe("On webhook");
+  expect(
+    scheduleLabel({ type: "cron", expression: "0 7 * * 1-5", timezone: "Asia/Tokyo" }, "Etc/UTC"),
+  ).toBe("Weekdays at 07:00 (Asia/Tokyo)");
 });

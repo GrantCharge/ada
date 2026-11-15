@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - the gateway is a plain Node process outside the Effect runtime.
+import { profileFields } from "./profileInput.ts";
 import { skillFields } from "./skillInput.ts";
 import { z } from "zod";
 import * as NodeCrypto from "node:crypto";
@@ -19,6 +20,11 @@ import {
 } from "./port.ts";
 import type { GatewayEvent, GatewayEventStore } from "./events.ts";
 import type { ScheduledTaskSchedule } from "@t3tools/contracts";
+import { APP_NAME } from "@t3tools/shared/branding";
+import { CLI_RELEASE_REPOSITORY } from "@t3tools/shared/cliRelease";
+
+// The pre-rename name stays allowed: existing clones still name it in their remote.
+export const DEFAULT_REPOSITORY_ALLOWLIST = `${CLI_RELEASE_REPOSITORY},jayleaton/t3code`;
 
 export type GatewayGrants = Readonly<Record<string, ReadonlyArray<GatewayScope>>>;
 export type GatewayGrantSource = GatewayGrants | (() => GatewayGrants);
@@ -187,31 +193,7 @@ export const handoffInputSchema = z.object({
   files: z.array(z.string().min(1)).max(10).optional(),
 });
 
-const profileInput = z.object({
-  name: z.string().trim().min(1).max(200),
-  description: z.string().trim().max(280).optional(),
-  providerLabel: z.string().trim().min(1),
-  modelLabel: z.string().trim().min(1),
-  color: z
-    .string()
-    .regex(/^#[0-9a-fA-F]{6}$/)
-    .optional(),
-  icon: z
-    .enum(["orb", "bot", "code", "pen", "search", "shield", "sparkles", "terminal"])
-    .optional(),
-  skillIds: z.array(z.string().trim().min(1)).optional(),
-  systemPrompt: z.string().max(32_000).optional(),
-  reasoningEffort: z.string().trim().min(1).optional(),
-  runtimeMode: z.enum([
-    "approval-required",
-    "auto-accept-edits",
-    "auto",
-    "full-access",
-    "read-only",
-  ]),
-  interactionMode: z.enum(["default", "plan"]),
-  environmentIds: z.array(z.string().trim().min(1)).optional(),
-});
+const profileInput = z.object(profileFields);
 
 const skillInput = z.object(skillFields);
 
@@ -1140,7 +1122,7 @@ function assertRepositoryAllowed(
   repository: string,
 ): void {
   const identity = `${owner}/${repository}`.toLowerCase();
-  const allowlist = context.repositoryAllowlist ?? ["jayleaton/t3code"];
+  const allowlist = context.repositoryAllowlist ?? DEFAULT_REPOSITORY_ALLOWLIST.split(",");
   if (!allowlist.some((candidate) => candidate.toLowerCase() === identity)) {
     throw new GatewayError({
       code: "scope_required",
@@ -1452,7 +1434,7 @@ export async function callGatewayTool(
     case "t3_get_presence": {
       const environmentId = environmentWithScope(context, input, "read");
       if (context.port.getPresence === undefined) {
-        throw new Error("Presence is unavailable from this T3 host.");
+        throw new Error(`Presence is unavailable from this ${APP_NAME} host.`);
       }
       return context.port.getPresence(environmentId);
     }
@@ -1693,7 +1675,7 @@ export async function callGatewayTool(
       const environmentId = environmentWithAnyScope(context, input, ["create", "admin"]);
       if (!context.port.scheduledTask)
         throw new Error("Scheduled tasks are unavailable in this runtime. Update T3.");
-      const fields = scheduledTaskFields(input);
+      const { idempotencyKey, ...fields } = scheduledTaskFields(input);
       if (!("schedule" in fields)) {
         throw new GatewayError({
           code: "invalid_input",
@@ -1703,7 +1685,19 @@ export async function callGatewayTool(
       }
       return context.port.scheduledTask(environmentId, {
         action: "create",
-        input: fields as unknown as GatewayScheduledTaskCreate,
+        input: {
+          ...(fields as unknown as GatewayScheduledTaskCreate),
+          ...(typeof idempotencyKey === "string"
+            ? {
+                commandId: scopedIdFor(
+                  "scheduled-task",
+                  environmentId,
+                  "scheduled-task",
+                  idempotencyKey,
+                ),
+              }
+            : {}),
+        },
       });
     }
     case "t3_update_scheduled_task": {

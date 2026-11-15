@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as NetService from "@t3tools/shared/Net";
 import {
   OtlpHeadersFromString,
@@ -24,7 +25,7 @@ import { Argument, Flag } from "effect/cli";
 import * as CliError from "effect/cli/CliError";
 
 import { readBootstrapEnvelope } from "../bootstrap.ts";
-import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
+import { resolveServiceLauncherMode } from "../service/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -44,7 +45,7 @@ const hostFlag = Flag.String("host").pipe(
 );
 export const baseDirFlag = Flag.String("base-dir").pipe(
   Flag.withDescription(
-    "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+    `Explicit ${APP_NAME} data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).`,
   ),
   Flag.optional,
 );
@@ -272,9 +273,13 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     readonly startupPresentation?: ServerConfig.StartupPresentation;
     readonly forceAutoBootstrapProjectFromCwd?: boolean;
     readonly rejectRunningServer?: boolean;
+    readonly selectAutomaticPort?: (
+      preferred: number,
+    ) => Effect.Effect<number, NetService.NetError | CliError.UserError>;
   },
 ) {
   const { findAvailablePort } = yield* NetService.NetService;
+  const selectAutomaticPort = options?.selectAutomaticPort ?? findAvailablePort;
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const env = yield* EnvServerConfig;
@@ -321,7 +326,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
         if (mode === "desktop") {
           return Effect.succeed(ServerConfig.DEFAULT_PORT);
         }
-        return findAvailablePort(ServerConfig.DEFAULT_PORT);
+        return selectAutomaticPort(ServerConfig.DEFAULT_PORT);
       },
     },
   );
@@ -357,7 +362,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
       isProcessAlive(runtime.value.pid)
     ) {
       return yield* new CliError.UserError({
-        cause: `A T3 Code server is already running for ${baseDir} (pid ${runtime.value.pid}, ${runtime.value.origin}). Connect to that server, stop it before starting another, or use a different --base-dir.`,
+        cause: `An ${APP_NAME} server is already running for ${baseDir} (pid ${runtime.value.pid}, ${runtime.value.origin}). Connect to that server, stop it before starting another, or use a different --base-dir.`,
       });
     }
   }
@@ -384,6 +389,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   const shellEnvironmentPrepared = bootstrap?.shellEnvironmentPrepared;
   const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
   const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
+  const desktopAppUpdate = bootstrap?.desktopAppUpdate;
   const desktopBrowserFd = bootstrap?.desktopBrowserFd;
   const desktopBrowserControlFd = bootstrap?.desktopBrowserControlFd;
   const resourceMonitorPath = bootstrap?.resourceMonitorPath;
@@ -428,9 +434,9 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     Option.fromUndefinedOr(env.host),
     Option.fromUndefinedOr(bootstrap?.host),
   );
-  // Private networks only, so clients learn a LAN address and prefer it over
-  // T3 Connect. `t3 service install` writes T3CODE_LAN=false for a new
-  // service; one installed before T3CODE_LAN existed keeps listening.
+  // Private networks only, so clients learn a LAN address. `t3 service install`
+  // writes T3CODE_LAN=false for a new service; one installed before T3CODE_LAN
+  // existed keeps listening.
   const lan = resolveOptionPrecedence(normalizedFlags.lan, Option.fromUndefinedOr(env.lan));
   const privateNetworkOnly =
     Option.isNone(explicitHost) &&
@@ -522,6 +528,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
     desktopTelemetryFd,
     desktopTelemetryControlFd,
+    ...(desktopAppUpdate === undefined ? {} : { desktopAppUpdate }),
     desktopBrowserFd,
     desktopBrowserControlFd,
     resourceMonitorPath,

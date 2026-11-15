@@ -12,7 +12,6 @@ const expectedDesktopBridgeApis = [
   "getPathForFile",
   "pickFolder",
 ];
-const clerkPasskeysGlobal = "__clerk_internal_electron_passkeys";
 const preloadExecutionTimeoutMs = 1_000;
 const desktopPackage = JSON.parse(
   NodeFS.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
@@ -103,11 +102,17 @@ const executeBundle = (source, sandboxModules) => {
     return sandboxModules.get(moduleName);
   };
 
+  // A real preload loads with the page's DOM; no page events fire while the bundle runs here.
+  const document = Object.assign(new EventTarget(), { fullscreenElement: null });
+  const window = Object.assign(new EventTarget(), { document });
+
   NodeVM.runInNewContext(
     source,
     {
+      document,
       process: sandboxProcess,
       require: requireSandboxModule,
+      window,
     },
     {
       filename: "desktop-preload.cjs",
@@ -137,7 +142,6 @@ export const verifyPreloadBundle = (source) => {
     (api) => typeof desktopBridge?.[api] !== "function",
   );
   if (!exposedGlobals.has("desktopBridge")) missingApis.unshift("desktopBridge exposure");
-  if (!exposedGlobals.has(clerkPasskeysGlobal)) missingApis.push(`${clerkPasskeysGlobal} exposure`);
 
   if (missingApis.length > 0) {
     throw new Error(`Desktop preload bundle is missing executable APIs: ${missingApis.join(", ")}`);

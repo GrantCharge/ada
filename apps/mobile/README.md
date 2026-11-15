@@ -1,7 +1,7 @@
-# T3 Code Mobile
+# Ada Mobile
 
 > [!NOTE]
-> To install the released app from the App Store or Google Play, see [Mobile app](../../docs/user/install.md#mobile-app). This guide covers building it from source.
+> Ada's mobile app is not in the App Store or Google Play yet. For test builds, see [Mobile app](../../docs/user/install.md#mobile-app). This guide covers building it from source.
 
 ## Quickstart
 
@@ -10,15 +10,14 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `T3 Code Personal Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Personal Preview`
-- `production`: store/release build as `T3 Code Personal`
+- `development`: Expo dev client, installable side-by-side as `Ada Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `Ada Preview`
+- `production`: store/release build as `Ada`
 
 Run commands from `apps/mobile`.
 
-T3 Connect is optional and disabled in a fresh clone. Public configuration belongs in the
-repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
-[`../../.env.example`](../../.env.example).
+Public configuration belongs in the repository-root `.env` or `.env.local`, not an
+`apps/mobile/.env` file. See [`../../.env.example`](../../.env.example).
 
 ## Development
 
@@ -35,7 +34,11 @@ The device argument can be omitted when exactly one device is booted or connecte
 compares this checkout's Expo fingerprint and the installed binary with its last install record,
 and reuses a matching client. Otherwise it installs the build for that fingerprint from
 `~/.cache/t3code/native-clients/artifacts`, then the shared task cache, and builds only when
-neither has it. One iOS simulator build serves every iPhone and iPad simulator, and one APK per
+neither has it. A build runs in the `Mobile Dev Client` workflow (Blacksmith runners with warm
+Gradle and ccache state, and a macOS runner for iOS) when `gh` may dispatch workflows on
+`pingdotgg/t3code` and HEAD is pushed; the helper waits for the client in the shared cache.
+Otherwise, or when HEAD lacks your native edits or `T3_NATIVE_CLIENT_BUILD=local` is set, it builds
+on this machine. Main's client is built there on every native change, so most checkouts hit. One iOS simulator build serves every iPhone and iPad simulator, and one APK per
 ABI (x86_64 or arm64-v8a) serves every emulator and phone of that ABI. Build output goes to the
 log file it prints (`T3_NATIVE_CLIENT_VERBOSE=1` streams it instead). Builds are shared back when
 your task-cache login (`bash infra/task-cache/install.sh`) can write. `T3_NATIVE_CLIENT_CACHE=read`
@@ -80,8 +83,8 @@ project. pnpm gives each patch hash a new package path; Pods can otherwise keep 
 previous directory.
 
 If your Xcode account only has a Personal Team, use a bundle identifier you control and opt into the
-reduced-capability local build. Personal Team builds omit the widget and share extensions, push
-entitlement, and native Sign in with Apple entitlement; builds without this opt-in are unchanged.
+reduced-capability local build. Personal Team builds omit the widget and share extensions and the
+native Sign in with Apple entitlement; builds without this opt-in are unchanged.
 
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
@@ -132,9 +135,9 @@ and `.preview` suffixes for the corresponding variants. Release builds use Apple
 provisioning; the upstream Apple team and App Store Connect app binding are removed. TestFlight
 submission requires your own App Store Connect app record.
 
-Personal builds disable Clerk, Google sign-in, cloud accounts, and account-based T3 Connect.
-They use the existing server's direct pairing and persist its credential in SecureStore. No
-Clerk/relay environment variables are required, and inherited cloud config is ignored.
+The app pairs directly with a server, over your network or Tailscale, and persists its
+credential in SecureStore. It has no accounts or relay; on iOS each server sends push notifications
+directly through Expo.
 
 For a standalone TestFlight app with embedded JavaScript and no Metro dependency:
 
@@ -147,13 +150,13 @@ The `personal-testflight` profile uses store distribution, the production bundle
 automatically incremented build numbers, and disabled OTA updates. Configure store provisioning
 for your Apple team and your App Store Connect app/submit credentials first.
 
-On the Mac running your existing T3 environment, generate a fresh reachable link with
+On the Mac running your existing Ada environment, generate a fresh reachable link with
 `t3 pair --tailscale` (use `--base-dir` if that server uses a different T3 home). Connect the
 phone to the same tailnet, open Environments → Add environment, scan the QR or paste the full
 link into Host, then tap Add environment. Host and pairing code can also be entered separately.
 A LAN IP works on the same network if the server's network access is enabled. Localhost does
 not point to your Mac. Stop/restart the app to reconnect with the saved server credential;
-Metro can remain off, but the T3 server must remain reachable.
+Metro can remain off, but the Ada server must remain reachable.
 
 Preview and production variants use Expo fingerprinting. Development clients below are for
 contributor workflows, not the standalone personal install.

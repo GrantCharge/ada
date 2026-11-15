@@ -7,29 +7,60 @@ import {
   type ContextChipIconRef,
   UNAVAILABLE_CONTEXT_CHIP_PRESENTATION,
 } from "./composerChipPresentation";
-import type { SelectableMarkdownSkill } from "../native/SelectableMarkdownText.types";
+import { formatComposerModelMention } from "@t3tools/client-runtime/composer-model-mentions";
+import type {
+  SelectableMarkdownModel,
+  SelectableMarkdownSkill,
+} from "../native/SelectableMarkdownText.types";
+import {
+  agentChipState,
+  type EnvironmentAgents,
+} from "@t3tools/client-runtime/state/agentIdentity";
 import {
   formatComposerContextHref,
   parseComposerContextHref,
 } from "@t3tools/shared/composerContextReferences";
 import { hasThreadLinks, parseThreadLinkHref } from "@t3tools/shared/threadLinks";
 
+const AGENT_STATE_SUFFIX: Record<ReturnType<typeof agentChipState>["status"], string> = {
+  unknown: "",
+  unsupported: " · unavailable",
+  available: "",
+  missing: " · unavailable",
+  "read-only": " · read-only",
+  elsewhere: " · other machine",
+};
+
+/**
+ * With `agents`, the environment's own library, an agent chip shows the agent's current name
+ * and whether it still exists there.
+ */
 export function enrichedContextLinkPresentation(
   href: string,
   records?: ReadonlyArray<ComposerContextRecord>,
+  agents?: EnvironmentAgents,
 ): { accent?: string; icon: ContextChipIconRef; label?: string } | undefined {
   const reference = parseComposerContextHref(href);
   if (!reference) return undefined;
   const record = records?.find((candidate) => candidate.contextId === reference.contextId);
+  const agent =
+    record?.kind === "agent" && "profileId" in record && agents
+      ? agentChipState(record, agents, undefined)
+      : undefined;
   const presentation =
-    records && !record
+    (records && !record) || agent?.status === "missing" || agent?.status === "unsupported"
       ? UNAVAILABLE_CONTEXT_CHIP_PRESENTATION
       : contextChipPresentation(reference.kind, record);
   const size = composerChipSizeSuffix(record);
+  const label = agent
+    ? `${agent.name}${AGENT_STATE_SUFFIX[agent.status]}`
+    : record && size
+      ? `${record.label} · ${size}`
+      : undefined;
   return {
     ...(presentation.accent ? { accent: presentation.accent } : {}),
     icon: contextChipIcon(presentation, contextRecordFileName(record)),
-    ...(record && size ? { label: `${record.label} · ${size}` } : {}),
+    ...(label ? { label } : {}),
   };
 }
 
@@ -58,7 +89,7 @@ export function threadChipTargets(
 ): ReadonlyArray<ThreadChipTarget> {
   const targets = new Map<string, ThreadChipTarget>();
   if (hasThreadLinks(markdown)) {
-    for (const [, href = ""] of markdown.matchAll(/\]\((t3-thread:\/\/v[12]\/[^\s)]+)\)/g)) {
+    for (const [, href = ""] of markdown.matchAll(/\]\(<?(t3-thread:\/\/v[12]\/[^\s>)]+)>?\)/g)) {
       const link = parseThreadLinkHref(href);
       if (link) {
         targets.set(href, {
@@ -88,7 +119,7 @@ export function enrichedLinkVariantPattern(url: string) {
 }
 
 export const ENRICHED_INLINE_FILE_LINK_REGEX =
-  /^(?!\S*:\/\/)(?:(?:\.{1,2}[\\/]|~[\\/]|\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root|usr|bin|sbin|lib|lib64|srv|dev|proc|sys|run|boot|media|workspace|workspaces)\/|[A-Za-z]:[\\/])[^\s`]+|(?:[A-Za-z0-9._-]+[\\/])+[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+(?::\d+){0,2}|[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+:\d+(?::\d+)?)$/;
+  /^(?!\S*:\/\/)(?:(?:\.{1,2}[\\/]|~[\\/]|\/(?:Users|home|tmp|var|etc|opt|mnt|Volumes|private|root|usr|bin|sbin|lib|lib64|srv|dev|proc|sys|run|boot|media|workspace|workspaces)\/|[A-Za-z]:[\\/])[^\s`]+|(?:[\p{L}\p{M}\p{N}._-]+[\\/])+[\p{L}\p{M}\p{N}._-]+\.[A-Za-z0-9_-]+(?::\d+(?::\d+|-\d+)?)?|[\p{L}\p{M}\p{N}._-]+\.[A-Za-z0-9_-]+:\d+(?::\d+|-\d+)?)$/u;
 
 export function enrichedSkillLinkRegex(skills?: ReadonlyArray<SelectableMarkdownSkill>) {
   const names = [...new Set(skills?.map((skill) => skill.name) ?? [])].filter(Boolean);
@@ -98,17 +129,6 @@ export function enrichedSkillLinkRegex(skills?: ReadonlyArray<SelectableMarkdown
   return new RegExp(
     `(?<![A-Za-z0-9_-])(?<!\\p{Sc})\\p{Sc}(?:${alternatives.join("|")})(?![A-Za-z0-9_-])`,
     "u",
-  );
-}
-
-export function enrichedSkillDisplayName(skill: SelectableMarkdownSkill) {
-  return (
-    skill.displayName?.trim() ||
-    skill.name
-      .split(/[\s:_-]+/)
-      .filter(Boolean)
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ")
   );
 }
 
@@ -122,4 +142,81 @@ export function enrichedSkillReference(
 
 export function enrichedSkillInstructionsPath(skill: SelectableMarkdownSkill) {
   return skill.path && !/^[a-z][a-z\d+.-]*:\/\//i.test(skill.path) ? skill.path : undefined;
+}
+
+export function buildEnrichedModelReferences(
+  providers: ReadonlyArray<{
+    readonly instanceId: string;
+    readonly driver: string;
+    readonly displayName?: string | undefined;
+    readonly iconUrl?: string | undefined;
+    readonly models: ReadonlyArray<{
+      readonly slug: string;
+      readonly name: string;
+      readonly subProvider?: string | undefined;
+    }>;
+  }>,
+  sources?: ReadonlySet<string>,
+): ReadonlyArray<SelectableMarkdownModel> {
+  return providers.flatMap((provider) =>
+    provider.models
+      .filter(
+        (model) =>
+          !sources || sources.has(formatComposerModelMention(provider.instanceId, model.slug)),
+      )
+      .map((model) => {
+        const qualifier = model.subProvider?.trim();
+        const label = qualifier
+          ? model.name
+              .replace(
+                new RegExp(
+                  `^${qualifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*[.:/-]\\s*|\\s+)`,
+                  "iu",
+                ),
+                "",
+              )
+              .trim() || model.name
+          : model.name;
+        return {
+          source: formatComposerModelMention(provider.instanceId, model.slug),
+          label,
+          providerLabel: qualifier || provider.displayName || provider.instanceId,
+          driver: provider.driver,
+          iconUrl: provider.iconUrl,
+        };
+      }),
+  );
+}
+
+export function enrichedModelLinkRegex(models?: ReadonlyArray<SelectableMarkdownModel>) {
+  if (!models?.length) return null;
+  const alternatives = models
+    .map((model) => model.source)
+    .sort((a, b) => b.length - a.length)
+    .map((source) => source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return new RegExp(
+    `(?<![^\\s,(\\["'])(?:${alternatives.join("|")})(?=$|[\\s,"']|[.;:!?\\)\\]]+(?=$|[\\s,"']))`,
+    "u",
+  );
+}
+
+export function enrichedModelReference(
+  source: string,
+  models?: ReadonlyArray<SelectableMarkdownModel>,
+) {
+  return models?.find((model) => model.source === source);
+}
+
+export function enrichedModelDetails(model: SelectableMarkdownModel) {
+  return `${model.providerLabel}\n${model.source}`;
+}
+
+export function enrichedTextLinkRegex(
+  skills?: ReadonlyArray<SelectableMarkdownSkill>,
+  models?: ReadonlyArray<SelectableMarkdownModel>,
+) {
+  const patterns = [enrichedSkillLinkRegex(skills), enrichedModelLinkRegex(models)]
+    .filter((pattern) => pattern !== null)
+    .map((pattern) => `(?:${pattern.source})`);
+  return patterns.length ? new RegExp(patterns.join("|"), "u") : null;
 }

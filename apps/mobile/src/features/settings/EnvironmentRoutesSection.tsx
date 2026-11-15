@@ -34,12 +34,12 @@ import { connectionTone } from "../connection/connectionTone";
 import { ListActionRow as SettingsActionRow } from "../../components/ui/ListActionRow";
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
 import { SettingsSection } from "./components/SettingsSection";
+import { unregisterPushBeforeRemoval } from "../notifications/pushRegistration";
 
 const ICON_SIZE = Platform.OS === "android" ? 24 : 22;
 const REMOVE_SIZE = 20;
 
 const ROUTE_ICONS: Record<ConnectionRouteKind, AppSymbolName> = {
-  relay: "cloud",
   loopback: "desktopcomputer",
   lan: "wifi",
   tailnet: "point.3.connected.trianglepath.dotted",
@@ -110,6 +110,11 @@ export function EnvironmentRoutesSection({
     }
     return to;
   };
+  const remove = async (route: ConnectionRoute) => {
+    // Removing the last route removes the environment.
+    if (saved.length === 1) await unregisterPushBeforeRemoval(environmentId);
+    await removeRoute({ environmentId, routeId: connectionRouteId(route.target) });
+  };
   const confirmRemove = (route: ConnectionRoute) =>
     Dialog.alert(
       `Remove ${connectionRouteLabel(route)}?`,
@@ -119,8 +124,7 @@ export function EnvironmentRoutesSection({
         {
           text: "Remove",
           style: "destructive",
-          onPress: () =>
-            void removeRoute({ environmentId, routeId: connectionRouteId(route.target) }),
+          onPress: () => void remove(route),
         },
       ],
     );

@@ -14,10 +14,19 @@ import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { createMuseSdkHost, createMuseSdkHostEffect, type MuseSdkHost } from "./sdk.ts";
+import {
+  createMuseSdkHost,
+  createMuseSdkHostEffect,
+  MuseSdkError,
+  type MuseSdkHost,
+} from "./sdk.ts";
 import { museModelCapabilities, resolveMuseReasoningEffort } from "./modelCatalog.ts";
 import type { ProviderTextGeneration } from "@t3tools/provider-core/server/textGeneration";
-import { investigationUnsupported } from "@t3tools/provider-core/server/textGenerationOperations";
+import {
+  generatedThreadTitle,
+  investigationUnsupported,
+  TranscriptionPostProcessingOutput,
+} from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   buildBranchNamePrompt,
   buildDraftRewritePrompt,
@@ -28,10 +37,10 @@ import {
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
-  sanitizeThreadTitle,
   sanitizeDraftRewrite,
   toJsonSchemaObject,
 } from "@t3tools/provider-core/server/textGenerationUtils";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const SessionStarted = Schema.Struct({ session: Schema.Struct({ sessionId: Schema.String }) });
 const ItemNotification = Schema.Struct({
@@ -114,7 +123,7 @@ async function generateMuseText(
       await host.connection.command("userInput/cancel", {
         sessionId,
         userInputId: request.userInputId,
-        reason: "T3 Code text generation cannot request user input.",
+        reason: `${APP_NAME} text generation cannot request user input.`,
       });
     }
   };
@@ -158,7 +167,7 @@ async function generateMuseText(
   });
   host.connection.onProtocolError(rejectCompletion);
   host.connection.onServerRequest(async () => {
-    const error = new Error("T3 Code text generation cannot approve interactive requests.");
+    const error = new Error(`${APP_NAME} text generation cannot approve interactive requests.`);
     rejectCompletion(error);
     throw error;
   });
@@ -252,24 +261,25 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
         (host: MuseSdkHost) => Effect.promise(() => host.close()),
         { interruptible: true },
       );
-      return yield* Effect.tryPromise((signal) =>
-        generateMuseText(
-          host,
-          cwd,
-          `${input.prompt}\n\nReturn only a JSON object matching this schema, with no markdown fences. Do not use tools or ask questions.\n${jsonSchema}`,
-          modelId,
-          reasoningEffort,
-          signal,
-        ),
-      );
+      return yield* Effect.tryPromise({
+        try: (signal) =>
+          generateMuseText(
+            host,
+            cwd,
+            `${input.prompt}\n\nReturn only a JSON object matching this schema, with no markdown fences. Do not use tools or ask questions.\n${jsonSchema}`,
+            modelId,
+            reasoningEffort,
+            signal,
+          ),
+        catch: (cause) => new MuseSdkError({ operation: "generate text", cause }),
+      });
     }).pipe(
       Effect.scoped,
       Effect.mapError(
         (cause) =>
           new TextGenerationError({
             operation,
-            detail:
-              "Muse Code text generation failed. Check Muse login and availability on this T3 server host.",
+            detail: `Muse Code text generation failed. Check Muse login and availability on this ${APP_NAME} server host.`,
             cause,
           }),
       ),
@@ -340,8 +350,17 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
       ...buildThreadTitlePrompt(input),
       modelSelection: input.modelSelection,
     });
-    return { title: sanitizeThreadTitle(generated.title) };
+    return { title: yield* generatedThreadTitle(generated.title) };
   });
+  const generateTranscriptionPostProcessing: ProviderTextGeneration["generateTranscriptionPostProcessing"] =
+    Effect.fn("MuseTextGeneration.generateTranscriptionPostProcessing")(function* (input) {
+      return yield* runMuseJson({
+        operation: "generateTranscriptionPostProcessing",
+        prompt: input.prompt,
+        outputSchema: TranscriptionPostProcessingOutput,
+        modelSelection: input.modelSelection,
+      });
+    });
   const rewriteDraft: ProviderTextGeneration["rewriteDraft"] = Effect.fn(
     "MuseTextGeneration.rewriteDraft",
   )(function* (input) {
@@ -360,6 +379,7 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     generateBranchName,
     generateThreadTitle,
     generateReviewGuide,
+    generateTranscriptionPostProcessing,
     rewriteDraft,
   } satisfies ProviderTextGeneration;
 });

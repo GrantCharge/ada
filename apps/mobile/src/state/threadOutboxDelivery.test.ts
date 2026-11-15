@@ -1,4 +1,7 @@
-import { acknowledgedThreadMessagesAtom } from "./acknowledged-thread-messages";
+import {
+  acknowledgedThreadMessagesAtom,
+  pruneCaughtUpAcknowledgedThreadMessages,
+} from "./acknowledged-thread-messages";
 import {
   CommandId,
   EnvironmentId,
@@ -117,6 +120,7 @@ vi.mock("./use-thread-outbox", async () => {
   return {
     editingQueuedMessageIdsAtom: Atom.make<Record<string, boolean>>({}).pipe(Atom.keepAlive),
     dispatchingQueuedMessageIdAtom: Atom.make(null).pipe(Atom.keepAlive),
+    retryingQueuedMessageIdsAtom: Atom.make({}).pipe(Atom.keepAlive),
     threadOutboxShellStatusesAtom: Atom.make(new Map()),
   };
 });
@@ -144,6 +148,7 @@ vi.mock("./thread-outbox", async () => {
 });
 
 import * as Option from "effect/Option";
+import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { pendingThreadCreationOutcomesAtom } from "./pending-thread-creation";
 import { clearThreadComposerError, threadComposerErrorsAtom } from "./thread-composer-error";
@@ -218,7 +223,6 @@ beforeEach(() => {
 afterEach(() => {
   appAtomRegistry.set(harness.manager.queuedMessagesByThreadKeyAtom, {});
   appAtomRegistry.set(composerDrafts.composerDraftsAtom, {});
-  appAtomRegistry.set(composerDrafts.composerCloudDraftsAtom, { accountId: null, signedOut: {} });
   appAtomRegistry.set(editingQueuedMessageIdsAtom, {});
   appAtomRegistry.set(pendingThreadCreationOutcomesAtom, {});
   appAtomRegistry.set(threadComposerErrorsAtom, {});
@@ -364,75 +368,30 @@ describe("thread outbox drain delivery cleanup", () => {
     ]);
   });
 
-  it("removes an acknowledged outbox item even when the sign-out archive write fails", async () => {
-    const message = queuedMessage({ messageId: "archive-write-failure", text: "Delivered" });
+  it("drops an acknowledged row once the open thread catches up, so a reload cannot resurrect it", async () => {
+    const message = queuedMessage({ messageId: "paged-out-later", text: "Delivered" });
     await harness.manager.enqueue(message);
-    await composerDrafts.archiveCloudComposerDrafts("account-a", new Set([message.environmentId]));
-    harness.draftFile.setWriteError(new Error("Draft storage unavailable"));
+    await completeQueuedMessageDelivery(message, harness.manager.revisionOf(message.messageId), 7);
 
-    await expect(
-      completeQueuedMessageDelivery(
-        message,
-        harness.manager.revisionOf(message.messageId),
-        undefined,
-      ),
-    ).resolves.toBe("removed");
-    expect(remainingMessages()).toEqual([]);
-
-    harness.draftFile.setWriteError(null);
-    await composerDrafts.flushComposerDrafts();
-    appAtomRegistry.set(composerDrafts.composerCloudDraftsAtom, { accountId: null, signedOut: {} });
-    composerDrafts.resetComposerDraftsLoadState();
-    await composerDrafts.restoreCloudComposerDrafts("account-a");
-    expect(remainingMessages()).toEqual([]);
-  });
-
-  it.each([false, true])(
-    "does not restore a message delivered after the sign-out snapshot (outbox already cleared: %s)",
-    async (cleared) => {
-      const message = queuedMessage({
-        messageId: "delivered-during-sign-out",
-        text: "Already delivered",
-      });
-      await harness.manager.enqueue(message);
-      const deliveryRevision = harness.manager.revisionOf(message.messageId);
-      await composerDrafts.archiveCloudComposerDrafts(
-        "account-a",
-        new Set([message.environmentId]),
-      );
-      expect(
-        appAtomRegistry.get(composerDrafts.composerCloudDraftsAtom).signedOut["account-a"]
-          ?.queuedMessages,
-      ).toEqual([message]);
-
-      if (cleared) await harness.manager.clearEnvironment(message.environmentId);
-      await expect(
-        completeQueuedMessageDelivery(message, deliveryRevision, undefined),
-      ).resolves.toBe(cleared ? "edited" : "removed");
-
-      appAtomRegistry.set(composerDrafts.composerCloudDraftsAtom, {
-        accountId: null,
-        signedOut: {},
-      });
-      composerDrafts.resetComposerDraftsLoadState();
-      await composerDrafts.restoreCloudComposerDrafts("account-a");
-      expect(remainingMessages()).toEqual([]);
-    },
-  );
-
-  it("preserves an archived edit when an older payload finishes delivery", async () => {
-    const message = queuedMessage({ messageId: "edited-during-sign-out", text: "Original" });
-    await harness.manager.enqueue(message);
-    const deliveryRevision = harness.manager.revisionOf(message.messageId);
-    const edited = { ...message, text: "Keep this edit" };
-    await harness.manager.update(edited);
-    await composerDrafts.archiveCloudComposerDrafts("account-a", new Set([message.environmentId]));
-    await harness.manager.clearEnvironment(message.environmentId);
-    await expect(completeQueuedMessageDelivery(message, deliveryRevision, undefined)).resolves.toBe(
-      "edited",
+    pruneCaughtUpAcknowledgedThreadMessages(
+      scopedThreadKey(message.environmentId, message.threadId),
+      {
+        sequence: 6,
+        messages: [],
+      },
     );
-    await composerDrafts.restoreCloudComposerDrafts("account-a");
-    expect(remainingMessages()).toEqual([edited]);
+    expect(appAtomRegistry.get(acknowledgedThreadMessagesAtom)).toEqual([
+      { ...message, sequence: 7 },
+    ]);
+
+    pruneCaughtUpAcknowledgedThreadMessages(
+      scopedThreadKey(message.environmentId, message.threadId),
+      {
+        sequence: 7,
+        messages: [],
+      },
+    );
+    expect(appAtomRegistry.get(acknowledgedThreadMessagesAtom)).toEqual([]);
   });
 
   it("retries only cleanup after an acknowledged send removal fails", async () => {

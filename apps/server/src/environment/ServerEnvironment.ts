@@ -6,7 +6,7 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -14,14 +14,13 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { serverBuildVersion } from "../buildVersion.ts";
-import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { resolveServerInstallation } from "../cli/invocation.ts";
-import { readAgentActivityPublishingActive } from "../cloud/config.ts";
-import { resolveServerSelfUpdateCapability } from "../cloud/selfUpdate.ts";
-import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
+import { resolveServerSelfUpdateCapability } from "../service/selfUpdate.ts";
+import { resolveServiceLauncherMode } from "../service/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import { databaseMigrationHead } from "../persistence/databaseMigrationHead.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { isSpeechPlatformSupported } from "../speech/platform.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { detectServerEnvironmentMachineKind } from "./ServerEnvironmentMachine.ts";
 
@@ -85,7 +84,7 @@ function platformArch(
 const makeIdentity = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const serverConfig = yield* ServerConfig.ServerConfig;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
 
   const readPersistedEnvironmentId = Effect.gen(function* () {
     const exists = yield* fileSystem.exists(serverConfig.environmentIdPath).pipe(
@@ -159,7 +158,7 @@ const makeIdentity = Effect.gen(function* () {
       return persisted;
     }
 
-    const generated = yield* crypto.randomUUIDv4();
+    const generated = yield* random.uuidV4();
     yield* persistEnvironmentId(generated, "create");
     let winner = yield* readPersistedEnvironmentId;
     if (winner === null) {
@@ -185,10 +184,10 @@ const makeIdentity = Effect.gen(function* () {
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
-  const secrets = yield* ServerSecretStore.ServerSecretStore;
   const identity = yield* ServerEnvironmentIdentity;
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
+  const hostLibc = hostPlatform === "linux" ? yield* HostProcess.LinuxLibc : undefined;
   const environmentId = yield* identity.getEnvironmentId;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
   const label = yield* resolveServerEnvironmentLabel({ cwdBaseName });
@@ -199,10 +198,11 @@ export const make = Effect.gen(function* () {
     launcherManaged: launcher.managed,
   });
   const serverInstallation = serverSelfUpdate === null ? yield* resolveServerInstallation : null;
-  // Desktop and server ship together; a control fd guarantees requestDesktopUpdate support.
-
+  // The desktop reports whether it can install updates; requests travel over its control fd.
   const desktopAppUpdate =
-    serverSelfUpdate === "desktop-managed" && serverConfig.desktopTelemetryControlFd !== undefined;
+    serverSelfUpdate === "desktop-managed" &&
+    serverConfig.desktopAppUpdate === true &&
+    serverConfig.desktopTelemetryControlFd !== undefined;
 
   const databaseMigration = databaseMigrationHead(serverConfig.dbPath);
   const descriptor: ExecutionEnvironmentDescriptor = {
@@ -226,20 +226,28 @@ export const make = Effect.gen(function* () {
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
       pullRequestChecks: true,
+      linkedThreadRefreshes: true,
       sideChats: true,
+      vcsBranchStatus: true,
       inlineMessageContext: true,
       requiredWorktreeBootstrap: true,
       threadSettlement: true,
       threadAutoSettlement: true,
       agentSkillsSync: true,
       agentSkillResources: true,
+      agentSkillBodiesOnDemand: true,
+      agentLibraryMutations: true,
+      agentLibraryLastWriteWins: true,
       storageCleanup: true,
       storageCleanupRun: true,
       databaseStorage: true,
+      agentGateway: true,
       otlpEndpointCheck: true,
+      secretSourceCheck: true,
       projectWorktreeCleanup: true,
       settledWorktreeCleanup: true,
       worktreesDirectory: true,
+      ...(hostPlatform === "darwin" ? { fastWorktreeCheckout: true } : {}),
       threadAutoSettlementScope: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
@@ -249,6 +257,7 @@ export const make = Effect.gen(function* () {
       environmentThemes: true,
       usageLimitSources: true,
       providerWorkspaceSnapshotsOnDemand: true,
+      modelCatalogRefresh: true,
       usagePriceOverrides: true,
       usageModelAliases: true,
       threadPinning: true,
@@ -275,9 +284,15 @@ export const make = Effect.gen(function* () {
       workspaceTodos: true,
       projectOrganization: true,
       ignoredFileListing: true,
+      ignoredFileSearch: true,
       triage: true,
       oneTimeSchedules: true,
+      freshContext: true,
+      scheduledTaskThreadModes: true,
       npmReleaseLookup: true,
+      voiceTranscription: isSpeechPlatformSupported(hostPlatform, hostArchitecture, hostLibc),
+      cloudVoiceTranscription: true,
+      pushNotifications: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
@@ -288,18 +303,15 @@ export const make = Effect.gen(function* () {
       peerLinks: true,
       mcpModeLimitHeader: true,
       linkFence: true,
+      mcpApprovalCodes: true,
+      shellThreadFamilies: true,
+      shellOlderSettled: true,
     },
   };
 
   return ServerEnvironment.of({
     getEnvironmentId: Effect.succeed(environmentId),
-    // Publishing opt-in and relay links change at runtime; read the capability per request.
-    getDescriptor: readAgentActivityPublishingActive(secrets).pipe(
-      Effect.map((agentActivityPublishing) => ({
-        ...descriptor,
-        capabilities: { ...descriptor.capabilities, agentActivityPublishing },
-      })),
-    ),
+    getDescriptor: Effect.succeed(descriptor),
   });
 });
 

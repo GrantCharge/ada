@@ -1,5 +1,6 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
@@ -19,6 +20,7 @@ import {
   connectionRoutes,
   routeEntry,
   routeHttpBaseUrl,
+  routeKeepsItsHost,
   sendsTokenInClear,
   usableRoutes,
 } from "./routes.ts";
@@ -45,9 +47,9 @@ export type RouteCheck = "answered" | "silent" | "unchecked";
 export type RoutePreflight = "ready" | "unprepared" | "silent" | "unchecked";
 
 const ROUTE_CHECK_TIMEOUT_MS = 2_500;
-// Preferred direct routes share one head start, so a relay connection does not
-// wait the full probe timeout for a LAN the device has already left. A route
-// that misses it connects over relay, then upgrades with a second reconnect.
+// Preferred routes share one head start, so a later route does not wait the
+// full probe timeout for a LAN the device has already left. A route that misses
+// it connects later, then upgrades with a second reconnect.
 const ROUTE_CHECK_HEAD_START_MS = 500;
 
 export class ConnectionDriver extends Context.Service<
@@ -135,14 +137,17 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     ),
   ];
   for (const { route, check } of retry) {
+    // A route still silent after its whole check can hold the attempt open far
+    // longer than the check did. Once another route failed in a way that
+    // retries, the retry reaches it sooner than waiting here would.
+    if (transient !== undefined && check === "silent") break;
     const result = yield* attempt(route, check);
     if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
   // A route that already missed its reachability check timing out again says nothing new, while
   // a route that answered and refused names what the user must fix. A refusal from an unchecked
-  // route, such as T3 Connect asking for sign-in, must not stop retries of a direct route that
-  // needs no sign-in and only lost packets.
+  // route must not stop retries of another route that only lost packets.
   return yield* (
     transient ??
       answeredBlocked ??
@@ -166,15 +171,22 @@ export const make = Effect.gen(function* () {
   // Nothing here forces a new connection on iOS: NSURLSession ignores `Connection: close` and
   // pools per origin. The WebSocket opens its own TCP connection every attempt, so a route whose
   // check went silent is still dialled.
-  const checkDescriptor = (httpBaseUrl: string, environmentId: string) =>
+  const checkDescriptor = (httpBaseUrl: string, environmentId: string, keepsItsHost: boolean) =>
     fetchRemoteEnvironmentDescriptor({
       httpBaseUrl,
       timeoutMs: ROUTE_CHECK_TIMEOUT_MS,
     }).pipe(
-      Effect.map((descriptor): RouteCheck =>
-        descriptor.environmentId === environmentId ? "answered" : "silent",
+      Effect.option,
+      // The connect this check leads to skips its own read. Every answer, even a
+      // failure, replaces what an older check remembered.
+      Effect.tap((descriptor) =>
+        remote.rememberCheckedDescriptor(httpBaseUrl, descriptor, keepsItsHost),
       ),
-      Effect.orElseSucceed((): RouteCheck => "silent"),
+      Effect.map((descriptor): RouteCheck =>
+        Option.exists(descriptor, (value) => value.environmentId === environmentId)
+          ? "answered"
+          : "silent",
+      ),
       // A cached descriptor would answer for a host that cannot be reached.
       Effect.provideService(FetchHttpClient.RequestInit, { cache: "no-store" }),
       Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -183,7 +195,7 @@ export const make = Effect.gen(function* () {
   const checkRoute = (entry: ConnectionCatalogEntry, route: ConnectionRoute) => {
     const httpBaseUrl = routeHttpBaseUrl(route);
     if (httpBaseUrl === null) return Effect.succeed<RouteCheck>("unchecked");
-    return checkDescriptor(httpBaseUrl, entry.target.environmentId).pipe(
+    return checkDescriptor(httpBaseUrl, entry.target.environmentId, routeKeepsItsHost(route)).pipe(
       Effect.withSpan("ConnectionDriver.checkRoute", {
         attributes: { "connection.target.kind": route.target._tag },
       }),
@@ -191,7 +203,11 @@ export const make = Effect.gen(function* () {
   };
 
   const checkHost = (prepared: PreparedConnection) =>
-    checkDescriptor(prepared.httpBaseUrl, prepared.environmentId).pipe(
+    checkDescriptor(
+      prepared.httpBaseUrl,
+      prepared.environmentId,
+      prepared.httpBaseUrl.startsWith("https:"),
+    ).pipe(
       Effect.withSpan("ConnectionDriver.checkHost", {
         attributes: { "connection.target.kind": prepared.target._tag },
       }),
@@ -212,25 +228,12 @@ export const make = Effect.gen(function* () {
       entry,
       (route) => checkRoute(entry, route),
       Effect.fnUntraced(function* (route) {
+        yield* reportProgress({ stage: "preparing" });
         const prepared = yield* resolver.prepare(routeEntry(entry, route));
         yield* reportProgress({ stage: "opening", prepared });
         const session = yield* sessions.connect(prepared);
         yield* reportProgress({ stage: "synchronizing", prepared });
         yield* session.ready;
-        // The server closes a socket when its session expires, unless the same key renewed it.
-        if (prepared.httpAuthorization?._tag === "Dpop") {
-          yield* remote
-            .renewDpopBeforeExpiry({
-              expectedEnvironmentId: prepared.environmentId,
-              expiresAtEpochMs: prepared.httpAuthorization.expiresAtEpochMs,
-            })
-            .pipe(
-              Effect.catch((error) =>
-                Effect.logWarning("Could not renew the connection's credential.", { error }),
-              ),
-              Effect.forkScoped,
-            );
-        }
         return { prepared, session } satisfies EnvironmentConnectionLease;
       }),
     );

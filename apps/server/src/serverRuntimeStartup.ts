@@ -10,11 +10,12 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import { formatHostForUrl, isWildcardHost } from "@t3tools/shared/hostClassification";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -27,7 +28,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "./config.ts";
-import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
+import * as ServiceLauncherClient from "./service/serviceLauncherClient.ts";
 import { flushCompileCache } from "./compileCache.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -42,20 +43,13 @@ import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts
 import * as ProjectService from "./project/ProjectService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
-import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import { forkParked, forkParkedFiber } from "./serverActivation.ts";
-import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
-import { getServerOwners } from "./telemetry/Identify.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import {
-  formatHeadlessServeOutput,
-  formatHostForUrl,
-  isWildcardHost,
-  issueHeadlessServeAccessInfo,
-} from "./startupAccess.ts";
+import { formatHeadlessServeOutput, issueHeadlessServeAccessInfo } from "./startupAccess.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeStartupError>()(
   "ServerRuntimeStartupError",
@@ -148,38 +142,6 @@ export const makeCommandGate = Effect.gen(function* () {
   } satisfies CommandGate;
 });
 
-const recordStartupHeartbeat = Effect.gen(function* () {
-  const analytics = yield* AnalyticsService.AnalyticsService;
-  const projects = yield* ProjectService.ProjectService;
-  const threads = yield* ThreadManagement.ThreadManagementService;
-
-  const { threadCount, projectCount } = yield* Effect.all({
-    projects: projects.snapshot,
-    threadCount: threads.countThreads(),
-  }).pipe(
-    Effect.map(({ projects: projectSnapshot, threadCount }) => ({
-      projectCount: projectSnapshot.projects.length,
-      threadCount,
-    })),
-    Effect.catch((cause) =>
-      Effect.logWarning("failed to gather V2 startup counts for telemetry", {
-        cause,
-      }).pipe(
-        Effect.as({
-          threadCount: 0,
-          projectCount: 0,
-        }),
-      ),
-    ),
-  );
-
-  yield* analytics.record("server.boot.heartbeat", {
-    threadCount,
-    projectCount,
-  });
-  yield* analytics.recordOwners(yield* getServerOwners, "server");
-});
-
 const getAutoBootstrapThreadModelSelection = (): ModelSelection => ({
   instanceId: ProviderInstanceId.make("codex"),
   model: DEFAULT_MODEL,
@@ -262,8 +224,8 @@ const resolveWelcomeBase = Effect.gen(function* () {
 });
 
 const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
-  const crypto = yield* Crypto.Crypto;
-  const randomUUID = crypto.randomUUIDv4();
+  const random = yield* SecureRandom.SecureRandom;
+  const randomUUID = random.uuidV4();
   const serverConfig = yield* ServerConfig.ServerConfig;
   const projects = yield* ProjectService.ProjectService;
   const threads = yield* ThreadManagement.ThreadManagementService;
@@ -275,12 +237,24 @@ const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
 
   if (serverConfig.autoBootstrapProjectFromCwd) {
     const threadModelSelection = getAutoBootstrapThreadModelSelection();
-    const { project } = yield* projects.bootstrap({
-      commandId: CommandId.make(yield* randomUUID),
-      projectId: ProjectId.make(yield* randomUUID),
-      title: path.basename(serverConfig.cwd) || "project",
-      workspaceRoot: serverConfig.cwd,
-    });
+    const bootstrapped = yield* projects
+      .bootstrap({
+        commandId: CommandId.make(yield* randomUUID),
+        projectId: ProjectId.make(yield* randomUUID),
+        title: path.basename(serverConfig.cwd) || "project",
+        workspaceRoot: serverConfig.cwd,
+      })
+      .pipe(
+        // A folder the project rules refuse must not stop the server from starting there.
+        Effect.catchTags({
+          ProjectInvalidError: (error) =>
+            Effect.logWarning("Skipped bootstrap project", { detail: error.detail }).pipe(
+              Effect.as(undefined),
+            ),
+        }),
+      );
+    if (bootstrapped === undefined) return {} satisfies AutoBootstrapWelcomeTargets;
+    const { project } = bootstrapped;
     const existingThread = (yield* threads.listActiveShellIndex()).find(
       (thread) => thread.projectId === project.id && isListedThread(thread),
     );
@@ -347,7 +321,7 @@ const resolveStartupBrowserTarget = Effect.gen(function* () {
 
 /** Prints the one-time admin pairing URL to stdout only; logger records reach trace files and collectors. */
 export const announceStartupPairingUrl = (pairingUrl: string) =>
-  Effect.logInfo("Authentication required. Open T3 Code using the pairing URL.").pipe(
+  Effect.logInfo(`Authentication required. Open ${APP_NAME} using the pairing URL.`).pipe(
     Effect.andThen(Console.log(`  pairingUrl: ${pairingUrl}`)),
   );
 
@@ -384,31 +358,6 @@ interface StartupOptions {
   readonly awaitAuxiliaryParked?: Effect.Effect<void>;
   readonly abort?: (error: ServerRuntimeStartupError) => Effect.Effect<void>;
 }
-
-export const startEffectWorkerWithRelay = Effect.fn(
-  "ServerRuntimeStartup.startEffectWorkerWithRelay",
-)(function* <WorkerContext, RelayContext>(input: {
-  readonly runWorker: Effect.Effect<void, never, WorkerContext>;
-  readonly startRelay: Effect.Effect<void, never, RelayContext>;
-  readonly workerFiberRef: Ref.Ref<Fiber.Fiber<void, never> | null>;
-}) {
-  const workerFiber = yield* forkParkedFiber(input.runWorker);
-  yield* Ref.set(input.workerFiberRef, workerFiber);
-  yield* input.startRelay.pipe(
-    Effect.onExit((exit) => {
-      if (Exit.isSuccess(exit)) {
-        return Effect.void;
-      }
-      return Ref.getAndSet(input.workerFiberRef, null).pipe(
-        Effect.flatMap((ownedWorkerFiber) =>
-          ownedWorkerFiber === null
-            ? Effect.void
-            : Fiber.interrupt(ownedWorkerFiber).pipe(Effect.asVoid),
-        ),
-      );
-    }),
-  );
-});
 
 const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2StartupPhases")(
   function* <
@@ -449,11 +398,10 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const threadTasks = yield* ThreadTaskService.ThreadTaskService;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
-  const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
-  const crypto = yield* Crypto.Crypto;
+  const random = yield* SecureRandom.SecureRandom;
   const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
 
   const commandGate = yield* makeCommandGate;
@@ -480,6 +428,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
       yield* Effect.logInfo("V2 orchestration shutdown reconciliation completed", reconciliation);
     }).pipe(
+      Effect.withSpan("server.shutdown"),
       Effect.catchCause((cause) =>
         Effect.logWarning("V2 orchestration shutdown reconciliation failed", {
           cause: Cause.pretty(cause),
@@ -552,16 +501,16 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       ),
       startEffectWorker: runStartupPhase(
         "orchestration-v2.effect-worker.start",
-        startEffectWorkerWithRelay({
-          runWorker: EffectWorker.runDaemon,
-          startRelay: agentAwarenessRelay.start(),
-          workerFiberRef: effectWorkerFiber,
-        }),
+        forkParkedFiber(EffectWorker.runDaemon).pipe(
+          Effect.flatMap((fiber) => Ref.set(effectWorkerFiber, fiber)),
+        ),
       ),
       autoBootstrap: (serverConfig.autoBootstrapProjectFromCwd
         ? runStartupPhase(
             "welcome.autobootstrap",
-            resolveAutoBootstrapWelcomeTargets.pipe(Effect.provideService(Crypto.Crypto, crypto)),
+            resolveAutoBootstrapWelcomeTargets.pipe(
+              Effect.provideService(SecureRandom.SecureRandom, random),
+            ),
           )
         : Effect.succeed({})
       ).pipe(Effect.map((targets): AutoBootstrapWelcomeTargets => targets)),
@@ -620,13 +569,6 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
 
     yield* forkParked(
       Effect.gen(function* () {
-        yield* Effect.logDebug("startup phase: recording startup heartbeat");
-        yield* recordStartupHeartbeat.pipe(
-          Effect.withSpan("server.startup.heartbeat.record", {
-            attributes: { "startup.phase": "heartbeat.record" },
-          }),
-          Effect.ignoreCause({ log: true }),
-        );
         if (serverConfig.startupPresentation === "headless") {
           yield* Effect.logDebug("startup phase: headless access info");
           const accessInfo = yield* issueHeadlessServeAccessInfo();
@@ -649,7 +591,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     yield* runStartupPhase("http.wait", Deferred.await(httpListening));
     yield* runStartupPhase("auxiliary-roots.parked", options?.awaitAuxiliaryParked ?? Effect.void);
 
-    const updateOutcome = yield* launcher.prepareTrial;
+    const updateOutcome = yield* launcher.prepareTrial({ baseDir: serverConfig.baseDir });
 
     yield* Effect.logDebug("startup phase: publishing welcome event", {
       environmentId: environment.environmentId,

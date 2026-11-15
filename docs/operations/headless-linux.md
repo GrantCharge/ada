@@ -1,13 +1,16 @@
 # Headless Linux host for the fork
 
+The supported headless setup is now the install script followed by `t3 service install`
+([Install T3 Code](../user/install.md)); it is the only one the app's **Update** button can
+update. This guide is for hosts already running the AppImage-based unit.
+
 Run the fork's server on a Linux host without the Electron window, under a systemd user unit,
 and update it from the fork's nightly feed. Clients (web over Tailscale, the desktop app on
 another machine, mobile) connect to it like any other remote environment.
 
-Upstream's `t3 service install` and `t3 update` do the same job for upstream builds, but they
-download upstream's single-file runtimes from `pingdotgg/t3code`. The fork publishes only
-desktop packages, so this setup runs the server bundled in the fork's AppImage instead:
-[`packaging/linux-headless/`](../../packaging/linux-headless/).
+`t3 service install` and `t3 update` download the fork's single-file runtimes, which fork releases
+publish from 0.1.9 nightlies on. This setup runs the server bundled in the fork's AppImage
+instead, which also covers older releases: [`packaging/linux-headless/`](../../packaging/linux-headless/).
 
 ## Why a plain unit instead of the desktop app
 
@@ -87,8 +90,9 @@ checks again. `rollback` does that on request. Each run writes a report to
 `~/.local/state/t3-captain/cutover-<timestamp>.txt`. Unit names, port, T3 home, and URL are
 `CUTOVER_*` variables at the top of the script.
 
-The headless server hosts the T3 Agents gateway runtime the desktop app used to provide: the
-cutover adds `T3_MCP_HEADLESS_GATEWAY=1` to the unit, and the server reads the bridge token from
+The headless server hosts the Ada gateway runtime the desktop app used to provide: the
+cutover adds `T3_MCP_HEADLESS_GATEWAY=1` to the unit, which the server follows until its
+**Server gateway** setting is saved from a client, and the server reads the bridge token from
 `~/.config/t3code/mcp-gateway.env`. Agents in chats keep their own `t3-code` MCP, which their
 server serves either way.
 

@@ -4,7 +4,9 @@ import { describe, expect, it } from "@effect/vitest";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeNet from "node:net";
 import * as NodeUtil from "node:util";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -75,14 +77,15 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
           "a!b!c",
           "",
         ];
+        const hostPath = (yield* HostProcess.Environment).PATH ?? "";
         yield* Effect.promise(() =>
           expect(
             exec(path.join(shim, "agent-device"), args, {
-              env: { PATH: process.env.PATH ?? "", HOME: temp },
+              env: { PATH: hostPath, HOME: temp },
             }),
           ).rejects.toMatchObject({ code: 23, stdout: `${JSON.stringify(args)}\n`, stderr: "" }),
         );
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
   );
 
   it.effect("binds one device's flags into its launcher and leaves help alone", () =>
@@ -173,7 +176,7 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       Effect.scoped,
       Effect.provideService(HostProcess.IsExecutable, false),
       Effect.provideService(HostProcess.ExecutablePath, process.execPath),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   );
 
@@ -240,7 +243,7 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       ]) {
         yield* Effect.promise(() =>
           expect(launch(managed)).rejects.toThrow(
-            `T3 Code manages this command's connection to the device, so \`${managed.find((arg) => ["connect", "disconnect", "auth", "daemon"].includes(arg))}\` is not available through it.`,
+            `Ada manages this command's connection to the device, so \`${managed.find((arg) => ["connect", "disconnect", "auth", "daemon"].includes(arg))}\` is not available through it.`,
           ),
         );
       }
@@ -248,7 +251,7 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       Effect.scoped,
       Effect.provideService(HostProcess.IsExecutable, false),
       Effect.provideService(HostProcess.ExecutablePath, process.execPath),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   );
 
@@ -310,7 +313,7 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
         expect(launch(["screenshot", "/tmp/shot.png"])).rejects.toMatchObject({
           code: 1,
           stdout: "",
-          stderr: `T3 Code's device connection at 127.0.0.1:${port} is not reachable from this shell (connect ECONNREFUSED). Call device_open again to reconnect; if that succeeds and this repeats, this shell runs in a network sandbox, so run the command with network access, outside the sandbox.\n`,
+          stderr: `Ada's device connection at 127.0.0.1:${port} is not reachable from this shell (connect ECONNREFUSED). Call device_open again to reconnect; if that succeeds and this repeats, this shell runs in a network sandbox, so run the command with network access, outside the sandbox.\n`,
         }),
       );
       // An explicit --daemon-base-url wins over the config, as it does in agent-device.
@@ -338,7 +341,7 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       Effect.scoped,
       Effect.provideService(HostProcess.IsExecutable, false),
       Effect.provideService(HostProcess.ExecutablePath, process.execPath),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   );
 
@@ -363,7 +366,7 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       Effect.scoped,
       Effect.provideService(HostProcess.IsExecutable, false),
       Effect.provideService(HostProcess.ExecutablePath, process.execPath),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   );
 
@@ -393,7 +396,7 @@ exec '${process.execPath.replaceAll("'", "'\"'\"'")}' "$@"
       }).pipe(
         Effect.scoped,
         Effect.provideService(HostProcess.IsExecutable, false),
-        Effect.provide(NodeServices.layer),
+        Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       ),
   );
 
@@ -474,7 +477,7 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
       Effect.scoped,
       Effect.provideService(HostProcess.IsExecutable, true),
       Effect.provideService(HostProcess.ExecutablePath, "/packaged/t3"),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
     ),
   );
 });

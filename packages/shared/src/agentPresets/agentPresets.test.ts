@@ -1,10 +1,26 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Reads the fixture and bundled preset folders the way a bundler sees them.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import type { AgentSkill } from "@t3tools/contracts";
+import {
+  agentSkillDigest,
+  mergeAgentLibraries,
+  toAgentSkillStub,
+  type AgentSkill,
+  type McpGatewayProfile,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { addPresetSkills, decodeAgentPresets, type AgentPresetSkill } from "./agentPresets.ts";
+import {
+  addPresetSkills,
+  agentPresetFilesFromArchive,
+  decodeAgentPresets,
+  defaultAgentSkills,
+  DEFAULT_AGENT_SKILL_NAMES,
+  exportAgentPresets,
+  presetSkillConflicts,
+  type AgentPresetSkill,
+} from "./agentPresets.ts";
+import { readAgentPresetSkillFiles } from "./agentPresetSkillFiles.ts";
 
 function readTree(root: string, directory: string): Record<string, string> {
   const base = NodePath.join(root, directory);
@@ -145,6 +161,70 @@ describe("addPresetSkills", () => {
     ]);
   });
 
+  it.each([
+    ["no choice reuses the newest same-named copy", undefined, ["newer"], 2],
+    ["reuse keeps the chosen copy", { kind: "reuse", skillId: "older" } as const, ["older"], 2],
+    ["new adds a copy beside them", { kind: "new" } as const, ["new-skill"], 3],
+  ])("when names match but text differs, %s", (_label, choice, skillIds, count) => {
+    const library = [
+      librarySkill({ skillId: "older", name: "review-checklist", content: "# Old" }),
+      librarySkill({
+        skillId: "newer",
+        name: "Review-Checklist",
+        content: "# Newer",
+        updatedAt: "2026-05-01T00:00:00.000Z",
+      }),
+    ];
+    const result = addPresetSkills(
+      library,
+      [{ ...presetSkill, ...(choice && { choice }) }],
+      options,
+    );
+    expect(result.skillIds).toEqual(skillIds);
+    expect(result.agentSkills).toHaveLength(count);
+    expect(result.agentSkills.slice(0, 2)).toEqual(library);
+  });
+
+  it("updates the chosen skill in place at its own revision, keeping its id so agents keep pointing at it", () => {
+    const library = [
+      librarySkill({ skillId: "older", name: "review-checklist", content: "# Old", resources: [] }),
+      librarySkill({ skillId: "other", name: "other", content: "# Other" }),
+    ];
+    const result = addPresetSkills(
+      library,
+      [{ ...presetSkill, choice: { kind: "update", skillId: "older" } }],
+      options,
+    );
+    expect(result.skillIds).toEqual(["older"]);
+    expect(result.agentSkills).toEqual([
+      {
+        ...library[0],
+        description: presetSkill.description,
+        content: presetSkill.content,
+        resources: presetSkill.resources,
+        // The base revision the edit was made against; the server bumps it.
+        revision: 3,
+        updatedAt: options.now,
+      },
+      library[1],
+    ]);
+  });
+
+  it("updates a metadata stub into a full skill", () => {
+    const stub = toAgentSkillStub(
+      librarySkill({ name: "review-checklist", content: "# Old" }),
+      "digest",
+    );
+    const result = addPresetSkills(
+      [stub],
+      [{ ...presetSkill, choice: { kind: "update", skillId: "existing" } }],
+      options,
+    );
+    expect(result.agentSkills[0]).not.toHaveProperty("contentOmitted");
+    expect(result.agentSkills[0]).not.toHaveProperty("digest");
+    expect(result.agentSkills[0]!.content).toBe(presetSkill.content);
+  });
+
   it("adds one skill when a preset lists the same bundle twice", () => {
     let id = 0;
     const twin: AgentPresetSkill = { ...presetSkill, name: "twin" };
@@ -154,5 +234,214 @@ describe("addPresetSkills", () => {
     });
     expect(result.skillIds).toEqual(["s1"]);
     expect(result.agentSkills).toHaveLength(1);
+  });
+});
+
+describe("defaultAgentSkills", () => {
+  const root = import.meta.dirname;
+  const skillFiles = readAgentPresetSkillFiles();
+  const presets = decodeAgentPresets({ ...readTree(root, "presets"), ...skillFiles });
+  const now = "2026-11-12T00:00:00.000Z";
+  const empty = {
+    agentSkills: [],
+    agentSkillDeletedAt: {},
+    mcpGatewayProfiles: [],
+    mcpGatewayProfileDeletedAt: {},
+  };
+
+  it("seeds a new library with stable ids that a preset install then reuses", () => {
+    const seeded = defaultAgentSkills(empty, skillFiles);
+    expect(seeded.map((skill) => [skill.skillId, skill.name])).toEqual(
+      DEFAULT_AGENT_SKILL_NAMES.map((name) => [`t3-default-${name}`, name]),
+    );
+    const captain = presets.find((preset) => preset.id === "captain")!;
+    const added = addPresetSkills(seeded, captain.skills, { now, makeId: () => "new" });
+    expect(added.agentSkills.filter((skill) => skill.skillId.startsWith("t3-default-"))).toEqual(
+      seeded,
+    );
+    expect(added.agentSkills.filter((skill) => skill.name === "t3-agents")).toHaveLength(1);
+  });
+
+  it("seeds copies older than any edit or deletion, so another machine's library wins a merge", () => {
+    const [seeded] = defaultAgentSkills(empty, skillFiles);
+    const edited = { ...seeded!, content: "mine", revision: 2, updatedAt: now };
+    expect(
+      mergeAgentLibraries([
+        { ...empty, agentSkills: [seeded!] },
+        { ...empty, agentSkills: [edited] },
+      ]).agentSkills,
+    ).toEqual([edited]);
+    expect(
+      mergeAgentLibraries([
+        { ...empty, agentSkills: [seeded!] },
+        { ...empty, agentSkillDeletedAt: { [seeded!.skillId]: now } },
+      ]).agentSkills,
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
+      "an edited default",
+      { agentSkills: [{ ...defaultAgentSkills(empty, skillFiles)[0]!, content: "mine" }] },
+    ],
+    ["a deleted default", { agentSkillDeletedAt: { "t3-default-t3-agents": now } }],
+    ["an agent", { mcpGatewayProfiles: [{}] }],
+    ["a deleted agent", { mcpGatewayProfileDeletedAt: { agent: now } }],
+  ])("leaves a library holding %s alone", (_label, library) => {
+    expect(defaultAgentSkills({ ...empty, ...library }, skillFiles)).toEqual([]);
+  });
+});
+
+describe("presetSkillConflicts", () => {
+  const [presetSkill] = decodeAgentPresets(fixtures)[0]!.skills;
+  const skill = (overrides: Partial<AgentSkill>): AgentSkill => ({
+    skillId: "a",
+    name: "review-checklist",
+    description: "",
+    content: "# Mine",
+    revision: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  });
+
+  it("lists same-named copies newest first and defaults to reusing the newest", () => {
+    const library = [
+      skill({ skillId: "a" }),
+      skill({ skillId: "b", updatedAt: "2026-03-01T00:00:00.000Z" }),
+      skill({ skillId: "c", name: "unrelated" }),
+    ];
+    expect(presetSkillConflicts(library, [presetSkill!])).toEqual([
+      {
+        index: 0,
+        name: "review-checklist",
+        candidates: [library[1], library[0]],
+        defaultChoice: { kind: "reuse", skillId: "b" },
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      "an identical copy exists under any name",
+      [skill({ name: "x", content: presetSkill!.content, resources: presetSkill!.resources })],
+    ],
+    ["no library skill shares the name", [skill({ name: "other" })]],
+    [
+      "a metadata stub carries the same body",
+      [
+        toAgentSkillStub(
+          skill({ content: presetSkill!.content, resources: presetSkill!.resources }),
+          agentSkillDigest(presetSkill!),
+        ),
+      ],
+    ],
+  ])("reports nothing when %s", (_label, library) => {
+    expect(presetSkillConflicts(library, [presetSkill!])).toEqual([]);
+  });
+});
+
+describe("exportAgentPresets", () => {
+  const [presetSkill] = decodeAgentPresets(fixtures)[0]!.skills;
+  const library: ReadonlyArray<AgentSkill> = [
+    {
+      skillId: "s1",
+      name: "review-checklist",
+      description: presetSkill!.description,
+      content: presetSkill!.content,
+      resources: presetSkill!.resources,
+      revision: 2,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+    {
+      skillId: "s2",
+      name: "Plain notes",
+      description: "",
+      content: "# Notes without frontmatter",
+      revision: 1,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  ];
+  const profile: McpGatewayProfile = {
+    profileId: "p1",
+    name: "My Reviewer",
+    description: "Reviews diffs",
+    color: "#2f80ed",
+    icon: "shield",
+    iconId: "bug",
+    tags: ["Dev", "security"],
+    systemPrompt: "Review carefully.",
+    skillIds: ["s1", "s2"],
+    providerLabel: "Codex",
+    modelLabel: "gpt-5.5",
+    reasoningEffort: "high",
+    runtimeMode: "read-only",
+    interactionMode: "default",
+    revision: 1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  it("round-trips a profile and its skills through the preset folder format", () => {
+    const files = exportAgentPresets([profile, { ...profile, profileId: "p2" }], library);
+    expect(Object.keys(files).sort()).toEqual([
+      "presets/my-reviewer-2/preset.json",
+      "presets/my-reviewer-2/system-prompt.md",
+      "presets/my-reviewer/preset.json",
+      "presets/my-reviewer/system-prompt.md",
+      "skills/Plain-notes/SKILL.md",
+      "skills/review-checklist/SKILL.md",
+      "skills/review-checklist/scripts/count.sh",
+    ]);
+    const [preset] = decodeAgentPresets(files);
+    expect(preset).toMatchObject({
+      id: "my-reviewer",
+      name: "My Reviewer",
+      description: "Reviews diffs",
+      icon: "shield",
+      iconId: "bug",
+      tags: ["Dev", "security"],
+      model: { provider: "Codex", model: "gpt-5.5", reasoningEffort: "high" },
+      runtimeMode: "read-only",
+      systemPrompt: "Review carefully.",
+    });
+    expect(preset!.skills.map(({ name, content }) => [name, content])).toEqual([
+      ["review-checklist", presetSkill!.content],
+      ["Plain-notes", "# Notes without frontmatter"],
+    ]);
+    const added = addPresetSkills(library, preset!.skills, { now: "now", makeId: () => "x" });
+    expect(added).toEqual({ agentSkills: library, skillIds: ["s1", "s2"] });
+  });
+
+  it("writes the legacy icon beside an iconId saved without one", () => {
+    const { icon: _icon, ...withoutIcon } = profile;
+    const [preset] = decodeAgentPresets(exportAgentPresets([withoutIcon], library));
+    expect(preset).toMatchObject({ icon: "shield", iconId: "bug" });
+  });
+
+  it("refuses to drop an assigned skill it could not load, naming it and its agents", () => {
+    const stub = toAgentSkillStub(library[1]!, "digest");
+    expect(() =>
+      exportAgentPresets(
+        [profile, { ...profile, profileId: "p2", name: "Other", skillIds: ["gone"] }],
+        [library[0]!, stub],
+      ),
+    ).toThrow('Could not load skills: "Plain notes" (My Reviewer), gone (Other).');
+  });
+
+  it("refuses a skill file that is not UTF-8 text", () => {
+    const binary = { ...library[1]!, resources: [{ path: "img.bin", contentBase64: "/w==" }] };
+    expect(() => exportAgentPresets([profile], [library[0]!, binary])).toThrow(/img\.bin/);
+  });
+
+  it("reads an archive that wraps the tree in one folder", () => {
+    const files = exportAgentPresets([profile], library);
+    const encoder = new TextEncoder();
+    const entries = Object.entries(files).map(
+      ([path, text]) => [`export/${path}`, encoder.encode(text)] as const,
+    );
+    expect(agentPresetFilesFromArchive([["export/", new Uint8Array()], ...entries])).toEqual(files);
   });
 });

@@ -118,6 +118,34 @@ const knownRecords: Record<(typeof COMPOSER_CONTEXT_KINDS)[number], Record<strin
     label: "vps",
     environmentId: "environment-vps",
   },
+  agent: {
+    ...base,
+    kind: "agent",
+    label: "Doug",
+    profileId: "profile-doug",
+    name: "Doug",
+  },
+  response: {
+    ...base,
+    kind: "response",
+    label: "Reviewer (search) finished",
+    citation: {
+      version: 1,
+      environmentId: "environment-1",
+      threadId: "thread-1",
+      messageId: "message-1",
+      text: "Reviewer (search) finished and returned blocked on one finding.",
+      start: 0,
+      end: 63,
+      prefix: "",
+      suffix: " I read its report",
+    },
+    itemId: "turn-item-1",
+    subagents: [
+      { threadId: "thread-2", title: "review pr 412 (search)" },
+      { threadId: "thread-3", title: "review pr 413", environmentId: "environment-2" },
+    ],
+  },
 };
 
 describe("ComposerContextRecord", () => {
@@ -139,6 +167,13 @@ describe("ComposerContextRecord", () => {
 
   it("does not let a malformed known kind slide through as unknown", () => {
     expect(Option.isNone(decodeRecord({ ...base, kind: "image", label: "x" }))).toBe(true);
+    expect(Option.isNone(decodeRecord({ ...knownRecords.agent, profileId: " " }))).toBe(true);
+  });
+
+  it("decodes every known kind as itself", () => {
+    for (const record of Object.values(knownRecords)) {
+      expect(Option.getOrThrow(decodeRecord(record))).toEqual(record);
+    }
   });
 
   it("bounds the serialized payload of future context kinds", () => {

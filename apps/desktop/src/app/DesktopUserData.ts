@@ -1,8 +1,10 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import { UPSTREAM_APP_NAME } from "@t3tools/shared/branding";
 
 export class DesktopUserDataInitializationError extends Schema.TaggedError<DesktopUserDataInitializationError>()(
   "DesktopUserDataInitializationError",
@@ -95,3 +97,98 @@ export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPa
     return destinationPath;
   },
 );
+
+const GPU_CACHE_DIRECTORIES = [
+  "GPUCache",
+  "GrShaderCache",
+  "ShaderCache",
+  "DawnGraphiteCache",
+  "DawnWebGPUCache",
+  "GPUPersistentCache",
+];
+
+// Keyed on Electron, not Chromium: Electron patches ship Chromium backports under the same Chrome version.
+export const clearStaleGpuCaches = Effect.fn("desktop.userData.clearStaleGpuCaches")(
+  function* (input: { readonly userDataPath: string; readonly electronVersion: string }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const markerPath = path.join(input.userDataPath, "gpu-cache-electron-version");
+    const cachedVersion = yield* fs.readFileString(markerPath).pipe(
+      Effect.catchIf(
+        (error) => error.reason._tag === "NotFound",
+        () => Effect.undefined,
+      ),
+    );
+    if (cachedVersion?.trim() === input.electronVersion) return;
+    for (const name of GPU_CACHE_DIRECTORIES) {
+      yield* fs.remove(path.join(input.userDataPath, name), { recursive: true, force: true });
+    }
+    yield* fs.makeDirectory(input.userDataPath, { recursive: true });
+    yield* fs.writeFileString(markerPath, input.electronVersion);
+  },
+  (effect, input) =>
+    effect.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("could not clear stale GPU caches", {
+          userDataPath: input.userDataPath,
+          electronVersion: input.electronVersion,
+          error: error.message,
+        }),
+      ),
+    ),
+);
+
+const PROFILE_OWNER_FILE = "profile-owner.json";
+const ProfileOwnerJson = Schema.fromJsonString(
+  Schema.Struct({ app: Schema.String, pid: Schema.Int }),
+);
+const decodeProfileOwner = Schema.decodeUnknownOption(ProfileOwnerJson);
+// Fork builds before the Ada rename recorded this name; an in-place update must not see itself as another app.
+const LEGACY_FORK_APP_NAME = "T3 Agents";
+const encodeProfileOwner = Schema.encodeSync(ProfileOwnerJson);
+
+/** T3 Code and Ada share this profile, so its single-instance lock admits only one of them. */
+export const recordProfileOwner = Effect.fn("desktop.userData.recordProfileOwner")(
+  function* (input: { readonly userDataPath: string; readonly app: string; readonly pid: number }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(input.userDataPath, { recursive: true });
+    yield* fs.writeFileString(
+      path.join(input.userDataPath, PROFILE_OWNER_FILE),
+      encodeProfileOwner({ app: input.app, pid: input.pid }),
+    );
+  },
+  (effect) =>
+    effect.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("could not record the profile owner", { error: error.message }),
+      ),
+    ),
+);
+
+/**
+ * The other app holding the profile lock, or null when it is another window of this app.
+ * T3 Code records no owner, so an unrecorded holder is T3 Code when this build shares its profile.
+ */
+export function otherProfileOwner(input: {
+  readonly recorded: string | undefined;
+  readonly app: string;
+  readonly sharesProfileWithUpstream: boolean;
+  readonly isAlive: (pid: number) => boolean;
+}): string | null {
+  const owner = Option.getOrUndefined(decodeProfileOwner(input.recorded));
+  if (owner !== undefined && input.isAlive(owner.pid)) {
+    return owner.app === input.app || owner.app === LEGACY_FORK_APP_NAME ? null : owner.app;
+  }
+  return input.sharesProfileWithUpstream ? UPSTREAM_APP_NAME : null;
+}
+
+export const readProfileOwner = Effect.fn("desktop.userData.readProfileOwner")(function* (
+  userDataPath: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* fs
+    .readFileString(path.join(userDataPath, PROFILE_OWNER_FILE))
+    .pipe(Effect.orElseSucceed(() => undefined));
+});

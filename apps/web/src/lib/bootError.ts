@@ -1,8 +1,12 @@
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 
-const FALLBACK_TRIAGE_COMMAND = "npx t3 triage";
-const DOWNLOAD_URL = "https://t3.codes/download";
-const ISSUE_URL = "https://github.com/pingdotgg/t3code/issues/new";
+// Boot code loads before any package resolves, so it repeats APP_NAME, the CLI names and CLI_RELEASE_REPOSITORY from @t3tools/shared.
+const APP_NAME = "Ada";
+const REPOSITORY_URL = "https://github.com/jayleaton/ada";
+const CLI_COMMAND = "ada";
+const LEGACY_CLI_COMMAND = "t3";
+const DOWNLOAD_URL = `${REPOSITORY_URL}/releases`;
+const ISSUE_URL = `${REPOSITORY_URL}/issues/new`;
 const LAST_FAILURE_KEY = "t3code:boot-failed-at";
 const REPEAT_FAILURE_MS = 5 * 60_000;
 const MAX_CAUSES = 3;
@@ -23,18 +27,26 @@ function launcherCommand(launcherPath: string) {
     : `'${launcherPath.replaceAll("'", `'"'"'`)}'`;
 }
 
-/** Desktop can run its bundled launcher without Node; everything else falls back to npx. */
-export async function resolveTriageCommand(bridge: DesktopBridge | undefined) {
+/**
+ * Desktop names the command PATH runs as its own, else its launcher. Undefined elsewhere: either
+ * name may be another program's there, so no command is offered to copy.
+ */
+export async function resolveTriageCommand(
+  bridge: DesktopBridge | undefined,
+): Promise<string | undefined> {
   try {
     const state = await bridge?.cliCommand.getState();
     // Windows reports onPath from its PATH entry alone; only an existing launcher proves it runs.
     if (state?.launcherPath) {
-      return state.onPath ? "t3 triage" : `${launcherCommand(state.launcherPath)} triage`;
+      // `command` is absent from desktop builds that link only `t3`.
+      return state.onPath
+        ? `${state.command ?? LEGACY_CLI_COMMAND} triage`
+        : `${launcherCommand(state.launcherPath)} triage`;
     }
   } catch (error) {
     console.warn("Could not read the desktop CLI state.", error);
   }
-  return FALLBACK_TRIAGE_COMMAND;
+  return undefined;
 }
 
 /** The update button only appears when the desktop updater has a newer build to offer. */
@@ -235,7 +247,7 @@ function mountUpdateButton(
           : undefined;
     run?.then(
       (result) => render(result.state),
-      (error: unknown) => console.warn("Could not update T3 Agents.", error),
+      (error: unknown) => console.warn(`Could not update ${APP_NAME}.`, error),
     );
   });
   // A pushed state is newer than the initial read, so the read must not overwrite it.
@@ -255,7 +267,7 @@ function mountUpdateButton(
 }
 
 export function showBootError(error: unknown) {
-  console.error("T3 Agents failed to start.", error);
+  console.error(`${APP_NAME} failed to start.`, error);
   const bootShell = document.getElementById("boot-shell");
   if (!bootShell) return;
 
@@ -274,7 +286,7 @@ export function showBootError(error: unknown) {
   };
 
   const message = element("div", {}, [
-    element("h1", { textContent: "T3 Agents failed to start" }),
+    element("h1", { textContent: `${APP_NAME} failed to start` }),
     element("p", {
       textContent: offline
         ? "This browser appears to be offline. Check the connection, then reload."
@@ -293,7 +305,7 @@ export function showBootError(error: unknown) {
   const updateNote = element("p", { id: "boot-error-update-note", hidden: true });
   if (bridge) mountUpdateButton(bridge, update, updateNote, announce);
 
-  const command = element("code", { textContent: FALLBACK_TRIAGE_COMMAND });
+  const command = element("code");
   const copyCommand = element("button", {
     className: "boot-error-icon",
     type: "button",
@@ -318,7 +330,25 @@ export function showBootError(error: unknown) {
       },
     ),
   );
-  void resolveTriageCommand(bridge).then((value) => (command.textContent = value));
+  const where = `on the computer that runs ${APP_NAME}. Your agent can check the local logs and help you file a bug report.`;
+  const commandIntro = element("p", {}, [
+    "Run ",
+    element("code", { textContent: "triage" }),
+    ` with your ${APP_NAME} CLI (`,
+    element("code", { textContent: CLI_COMMAND }),
+    ", or legacy ",
+    element("code", { textContent: LEGACY_CLI_COMMAND }),
+    `) ${where}`,
+  ]);
+  const commandBox = element("div", { id: "boot-error-command" }, [command, copyCommand]);
+  // #boot-error-command sets display, which would override the hidden attribute.
+  commandBox.style.display = "none";
+  void resolveTriageCommand(bridge).then((value) => {
+    if (value === undefined) return;
+    command.textContent = value;
+    commandIntro.textContent = `Run this${value.startsWith("& '") ? " in PowerShell" : ""} ${where}`;
+    commandBox.style.removeProperty("display");
+  });
 
   let report = "(no error message)";
   try {
@@ -344,7 +374,7 @@ export function showBootError(error: unknown) {
 
   const issue = new URL(ISSUE_URL);
   issue.searchParams.set("template", "bug_report.yml");
-  issue.searchParams.set("title", "T3 Agents failed to start");
+  issue.searchParams.set("title", `${APP_NAME} failed to start`);
   issue.searchParams.set("area", "apps/web");
   issue.searchParams.set("version", `${environment.version} (${environment.channel})`);
   issue.searchParams.set("environment", `${environment.surface}, ${environment.platform}`);
@@ -360,17 +390,11 @@ export function showBootError(error: unknown) {
             nightly ? `${DOWNLOAD_URL}?channel=nightly` : DOWNLOAD_URL,
             nightly
               ? "Download and reinstall the latest nightly build"
-              : "Download and reinstall T3 Agents",
+              : `Download and reinstall ${APP_NAME}`,
           ),
         ]
       : []),
-    element("div", {}, [
-      element("p", {
-        textContent:
-          "Run this on the computer that runs T3 Agents. Your agent can check the local logs and help you file a bug report.",
-      }),
-      element("div", { id: "boot-error-command" }, [command, copyCommand]),
-    ]),
+    element("div", {}, [commandIntro, commandBox]),
     element("div", {}, [
       details,
       element("p", {

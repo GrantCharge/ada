@@ -18,14 +18,15 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as McpGatewayBroker from "../mcp/McpGatewayBroker.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
@@ -36,6 +37,7 @@ import { makeSubagentChildThread } from "@t3tools/provider-core/server/subagentP
 import * as RemoteParentSettlement from "./RemoteParentSettlement.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import * as ThreadManagement from "./ThreadManagementService.ts";
+import { CODE_PAIRED_SUBJECT, layerDependencies } from "../mcp/McpGatewayBroker.testkit.ts";
 
 const instanceId = ProviderInstanceId.make("codex");
 const adapter = {
@@ -51,9 +53,20 @@ const drainEffects = Effect.gen(function* () {
   const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
   yield* worker.drain();
 });
+/** The chats a settle's remote settlement effect carries to other environments. */
+const carriedToOtherEnvironments = (commandId: string) =>
+  EffectOutbox.EffectOutboxV2.pipe(
+    Effect.flatMap((outbox) => outbox.get(`effect:${commandId}:thread-settlement.remote`)),
+    Effect.map((effect) =>
+      Option.isSome(effect) && effect.value.request.type === "thread-settlement.remote"
+        ? effect.value.request.threadIds.toSorted()
+        : [],
+    ),
+  );
 const testLayer = Layer.mergeAll(
   database,
   projectionLayer.pipe(Layer.provide(database)),
+  EffectOutbox.layer.pipe(Layer.provide(database)),
   ProviderReplayHarness.layerWithRegistry(
     { name: "parent-thread" },
     ProviderAdapterRegistry.layerFromAdapters([adapter]),
@@ -1088,7 +1101,7 @@ const relayLayer = (input: {
     McpGatewayBroker.McpGatewayBroker,
     Effect.gen(function* () {
       const broker = yield* McpGatewayBroker.make;
-      yield* broker.connect("desktop", { [pc]: ["read"] }).pipe(
+      yield* broker.connect("desktop", { [pc]: ["read"] }, CODE_PAIRED_SUBJECT).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
             const threadId = String(event.args[1]);
@@ -1108,7 +1121,7 @@ const relayLayer = (input: {
       );
       return broker;
     }),
-  ).pipe(Layer.provide(NodeServices.layer));
+  ).pipe(Layer.provide(layerDependencies()));
 
 const withRemoteParents = (relay: ReturnType<typeof relayLayer>) =>
   RemoteParentSettlement.layer.pipe(Layer.provideMerge(testLayer), Layer.provideMerge(relay));
@@ -1635,6 +1648,14 @@ it.effect("un-settling follows provenance, not a shared settle time", () =>
       reason: "user",
     });
     yield* settle("captain");
+    // Children on other environments follow under every chat the walk changed or passed through.
+    assert.deepEqual(yield* carriedToOtherEnvironments("settle:captain"), [
+      "captain",
+      "grandchild",
+      "named",
+      "own",
+      "own-child",
+    ]);
     const captainAt = (yield* thread("captain")).settledAt;
     for (const id of ["named", "grandchild", "own-child"]) {
       const settled = yield* thread(id);
@@ -1794,6 +1815,8 @@ it.effect("a busy sub-run follows a repeat settle once it finishes, with its sub
     yield* command("thread.settle", "captain", 2);
     const captainAt = (yield* thread("captain")).settledAt;
     assert.isNull((yield* thread("worker")).settledAt);
+    // A busy sub-run's remote children wait for its own settle.
+    assert.deepEqual(yield* carriedToOtherEnvironments("settle:captain:2"), ["captain"]);
 
     const before = yield* sink.latestSequence();
     yield* completeRun("worker");

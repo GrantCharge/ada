@@ -95,14 +95,20 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   run_scheduled_task_now: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const scheduler = yield* ScheduledTasks.ScheduledTaskService;
+      const taskId = input.scheduledTaskId ?? input.taskId;
+      if (taskId === undefined)
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Pass the task's scheduledTaskId.",
+        });
       const { tasks } = yield* scheduler.list().pipe(Effect.mapError(unavailable));
-      if (!tasks.some((task) => task.id === input.taskId))
+      if (!tasks.some((task) => task.id === taskId))
         return yield* new OrchestratorMcpFailure({
           code: "invalid_request",
           message: "The scheduled task was not found.",
         });
       const { task, threadId } = yield* scheduler
-        .runNow({ id: input.taskId })
+        .runNow({ id: taskId })
         .pipe(
           Effect.mapError(
             (error) =>
@@ -133,9 +139,10 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
         .searchThreads({ ...input, projectId: input.projectId ?? caller?.projectId })
         .pipe(Effect.mapError(unavailable));
       return {
+        currentThreadId: scope.thread?.threadId ?? null,
         matches: matches.map((match) => ({
           ...match,
-          link: McpInvocationContext.threadLinkFor(scope, match.threadId),
+          link: McpInvocationContext.threadLinkFor(scope, match.threadId, match.title),
         })),
       };
     }),
@@ -270,7 +277,16 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     (input) => input.action === "list" || input.action === "read",
     McpToolAccess.reads((input) =>
       Effect.gen(function* () {
-        const { projection } = yield* readThread(input.threadId, ["runs", "messages"]);
+        const { threads, projection: queued } = yield* readThread(input.threadId, ["runs"], {
+          runStatuses: ["queued"],
+        });
+        const messages = yield* threads
+          .getMessagesById(
+            queued.thread.id,
+            queued.runs.map((run) => run.userMessageId),
+          )
+          .pipe(Effect.mapError(unavailable));
+        const projection = { runs: queued.runs, messages: [...messages.values()] };
         if (input.action === "list") {
           const runs = queuedRunsInDeliveryOrder(projection);
           const cursor = input.cursor ?? 0;

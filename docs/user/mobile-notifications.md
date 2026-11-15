@@ -1,11 +1,37 @@
 # Mobile notifications
 
-Sign in to T3 Connect, link your environments, and enable **Device Notifications** in **Settings → Notifications** to receive alerts when an agent finishes, fails, needs approval, or asks for input. Tap a notification to open its thread. Your environment must have agent activity publishing enabled.
+On iPhone, Ada can tell you when an agent needs you or finishes, even while the app is closed. Each of your servers sends the notification itself through Expo's push service, so it works however the phone connects: on your network, over Tailscale, or through SSH.
 
-Enable **Live Activity Updates** on iOS, **Agent Live Updates** on Android 16 and newer, or **Ongoing Agent Activity** on older Android versions to follow work without opening the app. Finished results remain visible for up to 15 minutes. You can dismiss an Android activity card without disabling alerts; turn off the same switch to stop future cards.
+## Turn it on
 
-Ordinary alerts stay quiet while the mobile app is in the foreground. Ongoing activity continues to update. Viewing a thread on another device does not silence your phone's alerts.
+1. Pair the phone with your servers as usual.
+2. Open **Settings → Notifications** and allow notifications.
+3. Each server has its own switch. Servers are on by default. Turn one off to stop notifications from that server only.
 
-Android notifications require Android 7.0 or newer and Google Play services. Android 16 and newer can promote ongoing activity to a Live Update, subject to system settings and device support. Other devices show a regular ongoing notification. If Live Updates don't appear on Android 16 or newer, check **Live Update Settings** in T3 Code's **Settings → Notifications**. Android 7's battery-saving modes can delay removal of expired cards.
+A server needs a recent Ada version to send notifications. Older servers show as needing an update.
 
-Notification permission and Android notification channels are controlled in system Settings. Background delivery requires T3 Connect; a direct or Tailscale connection alone does not enable push notifications. The mobile app does not need to maintain a connection to your environment. Force-stopping the Android app in system Settings prevents push delivery until you open it again.
+## What you are notified about
+
+Only top-level threads notify you: when one **Needs your input**, **Needs approval**, **Finished** or **Failed**.
+
+Child chats and subagents never notify you on their own. When one asks for something, the notification names its top-level thread, and tapping it opens that thread. Tasks delegated from another machine don't notify from this one.
+
+A snoozed thread doesn't notify you when it finishes, but it still does when it fails or asks for something. Settled threads don't notify you. If you're already looking at a thread, no notification is shown for it.
+
+Tap a notification to open its thread.
+
+## Privacy
+
+A notification contains the thread title, the project name, and the kind of event, never message content. It goes from your server to Expo and Apple on its way to your phone.
+
+## Stopping notifications
+
+- Turn the server's switch off in **Settings → Notifications**.
+- Remove the server from the phone. The phone asks the server to forget it first. If the server can't be reached, it keeps the registration until that session expires or is revoked.
+- Revoke the phone from the server's **Connections** settings. The server stops at once.
+
+## Not available yet
+
+- Android notifications.
+- Live Activities and the **Agent Activity** widget.
+- Grouping several servers' events into one notification. Each server notifies on its own.

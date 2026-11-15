@@ -16,35 +16,35 @@ describe("shouldHandleAppLink", () => {
     "t3code-personal-dev://",
     "t3code-personal-preview://",
   ])("ignores scheme-only URL %s", (url) => {
-    expect(shouldHandleAppLink(url, true)).toBe(false);
+    expect(shouldHandleAppLink(url)).toBe(false);
   });
 
   it.each([
     "t3code-personal://threads/env-1/thread-1",
     "t3code-personal://pair?pairingUrl=x",
     "t3code-personal-dev://settings/usage?tab=limits",
+    "t3code-personal://threads/env/thread?prompt=Fix%20expo-development-client%20and%20t3code-personal://expo-sharing",
   ])("handles path-bearing URL %s", (url) => {
-    expect(shouldHandleAppLink(url, true)).toBe(true);
+    expect(shouldHandleAppLink(url)).toBe(true);
   });
 
   it.each([
     "t3code-personal://expo-development-client/?url=x",
     "t3code-personal://expo-sharing/anything",
   ])("ignores lifecycle URL %s", (url) => {
-    expect(shouldHandleAppLink(url, true)).toBe(false);
+    expect(shouldHandleAppLink(url)).toBe(false);
   });
 });
 
-describe("cloud-only deep links", () => {
+describe("removed T3 Connect deep links", () => {
   it.each([
     "t3code://connect-onboarding",
     "t3code-dev://connect-onboarding/?source=x",
     "t3code://settings/waitlist",
     "t3code://settings/auth",
     "exp://192.168.1.2:8081/--/settings/auth",
-  ])("ignores %s without cloud config", (url) => {
-    expect(shouldHandleAppLink(url, false)).toBe(false);
-    expect(shouldHandleAppLink(url, true)).toBe(true);
+  ])("ignores %s", (url) => {
+    expect(shouldHandleAppLink(url)).toBe(false);
   });
 
   it.each([
@@ -54,8 +54,8 @@ describe("cloud-only deep links", () => {
     "t3code://threads/env/thread/files/scripts/connect-onboarding",
     "t3code://new/draft/files/settings/auth",
     "exp://192.168.1.2:8081/--/threads/env/thread/files/settings/waitlist",
-  ])("still handles %s without cloud config", (url) => {
-    expect(shouldHandleAppLink(url, false)).toBe(true);
+  ])("still handles %s", (url) => {
+    expect(shouldHandleAppLink(url)).toBe(true);
   });
 });
 

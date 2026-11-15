@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  EnvironmentId,
   EventId,
   MessageId,
   NodeId,
@@ -14,16 +15,27 @@ import {
   RuntimeRequestId,
   ThreadId,
   type OrchestrationV2DomainEvent,
+  type OrchestrationV2StoredEvent,
 } from "@t3tools/contracts";
+import {
+  agentContextRecord,
+  formatComposerContextReference,
+} from "@t3tools/shared/composerContextReferences";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 const threadId = ThreadId.make("thread:control-reads");
 const providerThreadId = ProviderThreadId.make("provider-thread:control-reads");
@@ -32,6 +44,11 @@ const providerSessionId = ProviderSessionId.make("session:control-reads");
 const attemptId = RunAttemptId.make("attempt:control-reads");
 const runId = RunId.make("run:control-reads");
 const messageId = MessageId.make("message:control-reads");
+const ghostAgent = agentContextRecord(
+  { profileId: "ghost", name: "Ghost", runtimeMode: "auto" },
+  EnvironmentId.make("local"),
+);
+const steerText = `Use the smaller fix, then ask ${formatComposerContextReference(ghostAgent)}`;
 const requestId = RuntimeRequestId.make("request:control-reads");
 const nodeId = NodeId.make("node:control-reads");
 const providerInstanceId = ProviderInstanceId.make("codex");
@@ -157,7 +174,8 @@ function fixtureEvents(now: DateTime.Utc): ReadonlyArray<OrchestrationV2DomainEv
         runId,
         nodeId,
         role: "user",
-        text: "Use the smaller fix.",
+        text: steerText,
+        context: { version: 1, records: [ghostAgent] },
         attachments: [],
         streaming: false,
         createdBy: "user",
@@ -254,7 +272,7 @@ it.effect.each(storageCases)(
       assert.equal(context.providerThread?.id, providerThreadId);
       assert.equal(context.providerTurn?.id, providerTurnId);
       assert.equal(context.attempt?.id, attemptId);
-      assert.equal(context.message?.text, "Use the smaller fix.");
+      assert.equal(context.message?.text, steerText);
       assert.equal(context.run?.id, runId);
       assert.equal((yield* store.getRuntimeRequest(threadId, requestId))?.status, "resolved");
       assert.isUndefined(
@@ -295,10 +313,30 @@ it.effect.each(storageCases)(
               }),
           } as never),
       });
+      // Each pull is announced, so a second pull proves Stop judged the first event.
+      const pulls = yield* Queue.unbounded<void>();
+      const committed = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+      const layerEvents = Layer.mock(EventSink.EventSinkV2)({
+        latestSequence: () => Effect.succeed(0),
+        stream: () =>
+          Stream.fromEffectRepeat(
+            Queue.offer(pulls, undefined).pipe(Effect.andThen(Queue.take(committed))),
+          ),
+      });
       yield* Effect.gen(function* () {
         const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
         const reply = yield* RuntimeRequestService.RuntimeRequestServiceV2;
-        yield* control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId });
+        const interrupt = control.interrupt({
+          threadId,
+          providerThreadId,
+          providerTurnId,
+          providerSessionId,
+        });
+        // The provider never reports the turn settled, so Stop returns at the bound.
+        const unconfirmed = yield* Effect.forkChild(interrupt);
+        yield* Queue.take(pulls);
+        yield* TestClock.adjust("2 seconds");
+        yield* Fiber.join(unconfirmed);
         yield* control.steer({
           threadId,
           providerThreadId,
@@ -307,7 +345,10 @@ it.effect.each(storageCases)(
           messageId,
         });
         yield* reply.respond({ threadId, providerSessionId, requestId, decision: "accept" });
-        assert.deepEqual(calls, ["interrupt", "Use the smaller fix.", "reply"]);
+        // A steer resolves agent chips the way a new turn does: the deleted agent is unavailable.
+        assert.include(calls[1], "profileId: ghost");
+        assert.include(calls[1], "Unavailable: this environment has no agent with this profileId");
+        assert.deepEqual([calls[0], calls[2]], ["interrupt", "reply"]);
         const wrongSession = ProviderSessionId.make("session:wrong");
         assert.equal(
           (yield* Effect.exit(
@@ -332,20 +373,36 @@ it.effect.each(storageCases)(
           "Failure",
         );
         assert.lengthOf(calls, 3);
-        const turn = context.providerTurn!;
-        yield* store.apply({
+        const confirmed = yield* Effect.forkChild(interrupt);
+        yield* Queue.take(pulls);
+        const ingest = (sequence: number, event: OrchestrationV2DomainEvent) =>
+          store
+            .apply(event)
+            .pipe(Effect.andThen(Queue.offer(committed, { sequence, commandId: null, event })));
+        yield* ingest(1, {
           id: EventId.make("control:turn-completed"),
           type: "provider-turn.updated",
           threadId,
           occurredAt: now,
-          payload: { ...turn, status: "completed", completedAt: now },
+          payload: { ...context.providerTurn!, status: "completed", completedAt: now },
         });
-        yield* control.interrupt({ threadId, providerThreadId, providerTurnId, providerSessionId });
-        assert.deepEqual(calls, ["interrupt", "Use the smaller fix.", "reply", "interrupt"]);
+        // A settled provider turn is not enough; Stop waits for its attempt to finalize.
+        yield* Queue.take(pulls);
+        assert.isUndefined(confirmed.pollUnsafe());
+        yield* ingest(2, {
+          id: EventId.make("control:attempt-completed"),
+          type: "run-attempt.updated",
+          threadId,
+          occurredAt: now,
+          payload: { ...context.attempt!, status: "completed", completedAt: now },
+        });
+        yield* Fiber.join(confirmed);
+        yield* interrupt;
+        assert.deepEqual([calls.length, calls[3], calls[4]], [5, "interrupt", "interrupt"]);
       }).pipe(
         Effect.provide(
           Layer.merge(ProviderTurnControlService.layer, RuntimeRequestService.layer).pipe(
-            Layer.provide(layerSessions),
+            Layer.provide(Layer.mergeAll(layerSessions, layerEvents, ServerSettings.layerTest())),
           ),
         ),
       );

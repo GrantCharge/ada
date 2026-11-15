@@ -20,6 +20,7 @@ import * as Sink from "effect/Sink";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { fromYaml } from "@t3tools/shared/schemaYaml";
 
 import {
   buildDesktopBundles,
@@ -33,14 +34,13 @@ import {
   resolveDesktopPackageName,
   DESKTOP_FILE_EXCLUSIONS,
   MCP_GATEWAY_EXTRA_RESOURCE,
-  InvalidMacPasskeyRpDomainError,
-  InvalidMacPasskeyPublishableKeyError,
   UnsupportedDesktopBuildArchitectureError,
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   packWindowsServerAsar,
   preflightWindowsDesktopBuild,
   renderMacPasskeyEntitlements,
+  resolveMacFileExclusions,
   resolveMacWebAuthnEntitlements,
   resolveMacPasskeySigningConfiguration,
   resolveMergedStageDependencies,
@@ -49,10 +49,13 @@ import {
   ancestorNodeModulesPaths,
   copyDirectoryPreservingSymlinks,
   LinuxBrowserSecretHostError,
+  LinuxPackagedAppMissingError,
   MacPackagedAppMissingError,
   stageBrowserSecret,
+  validateLinuxPackagedPayload,
   validateMacPackagedPayload,
   validateWindowsPackagedPayload,
+  resolveDesktopPackageIdentity,
   verifyPackagedBundleIsSelfContained,
   WindowsPrimaryNativeProbeError,
   WindowsDesktopBuildPrerequisitesMissingError,
@@ -93,6 +96,7 @@ it("gives NSIS different default folders for official T3 and T3 Agents", () => {
     );
   assert.equal(folder("t3", "T3 Code (Nightly)", "com.t3tools.t3code"), "t3code");
   assert.equal(folder("agents", "T3 Agents", "com.jayleaton.t3agents"), "t3agents");
+  assert.equal(folder("agents", "Ada (Nightly)", "com.jayleaton.t3agents"), "t3agents");
 });
 
 const encodeModuleUrl = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
@@ -238,8 +242,9 @@ const makeWindowsPayloadFixture = Effect.fn("test.makeWindowsPayloadFixture")(fu
   } as const;
 });
 
-const makeMacPayloadFixture = Effect.fn("test.makeMacPayloadFixture")(function* (input: {
+const makePackagedAppFixture = Effect.fn("test.makePackagedAppFixture")(function* (input: {
   readonly serverEntrySource?: string;
+  readonly resourcesPath?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -250,7 +255,10 @@ const makeMacPayloadFixture = Effect.fn("test.makeMacPayloadFixture")(function* 
   yield* fs.writeFileString(serverEntryPath, input.serverEntrySource ?? "console.log('server');\n");
 
   const stageDistDir = path.join(tempDir, "dist");
-  const resourcesDir = path.join(stageDistDir, "mac-arm64/T3 Code.app/Contents/Resources");
+  const resourcesDir = path.join(
+    stageDistDir,
+    input.resourcesPath ?? "mac-arm64/T3 Code.app/Contents/Resources",
+  );
   yield* fs.makeDirectory(resourcesDir, { recursive: true });
   yield* Effect.promise(() =>
     createPackageWithOptions(sourceDir, path.join(resourcesDir, "app.asar"), {}),
@@ -583,12 +591,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
       assert.equal(config.appId, "com.jayleaton.t3agents");
       assert.equal(config.productName, "T3 Agents");
-      assert.equal(config.artifactName, "T3-Agents-${version}-${arch}.${ext}");
+      assert.equal(config.artifactName, "Ada-${version}-${arch}.${ext}");
       assert.deepStrictEqual(config.publish, [
         {
           provider: "github",
           owner: "jayleaton",
-          repo: "t3code",
+          repo: "ada",
           releaseType: "prerelease",
           channel: "nightly",
         },
@@ -597,7 +605,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         T3CODE_DESKTOP_APP_ID: "com.jayleaton.t3agents",
         T3CODE_APPLE_TEAM_ID: "ABC1234567",
         T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/fork.provisionprofile",
-        T3CODE_CLERK_PASSKEY_RP_DOMAINS: "clerk.example.com",
       });
       assert.include(
         renderMacPasskeyEntitlements(signing, {
@@ -614,13 +621,62 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               T3CODE_DESKTOP_APP_ID: "com.jayleaton.t3agents",
               T3CODE_DESKTOP_PRODUCT_NAME: "T3 Agents",
               T3CODE_DESKTOP_BRAND: "agents",
-              T3CODE_DESKTOP_UPDATE_REPOSITORY: "jayleaton/t3code",
+              T3CODE_DESKTOP_UPDATE_REPOSITORY: "jayleaton/ada",
               GITHUB_REPOSITORY: "pingdotgg/t3code",
             },
           }),
         ),
       ),
     ),
+  );
+
+  it.effect("names updatable AppImages without a version and apart per channel", () =>
+    Effect.gen(function* () {
+      const appImageName = (version: string) =>
+        createBuildConfig("linux", "AppImage", version, false, false, undefined, undefined).pipe(
+          Effect.map((config) => (config.appImage as { artifactName: string }).artifactName),
+        );
+
+      const stable = yield* appImageName("0.0.37");
+      const nightly = yield* appImageName("0.0.38-nightly.20261026.3740");
+
+      assert.notInclude(stable, "${version}");
+      assert.notInclude(nightly, "${version}");
+      assert.notEqual(stable, nightly);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("declares Calendar access for hosted commands in macOS builds", () =>
+    Effect.gen(function* () {
+      for (const version of ["0.1.0", "0.1.1-nightly.20261019.1"]) {
+        for (const signed of [false, true]) {
+          const config = yield* createBuildConfig(
+            "mac",
+            "dmg",
+            version,
+            signed,
+            false,
+            undefined,
+            undefined,
+          );
+          const mac = config.mac as { extendInfo: Record<string, unknown> };
+          for (const key of [
+            "NSCalendarsUsageDescription",
+            "NSCalendarsFullAccessUsageDescription",
+            "NSCalendarsWriteOnlyAccessUsageDescription",
+          ]) {
+            assert.isString(mac.extendInfo[key], `${version}, signed=${signed}: ${key}`);
+            assert.isNotEmpty(mac.extendInfo[key]);
+          }
+        }
+      }
+    }),
   );
 
   // pnpm writes "set this to true or false" placeholders into allowBuilds when a
@@ -664,17 +720,54 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  it.effect("keeps the Windows primary at T3 Agents.exe when the product is named Ada", () =>
+    Effect.gen(function* () {
+      const identity = yield* resolveDesktopPackageIdentity("1.2.3-nightly.20261113.1");
+      const config = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "1.2.3-nightly.20261113.1",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      // The payload check expects `${windowsExecutableName}.exe`; packaging must write the same exe.
+      assert.equal(`${identity.windowsExecutableName}.exe`, "T3 Agents.exe");
+      assert.equal(config.productName, "Ada");
+      assert.equal((config.win as { executableName?: string }).executableName, "T3 Agents");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { T3CODE_DESKTOP_PRODUCT_NAME: "Ada", T3CODE_DESKTOP_BRAND: "agents" },
+          }),
+        ),
+      ),
+    ),
+  );
+
   it.effect("chains the shared NSIS customizations into the Agents installer", () =>
     Effect.gen(function* () {
-      const nsisInclude = (brand: string) =>
+      const winConfig = (brand: string) =>
         createBuildConfig("win", "nsis", "1.2.3", false, false, undefined, undefined).pipe(
-          Effect.map((config) => (config.nsis as { include: string }).include),
+          Effect.map((config) => ({
+            include: (config.nsis as { include: string }).include,
+            executableName: (config.win as { executableName?: string }).executableName,
+          })),
           Effect.provide(
             ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_DESKTOP_BRAND: brand } })),
           ),
         );
-      assert.equal(yield* nsisInclude("t3"), "apps/desktop/resources/installer.nsh");
-      assert.equal(yield* nsisInclude("agents"), "apps/desktop/resources/agents-installer.nsh");
+      // The pre-rename fork exe path survives the productName change; official keeps its own.
+      assert.deepStrictEqual(yield* winConfig("t3"), {
+        include: "apps/desktop/resources/installer.nsh",
+        executableName: undefined,
+      });
+      assert.deepStrictEqual(yield* winConfig("agents"), {
+        include: "apps/desktop/resources/agents-installer.nsh",
+        executableName: "T3 Agents",
+      });
       const fs = yield* FileSystem.FileSystem;
       const agentsInstaller = yield* fs.readFileString(
         NodePath.join(import.meta.dirname, "../apps/desktop/resources/agents-installer.nsh"),
@@ -781,6 +874,30 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       }),
     ),
   );
+
+  it("drops the other architecture's Darwin prebuilds from single-architecture Mac builds", () => {
+    const excludes = (arch: "arm64" | "x64" | "universal", file: string) =>
+      resolveMacFileExclusions(arch).some((glob) => NodePath.matchesGlob(file, glob.slice(1)));
+    const x64 = [
+      "node_modules/node-pty/prebuilds/darwin-x64/pty.node",
+      "node_modules/objc-js/prebuilds/darwin-x64/node.napi.node",
+    ];
+    const arm64 = [
+      "node_modules/node-pty/prebuilds/darwin-arm64/pty.node",
+      "node_modules/objc-js/prebuilds/darwin-arm64/node.napi.armv8.node",
+    ];
+
+    for (const file of x64) {
+      assert.isTrue(excludes("arm64", file), file);
+      assert.isFalse(excludes("x64", file), file);
+      assert.isFalse(excludes("universal", file), file);
+    }
+    for (const file of arm64) {
+      assert.isTrue(excludes("x64", file), file);
+      assert.isFalse(excludes("arm64", file), file);
+      assert.isFalse(excludes("universal", file), file);
+    }
+  });
 
   it.effect("unpacks target Windows natives while excluding the other architecture", () =>
     Effect.scoped(
@@ -1430,7 +1547,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it.effect("rejects a macOS app whose packaged server bundle cannot resolve", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* makeMacPayloadFixture({
+        const fixture = yield* makePackagedAppFixture({
           serverEntrySource: 'import "t3code-deliberately-missing-package";\n',
         });
         const error = yield* validateMacPackagedPayload({
@@ -1446,10 +1563,61 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it.effect("accepts a macOS app whose packaged server bundle resolves", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const fixture = yield* makeMacPayloadFixture({});
+        const fixture = yield* makePackagedAppFixture({});
         yield* validateMacPackagedPayload({ stageDistDir: fixture.stageDistDir });
       }),
     ),
+  );
+
+  it.effect("never runs an untrusted macOS bundle", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const marker = path.join(yield* fs.makeTempDirectoryScoped(), "ran");
+        const fixture = yield* makePackagedAppFixture({
+          serverEntrySource: `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "");\n`,
+        });
+        yield* validateMacPackagedPayload({ stageDistDir: fixture.stageDistDir });
+        assert.isFalse(yield* fs.exists(marker));
+      }),
+    ).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({ env: { T3CODE_DESKTOP_UNTRUSTED_BUNDLE: "true" } }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("packages the macOS preview's PR bundle as untrusted", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workflow = yield* fs.readFileString(
+        yield* path.fromFileUrl(
+          new URL("../.github/workflows/desktop-macos-preview-publish.yml", import.meta.url),
+        ),
+      );
+      const { jobs } = yield* Schema.decodeEffect(
+        fromYaml(
+          Schema.Struct({
+            jobs: Schema.Record(
+              Schema.String,
+              Schema.Struct({
+                uses: Schema.optional(Schema.String),
+                with: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+              }),
+            ),
+          }),
+        ),
+      )(workflow);
+      const packaging = Object.values(jobs).filter(
+        (job) => job.uses === "./.github/workflows/release-desktop.yml",
+      );
+      assert.isNotEmpty(packaging);
+      for (const job of packaging) assert.strictEqual(job.with?.untrusted_bundle, true);
+    }),
   );
 
   it.effect("rejects a macOS stage without a packaged app", () =>
@@ -1479,6 +1647,29 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
+  it.effect("rejects a Linux app whose packaged server bundle cannot resolve", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const fixture = yield* makePackagedAppFixture({
+          resourcesPath: "linux-arm64-unpacked/resources",
+          serverEntrySource: 'import "t3code-deliberately-missing-package";\n',
+        });
+        const error = yield* validateLinuxPackagedPayload({
+          stageDistDir: fixture.stageDistDir,
+        }).pipe(Effect.flip);
+        assert.instanceOf(error, BundleNotSelfContainedError);
+        assert.include(error.output, "t3code-deliberately-missing-package");
+
+        const emptyStage = yield* fs.makeTempDirectoryScoped({ prefix: "t3-linux-payload-test-" });
+        const missing = yield* validateLinuxPackagedPayload({ stageDistDir: emptyStage }).pipe(
+          Effect.flip,
+        );
+        assert.instanceOf(missing, LinuxPackagedAppMissingError);
+      }),
+    ),
+  );
+
   it.effect("leaves the bundle self-check of a cross-built payload to the verify job", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1503,40 +1694,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it("derives macOS passkey signing configuration from the Clerk publishable key", () => {
+  it("resolves macOS signing configuration and renders required entitlements", () => {
     const configuration = resolveMacPasskeySigningConfiguration({
       T3CODE_APPLE_TEAM_ID: "abc1234567",
       T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PUBLISHABLE_KEY: `pk_test_${btoa("example.clerk.accounts.dev$")}`,
-    });
-
-    assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
-      teamId: "ABC1234567",
-      rpDomains: ["example.clerk.accounts.dev"],
-      provisioningProfilePath: "/tmp/t3code.provisionprofile",
-    });
-  });
-
-  it("normalizes explicit macOS passkey RP domains and renders required entitlements", () => {
-    const configuration = resolveMacPasskeySigningConfiguration({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS:
-        " Clerk.Example.com,example.clerk.accounts.dev,clerk.example.com ",
     });
     const entitlements = renderMacPasskeyEntitlements(configuration, {
       touchIdKeychainAccessGroup: undefined,
       browserPasskeys: false,
     });
 
-    assert.deepStrictEqual(configuration.rpDomains, [
-      "clerk.example.com",
-      "example.clerk.accounts.dev",
-    ]);
+    assert.deepStrictEqual(configuration, {
+      appId: "com.t3tools.t3code",
+      teamId: "ABC1234567",
+      provisioningProfilePath: "/tmp/t3code.provisionprofile",
+    });
     assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
-    assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
-    assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
+    assert.notInclude(entitlements, "associated-domains");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
     assert.match(entitlements, /<key>com\.apple\.security\.device\.camera<\/key>\s*<true\/>/u);
     assert.match(entitlements, /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\/>/u);
@@ -1593,7 +1767,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
 
     const entitlements = renderMacPasskeyEntitlements(
-      { ...configuration, rpDomains: ["clerk.example.com"], provisioningProfilePath: "" },
+      { ...configuration, provisioningProfilePath: "" },
       resolveMacWebAuthnEntitlements(
         profile(
           `${teamWildcardGroups}<key>com.apple.developer.web-browser.public-key-credential</key><true/>`,
@@ -1621,57 +1795,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       return assert.fail("Expected passkey signing configuration to fail.");
     };
 
-    const missingProfileError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev",
-    });
+    const missingProfileError = captureError({ T3CODE_APPLE_TEAM_ID: "ABC1234567" });
     assert.instanceOf(missingProfileError, MissingMacPasskeyProvisioningProfileError);
     assert.equal(
       missingProfileError.message,
-      "T3CODE_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.",
+      "T3CODE_MACOS_PROVISIONING_PROFILE must point to the app's provisioning profile.",
     );
-
-    const unsafeDomain =
-      "https://domain-user:domain-secret@example.clerk.accounts.dev/path?token=query-secret";
-    const invalidDomainError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PASSKEY_RP_DOMAINS: unsafeDomain,
-    });
-    assert.instanceOf(invalidDomainError, InvalidMacPasskeyRpDomainError);
-    assert.equal(invalidDomainError.reason, "scheme-not-allowed");
-    assert.equal(invalidDomainError.inputLength, unsafeDomain.length);
-    assert.equal(invalidDomainError.message, "Invalid passkey RP domain (scheme-not-allowed).");
-    assert.notProperty(invalidDomainError, "domain");
-    assert.notProperty(invalidDomainError, "cause");
-    const serializedInvalidDomainError = JSON.stringify(invalidDomainError);
-    assert.notInclude(serializedInvalidDomainError, unsafeDomain);
-    assert.notInclude(serializedInvalidDomainError, "domain-user");
-    assert.notInclude(serializedInvalidDomainError, "domain-secret");
-    assert.notInclude(serializedInvalidDomainError, "query-secret");
-    assert.throws(
-      () =>
-        resolveMacPasskeySigningConfiguration({
-          T3CODE_APPLE_TEAM_ID: "ABC1234567",
-          T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-          T3CODE_CLERK_PASSKEY_RP_DOMAINS: "example.clerk.accounts.dev:8443",
-        }),
-      /Invalid passkey RP domain/u,
-    );
-    const invalidPublishableKeyError = captureError({
-      T3CODE_APPLE_TEAM_ID: "ABC1234567",
-      T3CODE_MACOS_PROVISIONING_PROFILE: "/tmp/t3code.provisionprofile",
-      T3CODE_CLERK_PUBLISHABLE_KEY: "pk_test_%",
-    });
-    assert.instanceOf(invalidPublishableKeyError, InvalidMacPasskeyPublishableKeyError);
-    assert.ok(invalidPublishableKeyError.cause);
-    assert.equal(invalidPublishableKeyError.message, "T3CODE_CLERK_PUBLISHABLE_KEY is invalid.");
-    assert.notProperty(invalidPublishableKeyError, "publishableKey");
-    assert.notInclude(invalidPublishableKeyError.message, "pk_test_%");
   });
 
   it("wraps unknown passkey signing configuration defects without copying cause text", () => {
-    const secret = "pk_test_do-not-retain";
+    const secret = "do-not-retain";
     const cause = new Error(secret);
     const error = MacPasskeySigningConfigurationResolutionError.fromCause(cause);
 

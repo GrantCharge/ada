@@ -42,8 +42,11 @@ const layerProvidedClientConnection = layerSnapshotLoader.pipe(
     Connection.layerWithOptions({
       usageLimitSources: true,
       usageLimitsCommand: true,
+      providerCatalogsOnDemand: true,
       // React Native's iOS WebSocket (SocketRocket) has no permessage-deflate; Android's has.
       deflatedFrames: Platform.OS === "ios",
+      providerCatalogDigests: true,
+      providerStatusDeltas: true,
     }),
   ),
   Layer.provideMerge(

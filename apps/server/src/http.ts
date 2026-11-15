@@ -8,7 +8,6 @@ import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { injectMcpAppCookieBootstrap, injectMcpAppThemeBootstrap } from "@t3tools/shared/mcpApp";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
 import * as ByteSize from "effect/ByteSize";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -40,7 +39,6 @@ import {
 } from "./assets/AttachmentUpload.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentScopeRequired,
@@ -54,6 +52,7 @@ import {
   browserApiCorsAllowedMethods,
   DESKTOP_RENDERER_ORIGINS,
 } from "./httpCors.ts";
+import { requestUrl } from "./requestUrl.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -318,14 +317,15 @@ export const layerServerEnvironmentHttpApi = HttpApiBuilder.group(
       Effect.fn("environment.metadata.descriptor")(function* (args) {
         yield* annotateEnvironmentRequest(args.endpoint.name);
         return yield* serverEnvironment.getDescriptor;
-      }, traceRelayRequest),
+      }),
     );
   }),
 );
 
-class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecordsError")<{
-  readonly cause: unknown;
-}> {}
+class DecodeOtlpTraceRecordsError extends Schema.TaggedError<DecodeOtlpTraceRecordsError>()(
+  "DecodeOtlpTraceRecordsError",
+  { cause: Schema.Defect() },
+) {}
 
 // Tracing once-per-second renderer exports would create more spans than it forwards.
 export const layerOtlpTracesProxyRoute = HttpRouter.add(
@@ -404,7 +404,7 @@ export const layerAssetRoute = HttpRouter.add(
   `${ASSET_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
+    const url = requestUrl(request);
     if (Option.isNone(url)) {
       return HttpServerResponse.text("Bad Request", { status: 400 });
     }
@@ -462,7 +462,7 @@ export const layerAttachmentUploadRoute = HttpRouter.add(
   `${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/*`,
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
+    const url = requestUrl(request);
     if (Option.isNone(url)) {
       return HttpServerResponse.text("Bad Request", { status: 400 });
     }
@@ -560,10 +560,16 @@ const streamStaticFile = (file: FileSystem.File, size: bigint) =>
     }),
   );
 
+// The app can approve agents and start threads in one click, so no other site may frame it.
+const SPA_FRAME_HEADERS = {
+  "Content-Security-Policy": "frame-ancestors 'none'",
+  "X-Frame-Options": "DENY",
+};
+
 const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
   function* (immutableBuildAssets: ReadonlySet<string>) {
     const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
+    const url = requestUrl(request);
 
     if (Option.isNone(url)) {
       return HttpServerResponse.text("Bad Request", { status: 400 });
@@ -660,6 +666,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
     };
     const headers: Record<string, string> = {
       "Cache-Control": cacheControl,
+      ...(isHtml ? SPA_FRAME_HEADERS : {}),
       ...validators(fileInfo),
     };
     const etag = headers.ETag;
@@ -696,6 +703,7 @@ const handleStaticAndDevRequest = Effect.fn("handleStaticAndDevRequest")(
       return HttpServerResponse.uint8Array(bytes, {
         headers: {
           "Cache-Control": cacheControl,
+          ...(isHtml ? SPA_FRAME_HEADERS : {}),
           ...validators({ ...info, size: ByteSize.bytes(bytes.byteLength) }),
         },
         contentType,

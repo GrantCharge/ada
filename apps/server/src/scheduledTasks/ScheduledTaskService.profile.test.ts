@@ -21,6 +21,7 @@ import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as ScheduledTaskService from "./ScheduledTaskService.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as ScheduledTaskTestkit from "./ScheduledTaskService.testkit.ts";
 
 const decodeUpsertInput = Schema.decodeUnknownEffect(ScheduledTaskUpsertInput);
@@ -50,6 +51,7 @@ it.effect(
       const launches: Array<ThreadLaunchService.ThreadLaunchInput> = [];
       const sends: Array<ThreadManagementService.ThreadManagementSendInput> = [];
       const dependencies = Layer.mergeAll(
+        ManagedPolicy.layerTest(),
         ScheduledTaskTestkit.layerLocalProjects(),
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
@@ -121,6 +123,39 @@ it.effect(
           .upsert({ ...input, schedule: { type: "cron", expression: "0 7 * *", timezone: "UTC" } })
           .pipe(Effect.flip);
         assert.include(invalid.message, "must have five fields");
+
+        // An agent's task stores at most its chat's modes, and runs no broader when the
+        // profile is later widened.
+        const agentTask = yield* service.upsert({
+          ...input,
+          title: "Supervised review",
+          runtimeMode: "approval-required",
+          createdBy: "agent",
+          creationSource: "mcp",
+        });
+        yield* service.runNow({ id: agentTask.task.id });
+        assert.equal(launches.length, 2);
+        assert.deepEqual(launches[1]?.profileSelection, {
+          profileId: "reviewer",
+          revision: 3,
+          overrideFields: ["runtimeMode"],
+        });
+        assert.equal(launches[1]?.runtimeMode, "approval-required");
+
+        // Leaving the agent for an unbound continuing thread drops the agent's thread.
+        const plain = yield* service.upsert({
+          ...input,
+          id: task.id,
+          profileId: null,
+          threadId: null,
+          threadMode: "continue",
+        });
+        assert.isUndefined(plain.task.profileId);
+        assert.isNull(plain.task.threadId);
+        yield* service.runNow({ id: task.id });
+        assert.equal(launches.length, 3);
+        assert.isUndefined(launches[2]?.profileSelection);
+        assert.equal(sends.length, 1);
       }).pipe(Effect.provide(ScheduledTaskService.layer.pipe(Layer.provide(dependencies))));
     }).pipe(Effect.provide(memoryDatabase)),
 );
@@ -149,6 +184,7 @@ it.effect("imports fork V1 scheduled tasks into the V2 table and drops the legac
     yield* runMigrations();
 
     const dependencies = Layer.mergeAll(
+      ManagedPolicy.layerTest(),
       ScheduledTaskTestkit.layerLocalProjects(),
       Layer.mock(SecretRequests.SecretRequests)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
@@ -174,6 +210,7 @@ it.effect("imports fork V1 scheduled tasks into the V2 table and drops the legac
     });
     assert.equal(task?.profileId, "reviewer");
     assert.equal(task?.threadId, "thread-v1");
+    assert.equal(task?.threadMode, "continue");
     assert.equal(task?.lastRunStatus, "succeeded");
     assert.equal(task?.runCount, 4);
     assert.equal(task?.nextRunAt, "2026-09-26T00:00:00.000Z");

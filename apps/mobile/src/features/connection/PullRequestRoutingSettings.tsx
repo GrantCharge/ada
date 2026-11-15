@@ -44,8 +44,11 @@ export function PullRequestRoutingSettings() {
   if (catalog.entries.size === 0) return null;
 
   return (
-    <View className="mt-5 gap-3">
-      <SettingsSection title="Pull request routing">
+    <View className="mt-5">
+      <SettingsSection
+        title="Pull request routing"
+        footer="Environments you trust share PR data and source control access. Both must be on; applies only to this client."
+      >
         {[...catalog.entries.values()].map((entry) => {
           const environmentId = entry.target.environmentId;
           const selected = pullRequestRoutingPermissionFor(entry, permissions);
@@ -64,9 +67,11 @@ export function PullRequestRoutingSettings() {
                   <Text className="text-base font-t3-bold text-foreground">
                     {entry.target.label}
                   </Text>
-                  <Text className="text-xs text-foreground-muted" numberOfLines={1}>
-                    {connectionCatalogDisplayUrl(entry) ?? "T3 Connect"}
-                  </Text>
+                  {connectionCatalogDisplayUrl(entry) === null ? null : (
+                    <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+                      {connectionCatalogDisplayUrl(entry)}
+                    </Text>
+                  )}
                 </View>
                 <Text className="text-sm text-foreground-muted">
                   {options.find((option) => option.value === selected)?.label}
@@ -103,10 +108,6 @@ export function PullRequestRoutingSettings() {
           );
         })}
       </SettingsSection>
-      <Text className="px-2 text-sm text-foreground-muted">
-        Choose environments you trust to share PR data and use each other's source control access.
-        Enable both environments. This applies only to this client.
-      </Text>
     </View>
   );
 }

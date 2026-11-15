@@ -12,10 +12,12 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  TailnetDevicesError,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as ServerConfig from "../config.ts";
@@ -121,7 +123,7 @@ const layerTools = Layer.mergeAll(
 )
   .pipe(
     Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
-    Layer.provideMerge(McpServer.McpServer.layer),
+    Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
     Layer.provide(layerLaunches),
     Layer.provide(NodeCrypto.layer),
     Layer.provide(
@@ -135,7 +137,21 @@ const layerTools = Layer.mergeAll(
     Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
     Layer.provide(
       Layer.mock(ProjectService.ProjectService)({
-        getById: () => Effect.succeedNone,
+        getById: (id) =>
+          Effect.succeed(
+            id === projectId
+              ? Option.some({
+                  id,
+                  title: "t3code",
+                  workspaceRoot: "/p/t3code",
+                  defaultModelSelection: null,
+                  scripts: [],
+                  createdAt: "2026-10-18T00:00:00.000Z",
+                  updatedAt: "2026-10-18T00:00:00.000Z",
+                  deletedAt: null,
+                })
+              : Option.none(),
+          ),
         create: (input) =>
           Effect.succeed({
             id: input.projectId,
@@ -165,7 +181,15 @@ const layerTools = Layer.mergeAll(
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
     Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
     Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
-    Layer.provide(Layer.mock(TailnetDevices.TailnetDevices)({})),
+    Layer.provide(
+      Layer.mock(TailnetDevices.TailnetDevices)({
+        // As the service does: an agent changes nothing about the machine it works from.
+        setAccess: (environmentId, access, _actor, callerEnvironmentId) =>
+          environmentId === callerEnvironmentId
+            ? Effect.fail(new TailnetDevicesError({ reason: "forbidden", message: "Not yours." }))
+            : Effect.succeed({ environmentId, access } as never),
+      }),
+    ),
     Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
     Layer.provide(Layer.mock(RemoteDelegation.RemoteDelegation)({})),
     Layer.provide(
@@ -211,7 +235,13 @@ const clientScope = (
   environmentId: EnvironmentId.make("environment:box"),
   requestNamespace: `client:${sessionId}`,
   thread: undefined,
-  client: { sessionId, label: `T3 Code · ${sessionId}`, access, linked },
+  client: {
+    sessionId,
+    label: `T3 Code · ${sessionId}`,
+    access,
+    linked,
+    ...(linked ? { peerEnvironmentId: EnvironmentId.make(`environment:${sessionId}`) } : {}),
+  },
   capabilities: new Set(["orchestration", "worktree", "pull-requests"]),
   issuedAt: 0,
 });
@@ -410,6 +440,32 @@ it.layer(Layer.provideMerge(layerTools, layerOrchestration))("work a link starts
         const changed = yield* call(trusted, name, args);
         assert.equal(changed.isError, false, `${name}: ${JSON.stringify(changed.content)}`);
       }
+
+      // Revoking cuts a machine off everywhere, so it is the user's call or a chat's here:
+      // never a link's or an outside client's, and never this machine's own.
+      const setAccess = (
+        scope: McpInvocationContext.McpInvocationScope,
+        environmentId: string,
+        access: string,
+      ) => call(scope, "t3_environment_device_access", { environmentId, access });
+      for (const scope of [trusted, claudeCode]) {
+        const revoked = yield* setAccess(scope, "environment:desk", "revoked");
+        assert.equal(failureCode(revoked), "capability_denied", scope.client!.sessionId);
+      }
+      assert.equal(
+        failureCode(yield* setAccess(claudeCode, trusted.environmentId, "revoked")),
+        "invalid_request",
+      );
+      // Nor narrowed by the link of the machine it would narrow.
+      assert.equal(
+        failureCode(yield* setAccess(trusted, "environment:trusted", "read-only")),
+        "capability_denied",
+      );
+      const narrowed = yield* setAccess(claudeCode, "environment:desk", "auto");
+      assert.deepEqual(narrowed.structuredContent, {
+        environmentId: "environment:desk",
+        access: "auto",
+      });
     }),
   );
 });

@@ -10,6 +10,7 @@ import type { LinuxWindowSnapshot } from "./LinuxSnapShot.ts";
 import { CaptureSetupRequiredError, readPortalPng } from "./linuxCaptureSession.ts";
 import { startNativeCaptureFeedback } from "./NativeCaptureFeedback.ts";
 import { HYPRLAND_CAPTURE_ACTION } from "./linuxCaptureSession.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 export { isHyprlandCaptureSession } from "./linuxCaptureSession.ts";
 
 export const HYPRLAND_CAPTURE_EXECUTABLE = "t3-hyprland-snap-shot";
@@ -96,7 +97,7 @@ export class HyprlandCaptureSetup {
       const bundle = await regularFile(this.paths.bundle);
       if (!bundle)
         throw new Error(
-          "The Hyprland capture helper is missing from this build. Update or reinstall T3 Agents.",
+          `The Hyprland capture helper is missing from this build. Update or reinstall ${APP_NAME}.`,
         );
       if (!installed.equals(bundle))
         return {
@@ -171,11 +172,11 @@ export async function captureHyprlandWindow(
   let state = await setup.state();
   if (state.status === "update-required") {
     await setup.perform("install-hyprland-helper").catch((cause: unknown) => {
-      throw new CaptureSetupRequiredError(state.message, { cause });
+      throw new CaptureSetupRequiredError({ state: state.message, cause });
     });
     state = await setup.state();
   }
-  if (state.status !== "ready") throw new CaptureSetupRequiredError(state.message);
+  if (state.status !== "ready") throw new CaptureSetupRequiredError({ state: state.message });
   const executable = hyprlandCaptureExecutable(paths);
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-hyprland-capture-"));
   const cleanup = () => NodeFSP.rm(directory, { recursive: true, force: true });

@@ -2,6 +2,7 @@ import {
   resolveProviderSkillSourceKind,
   type ProviderSkillSourceKind,
 } from "@t3tools/client-runtime/providerSkills";
+import type { ComposerAgentItem } from "@t3tools/client-runtime/composerThreadItems";
 import type {
   EnvironmentId,
   EnvironmentMachineKind,
@@ -19,8 +20,12 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { ENVIRONMENT_MACHINE_SYMBOLS } from "../../components/EnvironmentMachineSymbol";
 import { GlassSurface } from "../../components/ui/GlassSurface";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
+import { ProviderIcon } from "../../components/ProviderIcon";
+import { cn } from "../../lib/cn";
+import type { ModelOption } from "../../lib/modelOptions";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 export type ComposerCommandItem =
+  | ComposerAgentItem
   | {
       readonly id: string;
       readonly type: "pull-request";
@@ -71,6 +76,13 @@ export type ComposerCommandItem =
       readonly skill: ServerProviderSkill;
       readonly label: string;
       readonly description: string;
+    }
+  | {
+      readonly id: string;
+      readonly type: "model";
+      readonly option: ModelOption;
+      readonly label: string;
+      readonly description: string;
     };
 
 interface ComposerCommandPopoverProps {
@@ -118,15 +130,21 @@ function itemIcon(item: ComposerCommandItem): AppSymbolName | null {
     case "skill":
       return SKILL_SOURCE_SYMBOL_BY_KIND[resolveProviderSkillSourceKind(item.skill)];
     case "path":
+    case "model":
       return null;
     case "thread":
       return "text.bubble";
     case "environment":
       return ENVIRONMENT_MACHINE_SYMBOLS[item.machine];
+    case "agent":
+      return "person.crop.circle";
   }
 }
 
-function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
+function groupLabel(
+  triggerKind: ComposerTriggerKind | null,
+  items: ReadonlyArray<ComposerCommandItem>,
+): string | null {
   switch (triggerKind) {
     case "pull-request":
       return "Pull requests";
@@ -135,7 +153,7 @@ function groupLabel(triggerKind: ComposerTriggerKind | null): string | null {
     case "skill":
       return "Skills";
     case "path":
-      return "Files";
+      return items.every((item) => item.type === "path") ? "Files" : "Mentions";
     default:
       return null;
   }
@@ -149,7 +167,7 @@ function emptyText(triggerKind: ComposerTriggerKind | null, isLoading: boolean):
     case "pull-request":
       return "No matching pull requests.";
     case "path":
-      return "No matching files or folders.";
+      return "No matching mentions.";
     case "skill":
       return "No skills found.";
     case "slash-command":
@@ -176,6 +194,12 @@ const CommandRow = memo(function CommandRow(props: {
     >
       {props.item.type === "path" ? (
         <PierreEntryIcon path={props.item.path} kind={props.item.kind} size={16} />
+      ) : props.item.type === "model" ? (
+        <ProviderIcon
+          iconUrl={props.item.option.providerIconUrl}
+          provider={props.item.option.providerDriver}
+          size={16}
+        />
       ) : iconName ? (
         <SymbolView
           name={iconName}
@@ -188,7 +212,13 @@ const CommandRow = memo(function CommandRow(props: {
           type="monochrome"
         />
       ) : null}
-      <Text className="shrink-0 text-base font-t3-medium text-foreground" numberOfLines={1}>
+      <Text
+        className={cn(
+          "shrink-0 text-base font-t3-medium text-foreground",
+          props.item.type === "thread" && "max-w-[45%]",
+        )}
+        numberOfLines={1}
+      >
         {props.isSlashSkill && props.item.type === "skill" ? (
           <>
             <Text className="text-foreground-muted">skill:</Text>
@@ -210,7 +240,7 @@ const CommandRow = memo(function CommandRow(props: {
 export const ComposerCommandPopover = memo(function ComposerCommandPopover(
   props: ComposerCommandPopoverProps,
 ) {
-  const label = groupLabel(props.triggerKind);
+  const label = groupLabel(props.triggerKind, props.items);
 
   return (
     <PopoverSurface>

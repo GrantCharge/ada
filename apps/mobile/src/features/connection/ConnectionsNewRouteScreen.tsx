@@ -1,14 +1,12 @@
-import { ListRow } from "../../components/ui/ListRow";
+import { MOBILE_APP_NAME } from "../../lib/mobileBranding";
 import * as Dialog from "../../components/ui/Dialog";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
-import { useAuth } from "@clerk/expo";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Haptics from "expo-haptics";
 import {
   StackActions,
   useIsFocused,
   useNavigation,
-  useRoute,
   type StaticScreenProps,
 } from "@react-navigation/native";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -31,12 +29,9 @@ import {
 } from "./pairing";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SymbolView } from "../../components/ui/AppSymbol";
-import { hasCloudPublicConfig } from "../cloud/publicConfig";
-import { CloudEnvironmentRows } from "./CloudEnvironmentRows";
 import { autoConnectReport, devAutoConnectAttemptAtom } from "./devAutoConnect";
-import { splitEnvironmentSections } from "./environmentSections";
 import { leaveSettingsPage } from "../settings/settings-navigation";
-import { workspaceHasColumns } from "../workspace/workspace-selection-store";
+import { workspaceHasColumns } from "../layout/workspace/workspace-selection-store";
 
 type ConnectionsNewRouteParams = {
   readonly mode?: string;
@@ -71,7 +66,6 @@ function PairingForm({
   const { connectionPairingUrl, onChangeConnectionPairingUrl, onConnectPress } =
     useRemoteConnections();
   const navigation = useNavigation();
-  const routeName = useRoute().name;
   const insets = useSafeAreaInsets();
   const [initialPairing] = useState(() => parsePairingUrl(routePairingUrl || connectionPairingUrl));
   const [hostInput, setHostInput] = useState(initialPairing.host);
@@ -184,7 +178,6 @@ function PairingForm({
 
   return (
     <SettingsScreen
-      formSheet={routeName === "ConnectionsNew"}
       title="Add environment"
       actions={[
         {
@@ -256,11 +249,9 @@ function PairingForm({
               )}
             >
               {pairingConnectionError ??
-                "Connect without an account. Use your Mac's Tailscale address, or its LAN IP on the same Wi-Fi. Paste a full pairing link here, or enter the host and pairing code separately. Keep the T3 server running on your Mac."}
+                `Connect without an account. Use your Mac's Tailscale address, or its LAN IP on the same Wi-Fi. Paste a full pairing link here, or enter the host and pairing code separately. Keep the ${MOBILE_APP_NAME} server running on your Mac.`}
             </Text>
           </View>
-
-          {hasCloudPublicConfig() ? <T3ConnectSection /> : null}
         </View>
       </ScrollView>
     </SettingsScreen>
@@ -352,44 +343,10 @@ function PairingScanCard(props: {
           )}
         </View>
         <Text className={cn("text-center text-sm", light ? "text-black/70" : "text-white/80")}>
-          Scan the code from t3 pair or desktop Connections settings
+          Scan the code from ada pair or desktop Connections settings
         </Text>
       </View>
     </Pressable>
-  );
-}
-
-function T3ConnectSection() {
-  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const navigation = useNavigation();
-  const { connectedEnvironments, onSetEnvironmentEnabled, onRemoveEnvironmentPress } =
-    useRemoteConnections();
-  const { connectedCloudEnvironments } = splitEnvironmentSections({
-    connectedEnvironments,
-    cloudEnvironments: null,
-  });
-
-  return (
-    <View collapsable={false} className="gap-2">
-      <Text className="px-4 text-sm font-t3-medium text-foreground-muted">
-        Or use the managed relay
-      </Text>
-      {isSignedIn ? (
-        <CloudEnvironmentRows
-          connectedCloudEnvironments={connectedCloudEnvironments}
-          onSetEnvironmentEnabled={onSetEnvironmentEnabled}
-          onRemoveEnvironment={onRemoveEnvironmentPress}
-          showHeader={false}
-        />
-      ) : (
-        <ListRow
-          label="Sign in to T3 Connect"
-          description="Reach your machines from anywhere, no network setup."
-          disabled={!isLoaded}
-          onPress={() => navigation.navigate("SettingsAuth")}
-        />
-      )}
-    </View>
   );
 }
 

@@ -1,10 +1,12 @@
+import { APP_NAME, CLI_COMMAND, LEGACY_CLI_COMMAND } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { powerShellOnly, shellCommandPath } from "@t3tools/shared/shell";
 import {
   CLI_RELEASE_BASE_URL_ENV,
   CLI_RELEASE_CHANNELS,
-  cliReleaseIndexPageUrl,
   cliReleaseChannelOf,
-  newestCliReleaseVersion,
+  releaseAssetUrl,
+  updateFeedFileName,
   type CliReleaseChannel,
 } from "@t3tools/shared/cliRelease";
 import * as Console from "effect/Console";
@@ -16,22 +18,27 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag, Prompt } from "effect/cli";
-import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 
 import packageJson from "../../package.json" with { type: "json" };
-import * as BootService from "../cloud/bootService.ts";
+import * as BootService from "../service/bootService.ts";
 import {
   ensurePinnedRuntimeInstalled,
   launcherOwnsVersionsDir,
   pinnedRuntimeCommand,
+  isUnpublishedRelease,
   PinnedRuntimeInstallError,
   pinnedRuntimePaths,
   pinnedRuntimeVersionsDir,
   prunePinnedRuntimes,
   recordPinnedRuntimeLauncher,
+  resolveLauncherPath,
   windowsShimTarget,
-} from "../cloud/pinnedRuntime.ts";
-import { compareExactServiceVersions, isExactServiceVersion } from "../cloud/serviceProtocol.ts";
+} from "../service/pinnedRuntime.ts";
+import { compareExactServiceVersions, isExactServiceVersion } from "../service/serviceProtocol.ts";
+import { findNewestReleaseVersion } from "../service/npmRelease.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
+import { managedUpdateMirror, managedUpdateRefusal } from "../policy/managedUpdates.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
@@ -46,56 +53,172 @@ export class CliUpdateError extends Schema.TaggedError<CliUpdateError>()("CliUpd
   }
 }
 
-const ReleaseIndex = Schema.Array(
-  Schema.Struct({
-    tag_name: Schema.String,
-    draft: Schema.optional(Schema.Boolean),
-  }),
-);
-const decodeReleaseIndex = Schema.decodeUnknownEffect(Schema.fromJsonString(ReleaseIndex));
-
 const RELEASE_INDEX_TIMEOUT = Duration.seconds(30);
-const RELEASE_INDEX_MAX_PAGES = 10;
 
 export const resolveNewestVersion = Effect.fn("cli.update.resolve_newest")(function* (
   channel: CliReleaseChannel,
 ) {
-  const httpClient = yield* HttpClient.HttpClient;
-  const environment = yield* HostProcess.Environment;
-  const githubToken = environment.GH_TOKEN?.trim() || environment.GITHUB_TOKEN?.trim() || undefined;
-  for (let page = 1; page <= RELEASE_INDEX_MAX_PAGES; page += 1) {
-    const request = HttpClientRequest.get(cliReleaseIndexPageUrl(page)).pipe(
-      HttpClientRequest.setHeader("Accept", "application/vnd.github+json"),
-    );
-    const authenticatedRequest =
-      githubToken === undefined
-        ? request
-        : HttpClientRequest.setHeader(request, "Authorization", `Bearer ${githubToken}`);
-    const body = yield* httpClient.execute(authenticatedRequest).pipe(
-      Effect.flatMap(HttpClientResponse.filterStatusOk),
-      Effect.flatMap((response) => response.text),
-      Effect.mapError(() => new CliUpdateError({ reason: "Could not list t3 releases." })),
-      Effect.timeoutOrElse({
-        duration: RELEASE_INDEX_TIMEOUT,
-        orElse: () => Effect.fail(new CliUpdateError({ reason: "Timed out listing t3 releases." })),
-      }),
-    );
-    const releases = yield* decodeReleaseIndex(body).pipe(
-      Effect.mapError(
-        () => new CliUpdateError({ reason: "The t3 release index had an unexpected shape." }),
-      ),
-    );
-    const version = newestCliReleaseVersion(releases, channel);
-    if (version !== undefined) return version;
-    if (releases.length === 0) break;
-  }
+  const version = yield* findNewestReleaseVersion(channel).pipe(
+    Effect.mapError((error) => new CliUpdateError({ reason: error.reason })),
+  );
+  if (version !== undefined) return version;
   return yield* new CliUpdateError({ reason: `No published ${channel} release was found.` });
 });
 
+/** The version an update mirror's feed file for this platform offers on `channel`. */
+export const resolveMirrorVersion = Effect.fn("cli.update.resolve_mirror")(function* (
+  mirror: { readonly organization: string; readonly feedUrl: string },
+  channel: CliReleaseChannel,
+) {
+  if (channel === "preview") {
+    return yield* new CliUpdateError({
+      reason: `${mirror.organization}'s update mirror has no preview builds.`,
+    });
+  }
+  const httpClient = yield* HttpClient.HttpClient;
+  const fileName = updateFeedFileName(
+    channel === "nightly" ? "nightly" : "latest",
+    yield* HostProcess.Platform,
+    yield* HostProcess.Architecture,
+  );
+  const url = releaseAssetUrl(mirror.feedUrl, fileName);
+  // Not the URL, whose query can hold the mirror's access token.
+  const unreadable = new CliUpdateError({
+    reason: `Could not read ${fileName} from ${mirror.organization}'s update mirror.`,
+  });
+  const body = yield* httpClient.get(url).pipe(
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap((response) => response.text),
+    Effect.mapError(() => unreadable),
+    Effect.timeoutOrElse({
+      duration: RELEASE_INDEX_TIMEOUT,
+      orElse: () => Effect.fail(unreadable),
+    }),
+  );
+  const version = /^version:\s*["']?([^"'\s]+)/m.exec(body)?.[1];
+  if (
+    version === undefined ||
+    !isExactServiceVersion(version) ||
+    cliReleaseChannelOf(version) !== channel
+  ) {
+    return yield* unreadable;
+  }
+  return version;
+});
+
 /**
- * Only a launcher that already points into this home's `runtime/versions` tree is touched; a
- * plain copy of the executable, or a launcher for some other install, is left alone. It is
- * recorded before it moves, so prune never meets a repointed launcher it does not know about.
+ * The launcher this process ran through and its `ada`/`t3` sibling, each kept only when it already
+ * points into this home's `runtime/versions` tree. A plain copy of the executable, or a launcher
+ * for some other install, is another program's.
+ */
+const ownedLaunchers = Effect.fn("cli.update.owned_launchers")(function* (input: {
+  readonly launchedAs: string | undefined;
+  readonly baseDir: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  if (input.launchedAs === undefined) return [];
+  const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
+  const ownsTarget = (candidate: string) => launcherOwnsVersionsDir(path, versionsDir, candidate);
+  const owned = (launcher: string) =>
+    platform === "win32"
+      ? fs.readFileString(launcher).pipe(
+          Effect.map((contents) => {
+            const target = windowsShimTarget(contents);
+            return target !== undefined && ownsTarget(target);
+          }),
+          Effect.orElseSucceed(() => false),
+        )
+      : fs.readLink(launcher).pipe(
+          Effect.map((target) => ownsTarget(path.resolve(path.dirname(launcher), target))),
+          Effect.orElseSucceed(() => false),
+        );
+  const launcher =
+    platform === "win32" ? yield* findWindowsShim(input.launchedAs) : input.launchedAs;
+  if (launcher === undefined || !(yield* owned(launcher))) return [];
+  const result = [launcher];
+  for (const sibling of launcherSiblings(path, launcher)) {
+    if (yield* owned(sibling)) result.push(sibling);
+  }
+  return result;
+});
+
+/**
+ * The first of `ada` then `t3` that PATH runs as one of this home's launchers, and, with `runs`,
+ * one that starts that runtime. A foreign program of either name earlier on PATH would run instead,
+ * and older installs have only `t3`, so owning a launcher file is not enough.
+ */
+export const ownedCommandOnPath = Effect.fn("cli.update.owned_command_on_path")(function* (input: {
+  readonly baseDir: string;
+  readonly runs?: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
+  const windows = platform === "win32";
+  const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
+  const normalize = (file: string) =>
+    windows ? path.resolve(file).toLowerCase() : path.resolve(file);
+  const targetOf = (launcher: string) =>
+    windows
+      ? fs.readFileString(launcher).pipe(
+          Effect.map(windowsShimTarget),
+          Effect.orElseSucceed(() => undefined),
+        )
+      : fs.readLink(launcher).pipe(
+          Effect.map((target) => path.resolve(path.dirname(launcher), target)),
+          Effect.orElseSucceed(() => undefined),
+        );
+  const cwd = yield* HostProcess.WorkingDirectory;
+  // POSIX shells search an empty entry (`:dir`, `dir::`) as the working directory.
+  const directories = (environment["PATH"] ?? environment["Path"] ?? "")
+    .split(windows ? ";" : ":")
+    .flatMap((directory) => (directory.length > 0 ? [directory] : windows ? [] : [cwd]));
+  // Windows tries each PATHEXT extension in order; only a .cmd can be one of our shims.
+  const extensions = windows
+    ? (environment["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD")
+        .split(";")
+        .filter((extension) => extension.startsWith("."))
+        .map((extension) => extension.toLowerCase())
+    : [""];
+  // A shell skips a file it cannot execute; Windows runs any PATHEXT match.
+  const runnable = (candidate: string) =>
+    fs.stat(candidate).pipe(
+      Effect.map((info) => info.type === "File" && (windows || (Number(info.mode) & 0o111) !== 0)),
+      Effect.orElseSucceed(() => false),
+    );
+  for (const name of [CLI_COMMAND, LEGACY_CLI_COMMAND]) {
+    let first: string | undefined;
+    search: for (const directory of directories) {
+      for (const extension of extensions) {
+        const candidate = path.join(directory, `${name}${extension}`);
+        if (yield* runnable(candidate)) {
+          first = candidate;
+          break search;
+        }
+      }
+    }
+    if (first === undefined) continue;
+    const target = yield* targetOf(first);
+    if (
+      target !== undefined &&
+      launcherOwnsVersionsDir(path, versionsDir, target) &&
+      (input.runs === undefined || normalize(target) === normalize(input.runs))
+    ) {
+      return name;
+    }
+  }
+  return undefined;
+});
+
+/** Where a pasted command must run, for the Windows path form cmd.exe cannot read. */
+const inShell = (command: string) => (powerShellOnly(command) ? " in PowerShell" : "");
+
+/**
+ * Repoints the launchers {@link ownedLaunchers} finds. Each is recorded before it moves, so
+ * prune never meets a repointed launcher it does not know about.
  */
 export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function* (input: {
   readonly launchedAs: string | undefined;
@@ -103,72 +226,53 @@ export const repointLauncher = Effect.fn("cli.update.repoint_launcher")(function
   readonly targetEntryPath: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
   const platform = yield* HostProcess.Platform;
-  if (input.launchedAs === undefined) return Option.none<string>();
-  const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
-  const ownsTarget = (candidate: string) => launcherOwnsVersionsDir(path, versionsDir, candidate);
-  const remember = (launcher: string) =>
-    recordPinnedRuntimeLauncher({ baseDir: input.baseDir, launcher }).pipe(
+  const [launcher, ...siblings] = yield* ownedLaunchers(input);
+  if (launcher === undefined) return Option.none<string>();
+  const remember = (file: string) =>
+    recordPinnedRuntimeLauncher({ baseDir: input.baseDir, launcher: file }).pipe(
       Effect.mapError(
-        () => new CliUpdateError({ reason: `Could not record the t3 launcher at ${launcher}.` }),
+        () =>
+          new CliUpdateError({
+            reason: `Could not record the ${CLI_COMMAND} launcher at ${file}.`,
+          }),
       ),
     );
-
-  if (platform === "win32") {
-    const shimPath = yield* findWindowsShim(input.launchedAs);
-    if (shimPath === undefined) return Option.none<string>();
-    const current = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    const quoted = Option.isSome(current) ? windowsShimTarget(current.value) : undefined;
-    if (quoted === undefined || !ownsTarget(quoted)) return Option.none<string>();
-    yield* remember(shimPath);
-    yield* fs
-      .writeFileString(shimPath, `@echo off\r\n"${input.targetEntryPath}" %*`)
-      .pipe(
-        Effect.mapError(
-          () => new CliUpdateError({ reason: `Could not rewrite the t3 launcher at ${shimPath}.` }),
-        ),
-      );
-    return Option.some(shimPath);
-  }
-
-  const linkTarget = yield* fs.readLink(input.launchedAs).pipe(Effect.option);
-  if (Option.isNone(linkTarget)) return Option.none<string>();
-  const resolvedTarget = path.resolve(path.dirname(input.launchedAs), linkTarget.value);
-  if (!ownsTarget(resolvedTarget)) return Option.none<string>();
-  yield* remember(input.launchedAs);
-  const tempLink = `${input.launchedAs}.${process.pid}.tmp`;
-  yield* fs.symlink(input.targetEntryPath, tempLink).pipe(
-    Effect.andThen(fs.rename(tempLink, input.launchedAs)),
-    Effect.mapError(
-      () =>
-        new CliUpdateError({ reason: `Could not repoint the t3 launcher at ${input.launchedAs}.` }),
-    ),
-  );
-  return Option.some(input.launchedAs);
+  const repoint = (file: string) =>
+    remember(file).pipe(
+      Effect.andThen(
+        platform === "win32"
+          ? fs
+              .writeFileString(file, `@echo off\r\n"${input.targetEntryPath}" %*`)
+              .pipe(
+                Effect.mapError(
+                  () =>
+                    new CliUpdateError({ reason: `Could not rewrite the launcher at ${file}.` }),
+                ),
+              )
+          : fs.symlink(input.targetEntryPath, `${file}.${process.pid}.tmp`).pipe(
+              Effect.andThen(fs.rename(`${file}.${process.pid}.tmp`, file)),
+              Effect.mapError(
+                () => new CliUpdateError({ reason: `Could not repoint the launcher at ${file}.` }),
+              ),
+            ),
+      ),
+    );
+  yield* repoint(launcher);
+  for (const sibling of siblings) yield* repoint(sibling).pipe(Effect.ignore);
+  return Option.some(launcher);
 });
 
-/** Node preserves argv0's spelling; resolve bare names on PATH to find the launcher symlink. */
-export const resolveLauncherPath = Effect.gen(function* () {
-  const path = yield* Path.Path;
-  const fs = yield* FileSystem.FileSystem;
-  const invokedAs = yield* HostProcess.InvokedAs;
-  const cwd = yield* HostProcess.WorkingDirectory;
-  const environment = yield* HostProcess.Environment;
-  const platform = yield* HostProcess.Platform;
-  if (invokedAs.includes("/") || invokedAs.includes("\\")) {
-    return path.resolve(cwd, invokedAs);
-  }
-  const delimiter = platform === "win32" ? ";" : ":";
-  for (const directory of (environment["PATH"] ?? "").split(delimiter)) {
-    if (directory.length === 0) continue;
-    const candidate = path.join(directory, invokedAs);
-    if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-      return candidate;
-    }
-  }
-  return undefined;
-});
+/** `ada` and `t3` run the same install, so an update moves both and neither keeps an older version. */
+const launcherSiblings = (path: Path.Path, launcher: string) => {
+  const extension = path.extname(launcher);
+  const name = path.basename(launcher, extension);
+  const names = [CLI_COMMAND, LEGACY_CLI_COMMAND];
+  if (!names.includes(name)) return [];
+  return names
+    .filter((other) => other !== name)
+    .map((other) => path.join(path.dirname(launcher), `${other}${extension}`));
+};
 
 /** Windows executables see their own path, so find the installer shim by matching t3.cmd targets on PATH. */
 export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(function* (
@@ -182,15 +286,17 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
   ].filter((entry) => entry.trim().length > 0);
   for (const directory of candidates) {
-    const shimPath = path.join(directory, "t3.cmd");
-    const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
-    if (Option.isNone(contents)) continue;
-    const target = windowsShimTarget(contents.value);
-    if (
-      target !== undefined &&
-      path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
-    ) {
-      return shimPath;
+    for (const name of [LEGACY_CLI_COMMAND, CLI_COMMAND]) {
+      const shimPath = path.join(directory, `${name}.cmd`);
+      const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
+      if (Option.isNone(contents)) continue;
+      const target = windowsShimTarget(contents.value);
+      if (
+        target !== undefined &&
+        path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
+      ) {
+        return shimPath;
+      }
     }
   }
   return undefined;
@@ -200,7 +306,7 @@ const updateFlags = {
   ...projectLocationFlags,
   channel: Flag.Literals("channel", CLI_RELEASE_CHANNELS).pipe(
     Flag.withDescription(
-      "Release channel to follow. Defaults to the channel this t3 was published on.",
+      `Release channel to follow. Defaults to the channel this ${APP_NAME} was published on.`,
     ),
     Flag.optional,
   ),
@@ -229,7 +335,7 @@ export const updateCommand = Command.make("update", {
   version: versionArgument,
 }).pipe(
   Command.withDescription(
-    "Download a newer t3 and switch this machine to it, including the background service when one is installed.",
+    `Download a newer ${APP_NAME} and switch this machine to it, including the background service when one is installed.`,
   ),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
@@ -245,7 +351,12 @@ export const updateCommand = Command.make("update", {
         assumeYes: flags.yes,
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(CliService.layer(config), ProcessRunner.layer, FetchHttpClient.layer),
+          Layer.mergeAll(
+            CliService.layer(config),
+            ProcessRunner.layer,
+            FetchHttpClient.layer,
+            ManagedPolicy.layer,
+          ),
         ),
       );
     }),
@@ -295,7 +406,7 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
   return false;
 });
 
-const runUpdate = Effect.fn("cli.update.run")(function* (input: {
+export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
   readonly logsDir: string;
   readonly serverRuntimeStatePath: string;
@@ -312,22 +423,39 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   const environment = yield* HostProcess.Environment;
   const httpClient = yield* HttpClient.HttpClient;
   const service = yield* BootService.BootService;
+  const policy = yield* ManagedPolicy.ManagedPolicy;
+  const mirror = managedUpdateMirror(policy.document);
 
   const currentVersion = packageJson.version;
   const channel = input.channel ?? cliReleaseChannelOf(currentVersion);
+  const refusal = managedUpdateRefusal(
+    policy.document,
+    input.requestedVersion === undefined ? channel : cliReleaseChannelOf(input.requestedVersion),
+  );
+  if (refusal !== undefined) {
+    return yield* new CliUpdateError({ reason: refusal });
+  }
   if (input.requestedVersion !== undefined && !isExactServiceVersion(input.requestedVersion)) {
     return yield* new CliUpdateError({
-      reason: `'${input.requestedVersion}' is not an exact t3 version.`,
+      reason: `'${input.requestedVersion}' is not an exact ${APP_NAME} version.`,
     });
   }
   const progress = createUpdateProgress();
   progress.status("Checking for updates...");
   const targetVersion = yield* (
-    input.requestedVersion === undefined
-      ? resolveNewestVersion(channel)
-      : Effect.succeed(input.requestedVersion)
+    input.requestedVersion !== undefined
+      ? Effect.succeed(input.requestedVersion)
+      : mirror === undefined
+        ? resolveNewestVersion(channel)
+        : resolveMirrorVersion(mirror, channel)
   ).pipe(Effect.ensuring(Effect.sync(progress.finish)));
   const targetChannel = cliReleaseChannelOf(targetVersion);
+
+  const launchedAs = (yield* HostProcess.IsExecutable) ? yield* resolveLauncherPath : undefined;
+  // What the user just ran runs this program, so it is the fallback before the new runtime exists.
+  const command =
+    (yield* ownedCommandOnPath({ baseDir: input.baseDir })) ??
+    (launchedAs === undefined ? LEGACY_CLI_COMMAND : shellCommandPath(launchedAs, platform));
 
   const currentChannel = cliReleaseChannelOf(currentVersion);
   if (targetChannel === "preview" && currentChannel !== "preview") {
@@ -336,7 +464,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         `t3@${targetVersion} is a preview build.`,
         "  Preview builds are cut by maintainers from unreleased branches to exercise the release",
         "  pipeline. They can be broken, receive no fixes, and are never offered as updates; you",
-        `  will have to switch back to ${currentChannel} yourself with \`t3 update --channel ${currentChannel} --allow-downgrade\`.`,
+        `  will have to switch back to ${currentChannel} yourself with \`${command} update --channel ${currentChannel} --allow-downgrade\`${inShell(command)}.`,
       ].join("\n"),
     );
     if (!(process.stdin.isTTY && process.stdout.isTTY)) {
@@ -379,8 +507,8 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   if (executableCurrent && serviceCurrent) {
     yield* Console.log(
       serviceVersion !== undefined
-        ? `t3 and its background service are already on ${targetVersion} (${targetChannel}).`
-        : `t3 is already on ${targetVersion} (${targetChannel}).`,
+        ? `${APP_NAME} and its background service are already on ${targetVersion} (${targetChannel}).`
+        : `${APP_NAME} is already on ${targetVersion} (${targetChannel}).`,
     );
     return;
   }
@@ -403,8 +531,8 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       : executableCurrent
         ? `Updating the background service ${serviceVersion ?? "(unknown version)"} -> ${targetVersion} (${targetChannel}).`
         : alreadyOnDisk
-          ? "Switching T3 Code"
-          : "Updating T3 Code",
+          ? `Switching ${APP_NAME}`
+          : `Updating ${APP_NAME}`,
     executableCurrent
       ? ""
       : `${currentVersion} → ${targetVersion}${targetChannel === "stable" ? "" : ` (${targetChannel})`}`,
@@ -412,7 +540,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   let restartService = false;
   if (serviceInstalled && !serviceCurrent) {
     yield* Console.log(
-      "  A background service is installed for this T3 home. Restarting it interrupts anything running in it: agent turns, terminals, remote clients.",
+      `  A background service is installed for this ${APP_NAME} home. Restarting it interrupts anything running in it: agent turns, terminals, remote clients.`,
     );
     if (input.assumeYes) {
       restartService = true;
@@ -425,7 +553,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
       ).pipe(Effect.catchTags({ QuitError: () => Effect.succeed(false) }));
     } else {
       yield* Console.log(
-        "  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run `t3 service restart` later.",
+        `  Not a terminal, so the service keeps running its current version. Rerun with --yes to restart it now, or run \`${command} service restart\`${inShell(command)} later.`,
       );
     }
   }
@@ -440,7 +568,8 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     httpClient,
     platform,
     arch,
-    releaseBaseUrl: environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined,
+    releaseBaseUrl: mirror?.feedUrl ?? (environment[CLI_RELEASE_BASE_URL_ENV]?.trim() || undefined),
+    requirePublishedRelease: mirror !== undefined,
     validate: (paths) =>
       runner
         .run({
@@ -466,22 +595,19 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
         ),
   }).pipe(
     Effect.ensuring(Effect.sync(progress.finish)),
-    Effect.catchIf(
-      (error): error is PinnedRuntimeInstallError =>
-        error._tag === "PinnedRuntimeInstallError" &&
-        error.step.startsWith("downloading the t3 release checksums") &&
-        String(error.cause).includes("404"),
-      () =>
-        Effect.fail(
-          new CliUpdateError({
-            reason: `No release archive was published for t3@${targetVersion}.`,
-          }),
-        ),
+    Effect.catchIf(isUnpublishedRelease, () =>
+      Effect.fail(
+        new CliUpdateError({
+          reason:
+            mirror === undefined
+              ? `No release archive was published for t3@${targetVersion}.`
+              : `${mirror.organization}'s update mirror has no t3@${targetVersion} for this machine.`,
+        }),
+      ),
     ),
   );
 
-  const launchedAs = (yield* HostProcess.IsExecutable) ? yield* resolveLauncherPath : undefined;
-  const repointed = yield* repointLauncher({
+  yield* repointLauncher({
     launchedAs,
     baseDir: input.baseDir,
     targetEntryPath: runtime.entryPath,
@@ -527,27 +653,39 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     });
   }
 
-  progress.success(`Installed T3 Code ${targetVersion}`);
-  if (Option.isSome(repointed)) {
-    yield* Console.log("  Run t3 to get started.\n");
-  } else {
-    yield* Console.log(`  Run ${runtime.entryPath}\n`);
-  }
+  const commandOnPath = yield* ownedCommandOnPath({
+    baseDir: input.baseDir,
+    runs: runtime.entryPath,
+  });
+  const installedCommand = commandOnPath ?? shellCommandPath(runtime.entryPath, platform);
+  progress.success(`Installed ${APP_NAME} ${targetVersion}`);
+  yield* Console.log(
+    commandOnPath === undefined
+      ? `  Run ${installedCommand}${inShell(installedCommand)}\n`
+      : `  Run ${installedCommand} to get started.\n`,
+  );
   if (servicePlan?.handedOff === true) {
     yield* Console.log(
-      `  Background service switching to ${targetVersion} from a separate systemd unit, since this session runs inside it and disconnects when it restarts. Result: ${servicePlan.logPath}`,
+      `  Background service switching to ${targetVersion} outside this session, since this session runs inside it and disconnects when it restarts. Result: ${servicePlan.logPath}`,
     );
   } else if (servicePlan !== undefined && restartService) {
     yield* Console.log(`  Background service restarted on ${targetVersion}`);
   } else if (serviceInstalled && serviceCurrent) {
     yield* Console.log(`  Background service already on ${targetVersion}`);
   } else if (serviceInstalled) {
+    // A pending restart means the service already points at serviceVersion but runs an older one.
+    const running =
+      serviceVersion === undefined
+        ? "an unknown version"
+        : restartPending
+          ? `the version before ${serviceVersion}`
+          : serviceVersion;
     yield* Console.log(
-      `  Background service still running ${serviceVersion ?? "an unknown version"}. Run \`t3 service restart\` when you are ready to switch it to ${targetVersion}.`,
+      `  Background service still running ${running}. Run \`${installedCommand} service restart\`${inShell(installedCommand)} when you are ready to switch it to ${targetVersion}.`,
     );
   } else if (status.installed && !servesThisHome) {
     yield* Console.log(
-      `  The background service serves ${status.installedBaseDir ?? "another T3 home"} and was left unchanged.`,
+      `  The background service serves ${status.installedBaseDir ?? `another ${APP_NAME} home`} and was left unchanged.`,
     );
   }
   if (foreground !== undefined) {

@@ -5,7 +5,6 @@ import { verifyPreloadBundle } from "./verify-preload-bundle.mjs";
 const validPreload = `
   const electron = require("electron");
   const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
-  electron.contextBridge.exposeInMainWorld("__clerk_internal_electron_passkeys", {});
   electron.contextBridge.exposeInMainWorld("desktopBridge", {
     getClientPlatform: () => process.platform,
     getLocalEnvironmentBootstraps: () => [],
@@ -20,7 +19,6 @@ describe("desktop preload bundle verifier", () => {
       () =>
         verifyPreloadBundle(`
           "desktopBridge getClientPlatform getLocalEnvironmentBootstraps pickFolder";
-          "__clerk_internal_electron_passkeys";
           require("electron");
         `),
       /missing executable APIs/,
@@ -76,6 +74,18 @@ describe("desktop preload bundle verifier", () => {
         require("node:events");
         require("node:timers");
         require("node:url");
+      `),
+    );
+  });
+
+  it("runs a preload that reads the page's DOM while loading", () => {
+    assert.doesNotThrow(() =>
+      verifyPreloadBundle(`
+        ${validPreload}
+        const report = () => document.fullscreenElement;
+        report();
+        document.addEventListener("fullscreenchange", report);
+        window.addEventListener("resize", report);
       `),
     );
   });

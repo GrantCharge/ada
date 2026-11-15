@@ -11,9 +11,10 @@ import {
   PullRequestListFilters,
   PullRequestListState,
   type ProviderInstanceId,
-  type PullRequestMergeMethod,
+  PullRequestMergeMethod,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
+import { ToolCallVisibility } from "@t3tools/contracts/settings";
 import type { AndroidNavigationStyle } from "../lib/androidNavigationStyle";
 import type { ComposerEnterBehavior } from "../lib/composerEnterBehavior";
 import type { FollowUpBehavior } from "../lib/followUpBehavior";
@@ -25,6 +26,7 @@ import { MobileStorageDecodeError, MobileStorageEncodeError } from "./mobile-sto
 
 const PREFERENCES_KEY = "t3code.preferences";
 const PREFERENCES_FALLBACK_KEY = "t3code.preferences.fallback";
+const encodeJson = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 export const PullRequestListControls = Schema.Struct({
   state: PullRequestListState,
@@ -91,7 +93,6 @@ export interface Preferences {
   readonly hiddenNavigationTabs?: readonly string[];
   readonly pullRequestHideTestFiles?: boolean;
   readonly pullRequestMergeMethod?: PullRequestMergeMethod;
-  readonly liveActivitiesEnabled?: boolean;
   readonly themeId?: MobileThemeId;
   readonly lightThemeId?: MobileThemeId;
   readonly darkThemeId?: MobileThemeId;
@@ -103,20 +104,21 @@ export interface Preferences {
   readonly codeFontSize?: number | null;
   readonly codeWordBreak?: boolean;
   readonly mathRenderingEnabled?: boolean;
-  /** Unset means on: crash reports are sent unless the user turns them off. */
-  readonly crashReportsEnabled?: boolean;
-  readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
   readonly dismissedDatabaseStorageNotices?: readonly string[];
+  /** Servers this phone asked not to send push notifications; every other server may. */
+  readonly pushNotificationsOffEnvironmentIds?: readonly string[];
   /** Parents (`environmentId:threadId`) whose child chats are open; all others start collapsed. */
   readonly expandedParentKeys?: readonly string[];
-  /** Hardware Return behavior is iOS-only. */
+  /** Hardware-keyboard Return behavior in the composer. */
   readonly composerEnterBehavior?: ComposerEnterBehavior;
   readonly followUpBehavior?: FollowUpBehavior;
+  /** The client `language` setting: a locale code or "system". Unset means English. */
+  readonly language?: string;
   readonly microphones?: ReadonlyArray<MicrophoneEntry>;
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
-  readonly planModeEnabled?: boolean;
+  readonly toolCallVisibility?: ToolCallVisibility;
   readonly workingShelfEnabled?: boolean;
   readonly useLastProjectForNewThreads?: boolean;
   readonly lastThreadProject?: typeof ThreadProject.Type;
@@ -150,6 +152,8 @@ export class MobilePreferencesSaveError extends Schema.TaggedError<MobilePrefere
   }
 }
 
+const isMobilePreferencesSaveError = Schema.is(MobilePreferencesSaveError);
+
 interface PreferencesFallback {
   readonly payload: string;
   readonly updatedAt: number;
@@ -167,7 +171,10 @@ export class MobilePreferencesStore extends Context.Service<
       transform: (current: Preferences) => Partial<Preferences>,
     ) => Effect.Effect<Preferences, MobilePreferencesSaveError>;
   }
->()("@t3tools/mobile/persistence/MobilePreferencesStore") {}
+>()("@t3tools/mobile/persistence/mobile-preferences/MobilePreferencesStore") {}
+
+const isToolCallVisibility = Schema.is(ToolCallVisibility);
+const isPullRequestMergeMethod = Schema.is(PullRequestMergeMethod);
 
 function sanitizePreferences(parsed: Preferences): Preferences {
   const preferences: {
@@ -175,7 +182,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     hiddenNavigationTabs?: readonly string[];
     pullRequestHideTestFiles?: boolean;
     pullRequestMergeMethod?: PullRequestMergeMethod;
-    liveActivitiesEnabled?: boolean;
     themeId?: MobileThemeId;
     lightThemeId?: MobileThemeId;
     darkThemeId?: MobileThemeId;
@@ -187,17 +193,17 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     codeFontSize?: number | null;
     codeWordBreak?: boolean;
     mathRenderingEnabled?: boolean;
-    crashReportsEnabled?: boolean;
-    connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
     dismissedDatabaseStorageNotices?: readonly string[];
+    pushNotificationsOffEnvironmentIds?: readonly string[];
     expandedParentKeys?: readonly string[];
     composerEnterBehavior?: ComposerEnterBehavior;
     followUpBehavior?: FollowUpBehavior;
+    language?: string;
     microphones?: ReadonlyArray<MicrophoneEntry>;
     projectGroupingEnabled?: boolean;
     projectGroupingMode?: SidebarProjectGroupingMode;
-    planModeEnabled?: boolean;
+    toolCallVisibility?: ToolCallVisibility;
     workingShelfEnabled?: boolean;
     useLastProjectForNewThreads?: boolean;
     lastThreadProject?: typeof ThreadProject.Type;
@@ -226,17 +232,10 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     preferences.pullRequestHideTestFiles = parsed.pullRequestHideTestFiles;
   }
 
-  if (
-    parsed.pullRequestMergeMethod === "squash" ||
-    parsed.pullRequestMergeMethod === "merge" ||
-    parsed.pullRequestMergeMethod === "rebase"
-  ) {
+  if (isPullRequestMergeMethod(parsed.pullRequestMergeMethod)) {
     preferences.pullRequestMergeMethod = parsed.pullRequestMergeMethod;
   }
 
-  if (typeof parsed.liveActivitiesEnabled === "boolean") {
-    preferences.liveActivitiesEnabled = parsed.liveActivitiesEnabled;
-  }
   if (
     typeof parsed.themeId === "string" &&
     (MOBILE_THEME_IDS as readonly string[]).includes(parsed.themeId)
@@ -278,14 +277,6 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   if (typeof parsed.codeWordBreak === "boolean") preferences.codeWordBreak = parsed.codeWordBreak;
   if (typeof parsed.mathRenderingEnabled === "boolean")
     preferences.mathRenderingEnabled = parsed.mathRenderingEnabled;
-  if (typeof parsed.crashReportsEnabled === "boolean") {
-    preferences.crashReportsEnabled = parsed.crashReportsEnabled;
-  }
-  if (Array.isArray(parsed.connectOnboardingOptOutAccounts)) {
-    preferences.connectOnboardingOptOutAccounts = parsed.connectOnboardingOptOutAccounts.filter(
-      (account): account is string => typeof account === "string",
-    );
-  }
   if (Array.isArray(parsed.collapsedProjectGroups)) {
     preferences.collapsedProjectGroups = parsed.collapsedProjectGroups.filter(
       (key): key is string => typeof key === "string",
@@ -301,12 +292,19 @@ function sanitizePreferences(parsed: Preferences): Preferences {
       (value): value is string => typeof value === "string",
     );
   }
+  if (Array.isArray(parsed.pushNotificationsOffEnvironmentIds)) {
+    preferences.pushNotificationsOffEnvironmentIds =
+      parsed.pushNotificationsOffEnvironmentIds.filter(
+        (value): value is string => typeof value === "string",
+      );
+  }
   if (parsed.composerEnterBehavior === "send" || parsed.composerEnterBehavior === "newline") {
     preferences.composerEnterBehavior = parsed.composerEnterBehavior;
   }
   if (parsed.followUpBehavior === "queue" || parsed.followUpBehavior === "steer") {
     preferences.followUpBehavior = parsed.followUpBehavior;
   }
+  if (typeof parsed.language === "string") preferences.language = parsed.language;
   if (Array.isArray(parsed.microphones)) {
     preferences.microphones = parsed.microphones.flatMap((entry): MicrophoneEntry[] => {
       if (typeof entry !== "object" || entry === null || !isMicrophoneKind(entry.kind)) return [];
@@ -326,8 +324,8 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   ) {
     preferences.projectGroupingMode = parsed.projectGroupingMode;
   }
-  if (typeof parsed.planModeEnabled === "boolean") {
-    preferences.planModeEnabled = parsed.planModeEnabled;
+  if (isToolCallVisibility(parsed.toolCallVisibility)) {
+    preferences.toolCallVisibility = parsed.toolCallVisibility;
   }
   if (typeof parsed.workingShelfEnabled === "boolean") {
     preferences.workingShelfEnabled = parsed.workingShelfEnabled;
@@ -425,10 +423,9 @@ const make = Effect.fn("MobilePreferencesStore.make")(function* () {
     key: string,
     value: unknown,
   ) {
-    return yield* Effect.try({
-      try: () => JSON.stringify(value),
-      catch: (cause) => new MobileStorageEncodeError({ key, cause }),
-    });
+    return yield* encodeJson(value).pipe(
+      Effect.mapError((cause) => new MobileStorageEncodeError({ key, cause })),
+    );
   });
 
   const nextUpdatedAt = Ref.modify(lastUpdatedAt, (last) => {
@@ -541,34 +538,33 @@ const make = Effect.fn("MobilePreferencesStore.make")(function* () {
     .withPermits(1)(loadUnlocked)
     .pipe(Effect.mapError((cause) => new MobilePreferencesLoadError({ cause })));
 
-  const update = Effect.fn("MobilePreferencesStore.update")((transform) =>
-    lock
-      .withPermits(1)(
-        Effect.gen(function* () {
-          const current = yield* loadUnlocked;
-          const patch = yield* Effect.try({
-            try: () => transform(current),
-            catch: (cause) => new MobilePreferencesSaveError({ cause }),
-          });
-          const next: Preferences = { ...current, ...patch };
-          const payload = yield* encode(PREFERENCES_KEY, next);
-          yield* saveJson(payload);
-          return next;
-        }),
-      )
-      .pipe(
-        Effect.mapError((cause) =>
-          cause instanceof MobilePreferencesSaveError
-            ? cause
-            : new MobilePreferencesSaveError({ cause }),
+  const update = Effect.fn("MobilePreferencesStore.update")(
+    (transform: (current: Preferences) => Partial<Preferences>) =>
+      lock
+        .withPermits(1)(
+          Effect.gen(function* () {
+            const current = yield* loadUnlocked;
+            const patch = yield* Effect.try({
+              try: () => transform(current),
+              catch: (cause) => new MobilePreferencesSaveError({ cause }),
+            });
+            const next: Preferences = { ...current, ...patch };
+            const payload = yield* encode(PREFERENCES_KEY, next);
+            yield* saveJson(payload);
+            return next;
+          }),
+        )
+        .pipe(
+          Effect.mapError((cause) =>
+            isMobilePreferencesSaveError(cause) ? cause : new MobilePreferencesSaveError({ cause }),
+          ),
         ),
-      ),
   );
 
   return MobilePreferencesStore.of({
     load,
     update,
-    savePatch: (patch) => update(() => patch),
+    savePatch: Effect.fn("MobilePreferencesStore.savePatch")((patch) => update(() => patch)),
   });
 });
 

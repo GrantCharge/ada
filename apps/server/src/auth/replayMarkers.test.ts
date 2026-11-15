@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
@@ -15,25 +16,12 @@ import * as ServerSecretStore from "./ServerSecretStore.ts";
 const REAL_SECRET_NAMES = [
   "server-signing-key",
   "asset-access-signing-key",
-  "cloud-cli-oauth-token",
-  "cloud-cli-desired-link",
-  "cloud-link-ed25519-key-pair",
-  "cloud-link-ed25519-private-key",
-  "cloud-link-ed25519-public-key",
-  "cloud-mint-ed25519-public-key",
-  "cloud-endpoint-runtime-config",
-  "cloud-endpoint-confirmed-origin",
-  "cloud-linked-user-id",
-  "cloud-relay-url",
-  "cloud-relay-issuer",
-  "cloud-relay-environment-credential",
-  "cloud-publish-agent-activity",
   "provider-env-Y29kZXg-T1BFTkFJX0FQSV9LRVk",
   "provider-auth-0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
   "usage-limit-source-aHVi",
 ];
 
-it.layer(NodeServices.layer)("replayMarkers", (it) => {
+it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("replayMarkers", (it) => {
   it.effect("prunes only replay markers older than the max age", () =>
     Effect.gen(function* () {
       const secretStore = yield* ServerSecretStore.ServerSecretStore;
@@ -51,14 +39,7 @@ it.layer(NodeServices.layer)("replayMarkers", (it) => {
           .pipe(Effect.andThen(setAge(`${name}.bin`, age)));
 
       const justExpired = Duration.sum(REPLAY_MARKER_MAX_AGE, Duration.seconds(1));
-      const expiredMarkers = [
-        "dpop-proof-old",
-        "cloud-mint-jti-old",
-        "cloud-mint-nonce-old",
-        "cloud-health-jti-old",
-        "cloud-health-nonce-old",
-      ];
-      for (const name of expiredMarkers) yield* writeAged(name, justExpired);
+      yield* writeAged("dpop-proof-old", justExpired);
       yield* writeAged("dpop-proof-at-max-age", REPLAY_MARKER_MAX_AGE);
       for (const name of REAL_SECRET_NAMES) yield* writeAged(name, Duration.days(30));
       const pendingSetFile = "dpop-proof-pending.bin.0000.tmp";

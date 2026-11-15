@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeSqlite from "node:sqlite";
 
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
@@ -20,9 +21,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { vi } from "vite-plus/test";
 
-import { renderBootServicePlist, renderBootServiceUnit } from "./cloud/bootService.ts";
-import { ServiceLauncherHostProcess } from "./cloud/serviceLauncherClient.ts";
-import { SERVICE_LAUNCHER_CONTEXT_ENV } from "./cloud/serviceProtocol.ts";
+import { renderBootServicePlist, renderBootServiceUnit } from "./service/bootService.ts";
+import { ServiceLauncherHostProcess } from "./service/serviceLauncherClient.ts";
+import { SERVICE_LAUNCHER_CONTEXT_ENV } from "./service/serviceProtocol.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as ServerOwnership from "./serverOwnership.ts";
 import * as ServerRuntimeState from "./serverRuntimeState.ts";
@@ -149,7 +150,7 @@ describe("server ownership", () => {
       }),
     ),
     Layer.succeed(HostProcess.Environment, {}),
-  ).pipe(Layer.provideMerge(NodeServices.layer));
+  ).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)));
   const makeState = ServerRuntimeState.makePersistedServerRuntimeState({
     config: { host: undefined, devUrl: undefined },
     port: 3773,
@@ -324,7 +325,7 @@ describe("server ownership", () => {
             ? []
             : [
                 [
-                  `Server ownership lock at ${lockPath} was deleted or replaced. Another server may now share this T3 home. Stop any other server using this home, then restart this server. Do not delete server-owner.sqlite while a server is running.`,
+                  `Server ownership lock at ${lockPath} was deleted or replaced. Another server may now share this Ada home. Stop any other server using this home, then restart this server. Do not delete server-owner.sqlite while a server is running.`,
                 ],
               ];
         assert.deepEqual(messages, expected);
@@ -434,11 +435,11 @@ describe("server ownership", () => {
           assert.equal(result.failure._tag, "OlderBootServiceError");
           assert.equal(Runtime.getErrorExitCode(result.failure), 78);
           assert.include(result.failure.message, t3Home);
-          assert.include(result.failure.message, "t3 update");
-          assert.include(result.failure.message, "t3 service restart");
+          assert.include(result.failure.message, "ada update");
+          assert.include(result.failure.message, "ada service restart");
           assert.include(result.failure.message, "No server was stopped");
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect(
@@ -457,7 +458,7 @@ describe("server ownership", () => {
           if (result._tag !== "Failure") return;
           assert.equal(result.failure._tag, "OlderBootServiceError");
           assert.equal(Runtime.getErrorExitCode(result.failure), 78);
-        }).pipe(Effect.provide(NodeServices.layer)),
+        }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("refuses while the loaded service has not restarted into its lock-aware update", () =>
@@ -471,7 +472,7 @@ describe("server ownership", () => {
           },
         });
         assert.equal(result._tag === "Failure" && result.failure._tag, "OlderBootServiceError");
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("allows lock-aware stable services that are loaded or stopped and enabled", () =>
@@ -494,7 +495,7 @@ describe("server ownership", () => {
           const { result } = yield* startBesideBootService({ ...fixture, activeVersion: "0.1.0" });
           assert.equal(result._tag, "Success");
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("allows services that cannot compete for this home", () =>
@@ -531,7 +532,7 @@ describe("server ownership", () => {
           const { result } = yield* startBesideBootService(fixture);
           assert.equal(result._tag, "Success");
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
 
     it.effect("allows startup when the service configuration or manager is unavailable", () =>
@@ -549,7 +550,7 @@ describe("server ownership", () => {
           const { result } = yield* startBesideBootService({ platform: "darwin", ...fixture });
           assert.equal(result._tag, "Success");
         }
-      }).pipe(Effect.provide(NodeServices.layer)),
+      }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
     );
   });
 });

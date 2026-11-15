@@ -76,6 +76,7 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
 import { keybindingSearchAnchorId, searchableSetting } from "./settingsSearch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 function KeybindingPill({ value }: { value: string }) {
   // Keys dedupe repeated parts; a literal "+" in a shortcut splits into empty strings.
@@ -132,8 +133,10 @@ function KeybindingsSearchInput({
         onKeyDown={(event) => {
           if (event.key !== "Escape") return;
           event.preventDefault();
-          if (query.length > 0) onChange("");
-          else event.currentTarget.blur();
+          if (query.length > 0) {
+            event.stopPropagation();
+            onChange("");
+          } else event.currentTarget.blur();
         }}
         placeholder="Search keybindings"
         aria-label="Search keybindings"
@@ -253,7 +256,7 @@ function UnknownWhenVariableWarning({
 
   return (
     <WarningTooltipIcon label={label} focusable={focusable} className="size-4.5">
-      T3 Agents does not recognize this condition yet. It can still be saved, but it may not match
+      {APP_NAME} does not recognize this condition yet. It can still be saved, but it may not match
       unless the runtime provides it.
     </WarningTooltipIcon>
   );

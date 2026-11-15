@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   bootstrapRemoteBearerSession,
@@ -10,10 +11,12 @@ import {
   AuthEnvironmentBootstrapTokenType,
   AuthAccessTokenType,
   EnvironmentHttpApi,
+  TailnetDevicesError,
 } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -28,9 +31,12 @@ import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import { makeDpopKey } from "./dpop.testkit.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import { layerServerEnvironmentHttpApi } from "../http.ts";
 import * as AuthHttp from "./http.ts";
+import * as TailnetDevices from "../peer/TailnetDevices.ts";
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 
 const DEV_TOKEN = "reusable-dev-auth-token-that-is-long-enough";
 class AuthTestApi extends HttpApi.make("environment")
@@ -51,6 +57,7 @@ const layerConfig = Layer.effect(
 ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-auth-http-test-" })));
 
 const layerEnvironmentAuth = EnvironmentAuth.layer.pipe(
+  Layer.provide(ManagedPolicy.layerTest()),
   Layer.provide(SqlitePersistence.layerMemory),
   Layer.provide(ServerSecretStore.layer),
   Layer.provide(ServerEnvironment.layerIdentity),
@@ -75,6 +82,18 @@ const layerServerEnvironment = Layer.effect(
 const layerRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(layerServerEnvironmentHttpApi),
   Layer.provide(AuthHttp.layer),
+  Layer.provide(
+    Layer.mock(TailnetDevices.TailnetDevices)({
+      // As the service answers when the app to pair again is no longer in the network.
+      inviteApp: () =>
+        Effect.fail(
+          new TailnetDevicesError({
+            reason: "unknown_device",
+            message: "The app to pair again is not in your network.",
+          }),
+        ),
+    }),
+  ),
   Layer.provide(AuthHttp.layerAuthenticatedAuth),
   Layer.provideMerge(layerEnvironmentAuth),
   Layer.provide(
@@ -88,11 +107,11 @@ const layerRoutes = HttpApiBuilder.layer(AuthTestApi).pipe(
   Layer.provide(layerConfig),
   Layer.provideMerge(
     HttpPlatform.layer.pipe(
-      Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
       Layer.provideMerge(Etag.layerWeak),
     ),
   ),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
 );
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -110,15 +129,15 @@ const unusedSecretStore = ServerSecretStore.ServerSecretStore.of({
   getOrCreateRandom: () => Effect.die("Not used by these routes."),
   remove: () => Effect.void,
 });
-const makeRequestContext = (crypto: Crypto.Crypto) =>
-  Context.make(Crypto.Crypto, crypto).pipe(
+const makeRequestContext = (random: SecureRandom.SecureRandom["Service"]) =>
+  Context.make(SecureRandom.SecureRandom, random).pipe(
     Context.add(ServerSecretStore.ServerSecretStore, unusedSecretStore),
   );
 
 it.effect("sets the selected browser session cookies through the HTTP route", () =>
   Effect.gen(function* () {
-    const crypto = yield* Crypto.Crypto;
-    const requestContext = makeRequestContext(crypto);
+    const random = yield* SecureRandom.SecureRandom;
+    const requestContext = makeRequestContext(random);
     return yield* Effect.acquireUseRelease(
       Effect.sync(
         () =>
@@ -128,7 +147,7 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
           ] as const,
       ),
       ([environmentA, environmentB]) =>
-        Effect.tryPromise(async () => {
+        Effect.promise(async () => {
           const devResponse = await environmentA.handler(
             postJson("/api/auth/browser-session", { credential: DEV_TOKEN }),
             requestContext,
@@ -190,15 +209,39 @@ it.effect("sets the selected browser session cookies through the HTTP route", ()
       ([environmentA, environmentB]) =>
         Effect.promise(() => Promise.all([environmentA.dispose(), environmentB.dispose()])),
     );
-  }).pipe(Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect.each(["DPoP", "dpop"])("challenges a refused %s request with DPoP", (scheme) =>
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const requestContext = makeRequestContext(random);
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.promise(async () => {
+          const refused = await environment.handler(
+            postJson(
+              "/api/auth/pairing-token",
+              { scopes: ["orchestration:read"] },
+              { authorization: `${scheme} not-a-valid-token` },
+            ),
+            requestContext,
+          );
+          expect(refused.status).toBe(401);
+          expect(refused.headers.get("www-authenticate")).toBe("DPoP");
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );
 
 it.effect(
   "reports a revoked pairing as revoked and accepts a fresh pairing of the same environment",
   () =>
     Effect.gen(function* () {
-      const crypto = yield* Crypto.Crypto;
-      const requestContext = makeRequestContext(crypto);
+      const random = yield* SecureRandom.SecureRandom;
+      const requestContext = makeRequestContext(random);
       return yield* Effect.acquireUseRelease(
         Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
         (environment) => {
@@ -269,5 +312,103 @@ it.effect(
         },
         (environment) => Effect.promise(() => environment.dispose()),
       );
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+it.effect("pairing again for an app no longer listed is a client error, not a server failure", () =>
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const requestContext = makeRequestContext(random);
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.gen(function* () {
+          const admin = yield* Effect.promise(() =>
+            environment.handler(
+              postJson("/api/auth/browser-session", { credential: DEV_TOKEN }),
+              requestContext,
+            ),
+          );
+          const adminCookie = admin.headers.getSetCookie()[0]?.split(";", 1)[0] ?? "";
+
+          const refused = yield* Effect.promise(() =>
+            environment.handler(
+              postJson(
+                "/api/auth/pairing-token",
+                { network: true, replacesAppId: "gone" },
+                { cookie: adminCookie },
+              ),
+              requestContext,
+            ),
+          );
+
+          expect(refused.status).toBe(400);
+          expect(yield* Effect.promise(() => refused.json())).toMatchObject({
+            _tag: "EnvironmentRequestInvalidError",
+            reason: "unknown_app",
+          });
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
+);
+
+// The web handler runs on its own runtime, so proofs need wall-clock time.
+it.live("checks token-endpoint DPoP proofs without writing replay state", () =>
+  Effect.gen(function* () {
+    const random = yield* SecureRandom.SecureRandom;
+    const written: Array<string> = [];
+    const recordingSecretStore = ServerSecretStore.ServerSecretStore.of({
+      get: () => Effect.succeedNone,
+      set: () => Effect.void,
+      create: (name) => Effect.sync(() => void written.push(name)),
+      getOrCreateRandom: () => Effect.die("Not used by these routes."),
+      remove: () => Effect.void,
+    });
+    const requestContext = Context.make(SecureRandom.SecureRandom, random).pipe(
+      Context.add(ServerSecretStore.ServerSecretStore, recordingSecretStore),
+    );
+    const url = "http://127.0.0.1/oauth/token";
+    const key = makeDpopKey();
+    const iat = Math.floor((yield* DateTime.now).epochMilliseconds / 1_000);
+    const tokenRequest = (subjectToken: string, proof: string) =>
+      new Request(url, {
+        method: "POST",
+        headers: { host: "127.0.0.1", dpop: proof },
+        body: new URLSearchParams({
+          grant_type: AuthTokenExchangeGrantType,
+          subject_token: subjectToken,
+          subject_token_type: AuthEnvironmentBootstrapTokenType,
+          requested_token_type: AuthAccessTokenType,
+        }),
+      });
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => HttpRouter.toWebHandler(layerRoutes, { disableLogger: true })),
+      (environment) =>
+        Effect.promise(async () => {
+          const unknownToken = await environment.handler(
+            tokenRequest("not-a-pairing-token", key.sign({ method: "POST", url, token: "", iat })),
+            requestContext,
+          );
+          expect(unknownToken.status).toBe(401);
+          expect(await unknownToken.json()).not.toHaveProperty("dpopFailureReason");
+
+          const accepted = await environment.handler(
+            tokenRequest(DEV_TOKEN, key.sign({ method: "POST", url, token: "", iat })),
+            requestContext,
+          );
+          expect(accepted.status).toBe(200);
+          expect(await accepted.json()).toMatchObject({ token_type: "DPoP" });
+
+          const badProof = await environment.handler(
+            tokenRequest(DEV_TOKEN, "not-a-proof"),
+            requestContext,
+          );
+          expect(badProof.status).toBe(401);
+          expect(badProof.headers.get("www-authenticate")).toBe("DPoP");
+          expect(written).toEqual([]);
+        }),
+      (environment) => Effect.promise(() => environment.dispose()),
+    );
+  }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
 );

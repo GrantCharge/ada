@@ -115,7 +115,7 @@ describe("browser API CORS", () => {
         new Request("https://backend.example/api/environment", {
           method: "OPTIONS",
           headers: {
-            origin: "https://app.t3.codes",
+            origin: "https://hosted.example",
             "access-control-request-method": "GET",
             "access-control-request-headers": [
               ORCHESTRATION_PROTOCOL_HEADER,
@@ -399,6 +399,8 @@ it.layer(
         expect(response.status).toBe(200);
         expect(yield* response.text).toBe(nextHtml);
         expect(response.headers["cache-control"]).toBe("no-cache");
+        expect(response.headers["content-security-policy"]).toBe("frame-ancestors 'none'");
+        expect(response.headers["x-frame-options"]).toBe("DENY");
         expect(response.headers["etag"]).toBeUndefined();
         expect(response.headers["last-modified"]).toBeUndefined();
       }

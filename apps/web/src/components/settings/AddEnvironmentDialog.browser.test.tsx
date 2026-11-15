@@ -32,10 +32,6 @@ vi.mock(import("~/state/query"), async (original) => ({
     refresh: mocks.refresh,
   })) as never,
 }));
-vi.mock(import("~/state/environments"), async (original) => ({
-  ...(await original()),
-  useRelayEnvironmentDiscovery: (() => ({ environments: new Map() })) as never,
-}));
 vi.mock(import("~/state/server"), async (original) => ({
   ...(await original()),
   primaryServerKeybindingsAtom: Atom.make([]) as never,
@@ -69,14 +65,14 @@ const remoteCard = () => page.getByRole("button", { name: /Remote link/ });
 const sshCard = () => page.getByRole("button", { name: /^SSH/ });
 
 async function openDialogOnSsh() {
-  await userEvent.click(page.getByRole("button", { name: "Add environment" }));
+  await userEvent.click(page.getByRole("button", { name: "Add machine" }));
   await userEvent.click(sshCard());
   await expect.element(sshCard()).toHaveAttribute("aria-pressed", "true");
 }
 
 async function expectDefaultModeAfterReopen() {
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
-  await userEvent.click(page.getByRole("button", { name: "Add environment" }));
+  await userEvent.click(page.getByRole("button", { name: "Add machine" }));
   await expect.element(remoteCard()).toHaveAttribute("aria-pressed", "true");
   await expect.element(sshCard()).toHaveAttribute("aria-pressed", "false");
   await expect.element(page.getByPlaceholder("backend.example.com")).toBeInTheDocument();
@@ -88,7 +84,7 @@ describe("AddEnvironmentDialog", () => {
     await using _screen = await render(<Owner />);
 
     await openDialogOnSsh();
-    await userEvent.type(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
+    await userEvent.fill(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
     await userEvent.click(
       page.getByRole("dialog").getByRole("button", { name: "Add environment" }),
     );
@@ -103,12 +99,12 @@ describe("AddEnvironmentDialog", () => {
 
     await openDialogOnSsh();
     await userEvent.click(remoteCard());
-    await userEvent.type(page.getByPlaceholder("backend.example.com"), "devbox.example.com");
-    await userEvent.type(page.getByPlaceholder("PAIRCODE"), "PAIRCODE");
+    await userEvent.fill(page.getByPlaceholder("backend.example.com"), "devbox.example.com");
+    await userEvent.fill(page.getByPlaceholder("PAIRCODE"), "PAIRCODE");
     await userEvent.click(sshCard());
-    await userEvent.type(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
-    await userEvent.type(page.getByPlaceholder("root"), "maria");
-    await userEvent.type(page.getByPlaceholder("22"), "2222");
+    await userEvent.fill(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
+    await userEvent.fill(page.getByPlaceholder("root"), "maria");
+    await userEvent.fill(page.getByPlaceholder("22"), "2222");
     await userEvent.keyboard("{Escape}");
 
     await expectDefaultModeAfterReopen();
@@ -124,7 +120,7 @@ describe("AddEnvironmentDialog", () => {
       finishConnection = resolve;
     });
     mocks.connectSshEnvironment.mockImplementationOnce(() => pending);
-    await userEvent.type(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
+    await userEvent.fill(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
     await userEvent.click(
       page.getByRole("dialog").getByRole("button", { name: "Add environment" }),
     );

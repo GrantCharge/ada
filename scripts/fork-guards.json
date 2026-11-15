@@ -4,31 +4,23 @@
     "protects": "an auth refusal from a route that answered beats a silent route's timeout",
     "test": "packages/client-runtime/src/connection/supervisor.test.ts",
     "title": "reports a refusal from a route that answered over a silent route's timeout",
-    "sha256": "5f648270cb2dbb9e032ac4028a471be79cec84ce1865735b2ade18dc71aceec1",
+    "sha256": "d3f2c0907af2a7707571f34c575f8696da22392fd6ac6dd2b48567fcf4a669a3",
     "sources": ["packages/client-runtime/src/connection/driver.ts"]
   },
   {
     "fix": "#105",
-    "protects": "direct routes connect without a T3 Connect sign-in",
+    "protects": "direct routes connect without a hosted sign-in",
     "test": "packages/client-runtime/src/connection/supervisor.test.ts",
-    "title": "keeps retrying a silent direct route when T3 Connect asks for sign-in",
-    "sha256": "3511decd89cff733c2349111551c27ab7d7c562611a34aecd13a3febce8f17ba",
+    "title": "keeps retrying a silent direct route when another route asks for sign-in",
+    "sha256": "a4a885d8ff93686db61290b53847fb51fa2b5d818ea1abe1c6d3a5283dbeb7bf",
     "sources": ["packages/client-runtime/src/connection/driver.ts"]
   },
   {
     "fix": "#105",
-    "protects": "direct routes connect without a T3 Connect sign-in",
-    "test": "packages/client-runtime/src/authorization/layer.test.ts",
-    "title": "keeps direct access on a valid environment token while signed out",
-    "sha256": "557cd8503b782374f419b929413ce14de183738cacc0fbbbff87e70bc4b2092b",
-    "sources": ["packages/client-runtime/src/authorization/service.ts"]
-  },
-  {
-    "fix": "#105",
-    "protects": "direct routes connect without a T3 Connect sign-in",
+    "protects": "direct routes connect without a hosted sign-in",
     "test": "packages/client-runtime/src/state/environmentHttpAuth.test.ts",
     "title": "keeps a learned direct origin and marks the token request as direct",
-    "sha256": "88514cb4e951f41e25d59fda61888828f0e0e7de8ac8f174197ee3d011a9c64a",
+    "sha256": "692ed511514c3e418dff0c54e5261ad0379c71ce37bd84ed488eacaba0c7f518",
     "sources": ["packages/client-runtime/src/state/environmentHttpAuth.ts"]
   },
   {
@@ -53,28 +45,6 @@
   {
     "fix": "#108",
     "protects": "direct routes keep and renew their token without the relay",
-    "test": "packages/client-runtime/src/authorization/layer.test.ts",
-    "title": "connects on an aging token at once and renews it through the relay behind",
-    "sha256": "0ee4bc050971e0e1a0960103a434b5688c734471c33665349cb035c6aa70f89a",
-    "sources": [
-      "packages/client-runtime/src/authorization/service.ts",
-      "packages/client-runtime/src/authorization/tokenStore.ts"
-    ]
-  },
-  {
-    "fix": "#108",
-    "protects": "direct routes keep and renew their token without the relay",
-    "test": "packages/client-runtime/src/authorization/layer.test.ts",
-    "title": "drops an aging token when the relay refuses to renew it",
-    "sha256": "5d225d7e819c7dd05e2d3250525b7a970fbed639b17daeef43d7be350f72d9bc",
-    "sources": [
-      "packages/client-runtime/src/authorization/service.ts",
-      "packages/client-runtime/src/authorization/tokenStore.ts"
-    ]
-  },
-  {
-    "fix": "#108",
-    "protects": "direct routes keep and renew their token without the relay",
     "test": "apps/server/src/auth/EnvironmentAuth.test.ts",
     "title": "exchanges the reusable dev token for a local scoped OAuth session",
     "sha256": "524c6020df1fd9ffee81991420b5c7eec70168f6d165ef16c6be098cf96973b2",
@@ -85,7 +55,7 @@
     "protects": "the server resets clients that stopped reading",
     "test": "apps/server/src/wsClientLiveness.test.ts",
     "title": "treats a client that stops sending as gone after the silence limit",
-    "sha256": "3f21253777486e387cad1808436cb8c612f34411f35842fc2f027e88b79a70e2",
+    "sha256": "1bd755c8f77360e4cfbf3c85f6c8668578a7360e232afa9ae8ee75b3c2801793",
     "sources": ["apps/server/src/wsClientLiveness.ts", "apps/server/src/ws.ts"]
   },
   {
@@ -101,16 +71,8 @@
     "protects": "the server resets clients that stopped reading",
     "test": "apps/server/src/wsClientLiveness.test.ts",
     "title": "treats a send backlog that stops draining as a stalled client",
-    "sha256": "0d6aad5f980ee8c58782d22c7e27b47707c8c8a71ba30d0b69db1be8dcd69680",
+    "sha256": "fc20b08a256877fba345b7ea767c3d9079cda65673c9692697b24c593d28e2d3",
     "sources": ["apps/server/src/wsClientLiveness.ts", "apps/server/src/ws.ts"]
-  },
-  {
-    "fix": "#101",
-    "protects": "failed relay attempts are traced with their real error",
-    "test": "packages/client-runtime/src/connection/supervisor.test.ts",
-    "title": "exports each relay setup as a standalone linked trace that ends at readiness",
-    "sha256": "d9600641052a0ed9f17f72f9b9c43c02fb4dc35f52962bbdea4c1ed62fe2441d",
-    "sources": ["packages/client-runtime/src/connection/supervisor.ts"]
   },
   {
     "fix": "#111",
@@ -171,7 +133,7 @@
     "protects": "Tailscale Serve never takes over a route another process owns",
     "test": "scripts/lib/dev-share.test.ts",
     "title": "replaces a stale mapping whose target no longer answers",
-    "sha256": "921e8952aea62262f2b942f55710c614cbbb678795a20f4f5d8f63c754093e76",
+    "sha256": "6a711455379461a12ad77d58e90235da1c47e7a6356a3096c9103b2ff07a9647",
     "sources": ["scripts/lib/dev-share.ts"]
   },
   {
@@ -206,7 +168,7 @@
     "protects": "an equal route keeps a live socket, and a host that stays down shows offline",
     "test": "packages/client-runtime/src/connection/supervisor.test.ts",
     "title": "retries a host that stays down quietly and recovers by itself",
-    "sha256": "3c204ca72b0a948abefb52e1702d06bc67695bed801a23258ed4ac0c96e77407",
+    "sha256": "90a2c3bc5ab01d6f7f49b55672f424b0be2f777b8bebbfa829f4719e86f5d3ce",
     "sources": [
       "packages/client-runtime/src/connection/supervisor.ts",
       "packages/client-runtime/src/connection/presentation.ts"
@@ -217,10 +179,98 @@
     "protects": "an equal route keeps a live socket, and a host that stays down shows offline",
     "test": "packages/client-runtime/src/connection/presentation.test.ts",
     "title": "settles a host past its grace period as offline and a refused credential as re-pair",
-    "sha256": "a612fe5200fd43c8d501fdd2465562cbe43d0a7ef8c6ff1ff322515096095efd",
+    "sha256": "4fa785e503585fbab3115d890321274264bb497ff2a6699cf57111698da5c9d8",
     "sources": [
       "packages/client-runtime/src/connection/supervisor.ts",
       "packages/client-runtime/src/connection/presentation.ts"
     ]
+  },
+  {
+    "fix": "#207",
+    "protects": "a database T3 Code migrated gets the fork's scheduled-task columns",
+    "test": "apps/server/src/persistence/ForkMigrations.test.ts",
+    "title": "brings a database written by upstream to the fork's schema",
+    "sha256": "ccec8bac5170771dc5c3d39109d9d2d29c51a4b9cfa2eaabb741e9dadba200ba",
+    "sources": ["apps/server/src/persistence/Migrations.ts"]
+  },
+  {
+    "fix": "#207",
+    "protects": "the fork desktop never follows a Stable track it has no feed for",
+    "test": "apps/desktop/src/settings/DesktopAppSettings.test.ts",
+    "title": "keeps a nightly-only build on nightly when T3 Code left Stable selected",
+    "sha256": "874179da7422534124f4452a174cfce61e90896f2616510292c8d9b589a2a342",
+    "sources": ["apps/desktop/src/settings/DesktopAppSettings.ts"]
+  },
+  {
+    "fix": "#207",
+    "protects": "t3 update and server self-update install fork builds, never upstream's",
+    "test": "apps/server/src/cli/update.test.ts",
+    "title": "authenticates each release page until the requested channel is found",
+    "sha256": "15b618326a073faebce72146eab7b2c3a4583674f48c54f6b7aa692c92d88550",
+    "sources": ["packages/shared/src/cliRelease.ts"]
+  },
+  {
+    "fix": "#221",
+    "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
+    "test": "scripts/upstream-install-commands.test.ts",
+    "title": "keeps upstream install commands out of user-facing fork code and docs",
+    "sha256": "3697a6a8b84950338f50f4de0f01c665f041976f7f3ad40af019df69419feb02",
+    "sources": ["packages/shared/src/cliRelease.ts"]
+  },
+  {
+    "fix": "#221",
+    "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
+    "test": "scripts/install.test.ts",
+    "title": "%s installs the fork's nightly releases",
+    "sha256": "3d0a5a3ee8c83494a38864f13aaf172d941a8ae41b78fea57391da845ddf5719",
+    "sources": ["scripts/install.sh", "scripts/install.ps1"]
+  },
+  {
+    "fix": "#221",
+    "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
+    "test": "packages/shared/src/cliRelease.test.ts",
+    "title": "updates an unmanaged %j server from the fork's releases",
+    "sha256": "40ef620681b6dce0cc7c9b3d6759155e9e253bb438e6844f79aeb5c761aeaa43",
+    "sources": ["packages/shared/src/cliRelease.ts"]
+  },
+  {
+    "fix": "#221",
+    "protects": "headless installs, updates and track switches use the fork's releases, never upstream's npm or install.sh",
+    "test": "apps/server/src/service/npmRelease.test.ts",
+    "title": "reads %s from the fork's releases with its checked database migration",
+    "sha256": "e41e02a2614e7f0ea79c3ddfd93928d64b0caf67027e3cfce739c2fdf6d17718",
+    "sources": ["apps/server/src/service/npmRelease.ts"]
+  },
+  {
+    "fix": "#233",
+    "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
+    "test": "scripts/upstream-install-commands.test.ts",
+    "title": "keeps upstream brand names out of user-facing fork code and docs",
+    "sha256": "b4783358437d945c2851a094712cc45dfa318da65cfe64d5400a7dc74b11f23c",
+    "sources": ["packages/shared/src/branding.ts"]
+  },
+  {
+    "fix": "#233",
+    "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
+    "test": "apps/mobile/src/lib/mobileBranding.test.ts",
+    "title": "names the fork's app Ada",
+    "sha256": "fc610c9f790b3001260202e853c975421f9080465e12d519d15c131ea07e8633",
+    "sources": ["apps/mobile/src/lib/mobileBranding.ts", "packages/shared/src/branding.ts"]
+  },
+  {
+    "fix": "#233",
+    "protects": "the fork ships as Ada and upstream syncs cannot bring T3 Code, T3 Agents, Theo, t3.codes or pingdotgg back into user-facing copy",
+    "test": "apps/mobile/src/lib/mobileBranding.test.ts",
+    "title": "shows no upstream name in the app",
+    "sha256": "f25c34c8d9f862713f1abc327e501ac71bb9ac80cedac2bd24d58603abaab3cb",
+    "sources": ["apps/mobile/src/lib/mobileBranding.ts"]
+  },
+  {
+    "fix": "#245",
+    "protects": "Ada sends nothing to upstream analytics, crash reporting or its hosted app, and upstream syncs cannot bring them back",
+    "test": "scripts/check-removed-connect.test.ts",
+    "title": "reports upstream analytics, crash reporting and hosted-app defaults in shipped code only",
+    "sha256": "be6a27c930fba332a719554b583de6807677caa25314f9e0e9cc5c567fcac6d7",
+    "sources": ["scripts/check-removed-connect.ts", "scripts/removed-connect-paths.json"]
   }
 ]

@@ -1,3 +1,4 @@
+import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
 import type { SDKModel, SDKUser } from "@cursor/sdk";
 import type {
   ModelCapabilities,
@@ -22,6 +23,7 @@ import {
   type ServerProviderDraft,
 } from "@t3tools/provider-core/server/snapshotProbe";
 import * as CursorSdkCatalog from "./CursorSdkCatalog.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const CURSOR_PRESENTATION = {
   displayName: "Cursor",
@@ -51,7 +53,7 @@ export const buildInitialCursorProviderSnapshot = Effect.fn(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Cursor is disabled in T3 Code settings.",
+        message: `Cursor is disabled in ${APP_NAME} settings.`,
       },
     });
   }
@@ -263,7 +265,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Cursor is disabled in T3 Code settings.",
+        message: `Cursor is disabled in ${APP_NAME} settings.`,
       },
     });
   }
@@ -286,9 +288,19 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
   }
 
   const sdkCatalog = yield* CursorSdkCatalog.CursorSdkCatalog;
-  const catalogResult = yield* sdkCatalog
-    .read(sdkApiKey)
-    .pipe(Effect.timeoutOption(CURSOR_SDK_CATALOG_TIMEOUT_MS), Effect.result);
+  const timeoutMs = resolveProviderProbeTimeoutMs(
+    "cursor",
+    CURSOR_SDK_CATALOG_TIMEOUT_MS,
+    environment,
+  );
+  const readCatalog = Effect.suspend(() => sdkCatalog.read(sdkApiKey)).pipe(
+    Effect.timeoutOption(timeoutMs),
+  );
+  // api.cursor.com latency is intermittent; one slow read should not flip the provider to error.
+  const catalogResult = yield* readCatalog.pipe(
+    Effect.filterOrElse(Option.isSome, () => readCatalog),
+    Effect.result,
+  );
 
   if (Result.isFailure(catalogResult)) {
     yield* Effect.logWarning("Cursor SDK catalog probe failed", {
@@ -304,8 +316,8 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
     } else if (failure.planRequired) {
       message =
         authenticationType === "browser"
-          ? "Cursor needs a paid plan to run in T3 Code. Upgrade this account or sign in with a different one."
-          : "Cursor needs a paid plan to run in T3 Code. Upgrade the account that owns CURSOR_API_KEY or use a key from a paid account.";
+          ? `Cursor needs a paid plan to run in ${APP_NAME}. Upgrade this account or sign in with a different one.`
+          : `Cursor needs a paid plan to run in ${APP_NAME}. Upgrade the account that owns CURSOR_API_KEY or use a key from a paid account.`;
     }
     return buildServerProvider({
       presentation: CURSOR_PRESENTATION,
@@ -333,7 +345,7 @@ export const checkCursorProviderStatus = Effect.fn("checkCursorProviderStatus")(
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: `Cursor SDK catalog request timed out after ${CURSOR_SDK_CATALOG_TIMEOUT_MS}ms.`,
+        message: `Cursor SDK catalog request timed out after ${timeoutMs}ms.`,
       },
     });
   }

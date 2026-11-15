@@ -11,7 +11,8 @@ import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import * as Clock from "effect/Clock";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -32,7 +33,10 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "@t3tools/provider-core/server/driver";
-import { providerModelsFromSettings } from "@t3tools/provider-core/server/snapshotProbe";
+import {
+  providerModelsFromSettings,
+  providerProbeEnvironment,
+} from "@t3tools/provider-core/server/snapshotProbe";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider-core/server/maintenanceResolver";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -56,6 +60,7 @@ import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistryAuth from "./auth.ts";
 import * as AcpRegistryAuthenticationState from "./authenticationState.ts";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const DRIVER_KIND = ProviderDriverKind.make("acpRegistry");
 const decodeSettings = Schema.decodeSync(AcpRegistrySettings);
@@ -81,21 +86,43 @@ const makeUnsupportedTextGeneration = (): ProviderTextGeneration => {
     generateBranchName: () => unsupported("generateBranchName"),
     generateThreadTitle: () => unsupported("generateThreadTitle"),
     generateReviewGuide: () => unsupported("generateReviewGuide"),
+    generateTranscriptionPostProcessing: () => unsupported("generateTranscriptionPostProcessing"),
     rewriteDraft: () => unsupported("rewriteDraft"),
   };
 };
 
 function modelsFromDiscovery(
   discovery:
-    | Pick<AcpRegistryLiveConfiguration, "models" | "currentModelId" | "configOptions">
+    | Pick<
+        AcpRegistryLiveConfiguration,
+        "models" | "currentModelId" | "configOptions" | "modelOptionIds"
+      >
     | undefined,
   customModels: ReadonlyArray<string>,
+  previousModels: ReadonlyArray<ServerProviderModel> = [],
 ): ReadonlyArray<ServerProviderModel> {
   const discovered = discovery?.models ?? [];
   const capabilities =
     discovery === undefined || discovery.configOptions.length === 0
       ? EMPTY_CAPABILITIES
       : createModelCapabilities({ optionDescriptors: discovery.configOptions });
+  // Model-specific options describe only the session's current model; other
+  // models keep the shared ones plus what an earlier session reported for them.
+  const modelOptionIds = new Set(discovery?.modelOptionIds ?? []);
+  const shared = (discovery?.configOptions ?? []).filter(
+    (descriptor) => !modelOptionIds.has(descriptor.id),
+  );
+  const sharedIds = new Set(shared.map((descriptor) => descriptor.id));
+  const capabilitiesFor = (slug: string) => {
+    if (slug === discovery?.currentModelId) return capabilities;
+    const own = (
+      previousModels.find((model) => model.slug === slug)?.capabilities?.optionDescriptors ?? []
+    ).filter((descriptor) => !sharedIds.has(descriptor.id));
+    const optionDescriptors = [...shared, ...own];
+    return optionDescriptors.length === 0
+      ? EMPTY_CAPABILITIES
+      : createModelCapabilities({ optionDescriptors });
+  };
   const builtInModels: ReadonlyArray<ServerProviderModel> =
     discovered.length === 0
       ? [
@@ -112,7 +139,7 @@ function modelsFromDiscovery(
           name: model.name,
           isCustom: false,
           ...(model.id === discovery?.currentModelId ? { isDefault: true } : {}),
-          capabilities,
+          capabilities: capabilitiesFor(model.id),
         }));
   return providerModelsFromSettings(builtInModels, customModels, capabilities);
 }
@@ -257,6 +284,7 @@ export function applyAcpRegistryLiveConfiguration(
   provider: ServerProvider,
   configuration: AcpRegistryLiveConfiguration,
   customModels: ReadonlyArray<string>,
+  previousModels: ReadonlyArray<ServerProviderModel> = provider.models,
 ): ServerProvider {
   const { message: _staleProbeMessage, ...snapshot } = provider;
   // session/load may omit models (Kimi returns `{}`); keep the probed list
@@ -280,7 +308,11 @@ export function applyAcpRegistryLiveConfiguration(
     models:
       configuration.models.length === 0 && configuration.configOptions.length === 0
         ? provider.models
-        : modelsFromDiscovery(discovery, customModels),
+        : modelsFromDiscovery(
+            discovery,
+            customModels,
+            previousModels.filter((model) => !model.isCustom),
+          ),
   };
 }
 
@@ -310,7 +342,7 @@ const buildInitialAcpRegistrySnapshot = Effect.fn("AcpRegistryDriver.buildInitia
       auth: { status: "unknown" },
       message: input.settings.enabled
         ? "Checking ACP Registry agent readiness..."
-        : "ACP Registry is disabled in T3 Code settings.",
+        : `ACP Registry is disabled in ${APP_NAME} settings.`,
     });
   },
 );
@@ -339,7 +371,7 @@ export function buildCheckedAcpRegistrySnapshot(
       ? `Sign in in provider settings using "${advertisedAuthMethod.name}". The login terminal runs on this environment.`
       : advertisedAuthMethod.type === "env_var" &&
           (advertisedAuthMethod.envVarNames?.length ?? 0) > 0
-        ? `Set ${advertisedAuthMethod.envVarNames!.join(", ")} under this instance's environment variables in provider settings. T3 Code will detect it on the next provider refresh.`
+        ? `Set ${advertisedAuthMethod.envVarNames!.join(", ")} under this instance's environment variables in provider settings. ${APP_NAME} will detect it on the next provider refresh.`
         : `Sign in in provider settings using "${advertisedAuthMethod.name}".`
     : undefined;
   return baseSnapshot({
@@ -413,7 +445,7 @@ export const checkAcpRegistryProviderStatus = Effect.fn("AcpRegistryDriver.check
         instanceId: input.instanceId,
         settings: input.settings,
         cwd: input.cwd,
-        environment: input.environment,
+        environment: providerProbeEnvironment(input.environment),
       }),
     );
     return Result.isFailure(probed)
@@ -464,7 +496,10 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
     : snapshot;
 });
 
-export type AcpRegistryDriverEnv = AcpRegistryAdapterV2DriverEnv | ProviderHost.ProviderHost;
+export type AcpRegistryDriverEnv =
+  | AcpRegistryAdapterV2DriverEnv
+  | Digest.Digest
+  | ProviderHost.ProviderHost;
 
 export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryDriverEnv> = {
   driverKind: DRIVER_KIND,
@@ -496,7 +531,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           .pipe(Effect.andThen(runtimeCoordinator.value.clearLiveConfiguration(instanceId))),
       );
     }
-    const crypto = yield* Crypto.Crypto;
+    const random = yield* SecureRandom.SecureRandom;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const hostEnvironment = yield* HostProcess.Environment;
     const host = yield* ProviderHost.ProviderHost;
@@ -546,6 +581,23 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         environment,
         processEnvironment,
       });
+    // Refreshes rebuild the snapshot from the probe, so per-model options
+    // learned from earlier sessions are kept here.
+    const learnedModels = yield* Ref.make<ReadonlyArray<ServerProviderModel>>([]);
+    const applyLiveConfiguration = (
+      provider: ServerProvider,
+      configuration: AcpRegistryLiveConfiguration,
+    ) =>
+      Ref.modify(learnedModels, (learned) => {
+        const next = applyAcpRegistryLiveConfiguration(
+          provider,
+          configuration,
+          effectiveConfig.customModels,
+          learned.length > 0 ? learned : provider.models,
+        );
+        return [next, next.models === provider.models ? learned : next.models];
+      });
+    const clearLearnedModels = Ref.set(learnedModels, []);
     const withLiveRuntimeState = Effect.fn("AcpRegistryDriver.withLiveRuntimeState")(function* (
       input: ServerProvider,
     ) {
@@ -564,18 +616,17 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             configuration: runtimeCoordinator.value.getLiveConfiguration(instanceId),
             authAction: runtimeCoordinator.value.getUrlAuthAction(instanceId),
           }).pipe(
-            Effect.map(({ commands, configuration, authAction }) => {
+            Effect.flatMap(({ commands, configuration, authAction }) => {
               const withCommands = applyAcpRegistryAvailableCommands(provider, commands);
-              const withConfiguration = Option.match(configuration, {
-                onNone: () => withCommands,
+              return Option.match(configuration, {
+                onNone: () => Effect.succeed(withCommands),
                 onSome: (liveConfiguration) =>
-                  applyAcpRegistryLiveConfiguration(
-                    withCommands,
-                    liveConfiguration,
-                    effectiveConfig.customModels,
-                  ),
-              });
-              return applyAcpRegistryUrlAuthAction(withConfiguration, authAction);
+                  applyLiveConfiguration(withCommands, liveConfiguration),
+              }).pipe(
+                Effect.map((withConfiguration) =>
+                  applyAcpRegistryUrlAuthAction(withConfiguration, authAction),
+                ),
+              );
             }),
           );
     });
@@ -592,7 +643,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     ).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(SecureRandom.SecureRandom, random),
     );
     const enrichmentCache = yield* Ref.make<{
       readonly generation: number;
@@ -702,15 +753,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           (configuration) =>
             liveSnapshotSemaphore.withPermit(
               getSnapshot.pipe(
-                Effect.flatMap((current) =>
-                  publishSnapshot(
-                    applyAcpRegistryLiveConfiguration(
-                      current,
-                      configuration,
-                      effectiveConfig.customModels,
-                    ),
-                  ),
-                ),
+                Effect.flatMap((current) => applyLiveConfiguration(current, configuration)),
+                Effect.flatMap(publishSnapshot),
               ),
             ),
         );
@@ -753,13 +797,13 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         E,
         | AcpRegistrySupport.AcpRegistryCatalog
         | ChildProcessSpawner.ChildProcessSpawner
-        | Crypto.Crypto
+        | SecureRandom.SecureRandom
       >,
     ): Effect.Effect<A, E> => {
       const provided = effect.pipe(
         Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.provideService(SecureRandom.SecureRandom, random),
       );
       return Option.isSome(runtimeCoordinator)
         ? provided.pipe(
@@ -771,11 +815,13 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         : provided;
     };
 
-    const clearLiveState = Option.isSome(runtimeCoordinator)
-      ? runtimeCoordinator.value
-          .clearLiveConfiguration(instanceId)
-          .pipe(Effect.andThen(runtimeCoordinator.value.clearAvailableCommands(instanceId)))
-      : Effect.void;
+    const clearLiveState = (
+      Option.isSome(runtimeCoordinator)
+        ? runtimeCoordinator.value
+            .clearLiveConfiguration(instanceId)
+            .pipe(Effect.andThen(runtimeCoordinator.value.clearAvailableCommands(instanceId)))
+        : Effect.void
+    ).pipe(Effect.andThen(clearLearnedModels));
     const controller = yield* AcpRegistryAuth.makeAcpRegistryAuth({
       instanceId,
       settings: effectiveConfig,
@@ -793,7 +839,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.provideService(SecureRandom.SecureRandom, random),
     );
     const auth = {
       ...controller,
@@ -818,6 +864,13 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         ...snapshot,
         refresh: snapshot.refresh.pipe(Effect.tap(() => controller.refreshMethods ?? Effect.void)),
       },
+      invalidateCaches: (Option.isSome(runtimeCoordinator)
+        ? runtimeCoordinator.value.clearLiveConfiguration(instanceId)
+        : Effect.void
+      ).pipe(
+        Effect.andThen(clearLearnedModels),
+        Effect.andThen(liveSnapshotSemaphore.withPermit(invalidateEnrichmentCache)),
+      ),
       orchestrationAdapter,
       textGeneration: makeUnsupportedTextGeneration(),
       acpSessionManagement: {
@@ -882,7 +935,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
           }).pipe(
             Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.provideService(SecureRandom.SecureRandom, random),
             Effect.tap(() => confirmedAuthentication.set(false)),
             Effect.tap(() =>
               liveSnapshotSemaphore.withPermit(

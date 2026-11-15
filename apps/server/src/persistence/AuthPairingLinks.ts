@@ -7,7 +7,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlSchema from "effect/sql/SqlSchema";
 
-import { AuthEnvironmentScopes } from "@t3tools/contracts";
+import { AuthEnvironmentScopes, EnvironmentId } from "@t3tools/contracts";
 
 import {
   type AuthPairingLinkRepositoryError,
@@ -15,6 +15,12 @@ import {
   type PersistenceErrorCorrelation,
   PersistenceSqlError,
 } from "./Errors.ts";
+
+/**
+ * Subjects of codes that approve one agent sign-in at a set level, as `mcp-approval:<level>`.
+ * Only that sign-in may spend one, so every other use of a pairing code refuses them.
+ */
+export const MCP_APPROVAL_SUBJECT_PREFIX = "mcp-approval:";
 
 export const AuthPairingLinkRecord = Schema.Struct({
   id: Schema.String,
@@ -28,6 +34,10 @@ export const AuthPairingLinkRecord = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
   consumedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   revokedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
+  /** The member that asked for this credential on an app's behalf. */
+  brokeredBy: Schema.optionalKey(Schema.NullOr(EnvironmentId)),
+  /** The app of the network this credential pairs again for. */
+  replacesAppId: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 export type AuthPairingLinkRecord = typeof AuthPairingLinkRecord.Type;
 
@@ -41,6 +51,8 @@ export const CreateAuthPairingLinkInput = Schema.Struct({
   proofKeyThumbprint: Schema.NullOr(Schema.String),
   createdAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
+  brokeredBy: Schema.optionalKey(EnvironmentId),
+  replacesAppId: Schema.optionalKey(Schema.String),
 });
 export type CreateAuthPairingLinkInput = typeof CreateAuthPairingLinkInput.Type;
 
@@ -49,6 +61,8 @@ export const ConsumeAuthPairingLinkInput = Schema.Struct({
   proofKeyThumbprint: Schema.NullOr(Schema.String),
   requestedScopes: Schema.optionalKey(AuthEnvironmentScopes),
   requiredScopes: Schema.optionalKey(AuthEnvironmentScopes),
+  /** Also spends a code with exactly this `mcp-approval:` subject. Others are always refused. */
+  mcpApprovalSubject: Schema.optionalKey(Schema.String),
   consumedAt: Schema.DateTimeUtcFromString,
   now: Schema.DateTimeUtcFromString,
 });
@@ -82,6 +96,8 @@ const AuthPairingLinkRawDbRow = Schema.Struct({
   expiresAt: Schema.Unknown,
   consumedAt: Schema.Unknown,
   revokedAt: Schema.Unknown,
+  brokeredBy: Schema.optionalKey(Schema.Unknown),
+  replacesAppId: Schema.optionalKey(Schema.Unknown),
 });
 
 const decodeAuthPairingLinkDbRow = Schema.decodeUnknownEffect(AuthPairingLinkRecord);
@@ -141,7 +157,9 @@ export const make = Effect.gen(function* () {
           created_at,
           expires_at,
           consumed_at,
-          revoked_at
+          revoked_at,
+          brokered_by,
+          replaces_app_id
         )
         VALUES (
           ${input.id},
@@ -154,7 +172,9 @@ export const make = Effect.gen(function* () {
           ${input.createdAt},
           ${input.expiresAt},
           NULL,
-          NULL
+          NULL,
+          ${input.brokeredBy ?? null},
+          ${input.replacesAppId ?? null}
         )
       `,
   });
@@ -167,6 +187,7 @@ export const make = Effect.gen(function* () {
       proofKeyThumbprint,
       requestedScopes,
       requiredScopes,
+      mcpApprovalSubject,
       consumedAt,
       now,
     }) =>
@@ -177,6 +198,10 @@ export const make = Effect.gen(function* () {
           AND revoked_at IS NULL
           AND consumed_at IS NULL
           AND expires_at > ${now}
+          AND (
+            subject NOT LIKE ${`${MCP_APPROVAL_SUBJECT_PREFIX}%`}
+            OR subject = ${mcpApprovalSubject ?? null}
+          )
           AND (
             proof_key_thumbprint IS NULL
             OR proof_key_thumbprint = ${proofKeyThumbprint}
@@ -206,7 +231,9 @@ export const make = Effect.gen(function* () {
           created_at AS "createdAt",
           expires_at AS "expiresAt",
           consumed_at AS "consumedAt",
-          revoked_at AS "revokedAt"
+          revoked_at AS "revokedAt",
+          brokered_by AS "brokeredBy",
+          replaces_app_id AS "replacesAppId"
       `,
   });
 

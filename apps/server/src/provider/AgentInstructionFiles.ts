@@ -6,6 +6,7 @@ import * as NodeCrypto from "node:crypto";
 import * as Path from "effect/Path";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import { APP_NAME } from "@t3tools/shared/branding";
 
 const decodeSkills = Schema.decodeUnknownEffect(Schema.Array(AgentSkill));
 const encodeBundle = Schema.encodeSync(
@@ -18,6 +19,18 @@ class AgentInstructionFileError extends Schema.TaggedError<AgentInstructionFileE
   "AgentInstructionFileError",
   { message: Schema.String },
 ) {}
+
+export const assignedSkillIndexEntry = (
+  skill: Pick<AgentSkill, "name" | "description" | "revision" | "updatedAt">,
+  digest: string,
+  relativePath: string,
+) =>
+  `- ${quote(skill.name)}: ${quote(skill.description)} (revision ${skill.revision}, updated ${skill.updatedAt}, content ${digest}, file: ${relativePath})`;
+
+export const assignedSkillIndex = (entries: ReadonlyArray<string>) =>
+  entries.length === 0
+    ? ""
+    : `# Assigned ${APP_NAME} skills\n\nRead the SKILL.md file for each relevant skill before using it. Resolve its relative references, scripts, and assets from that SKILL.md directory. These are the current assignments; previous skill assignments are superseded.\n\n${entries.join("\n")}`;
 
 export function agentInstructionRelativePath(threadId: string): string {
   const key = NodeCrypto.createHash("sha256").update(threadId).digest("hex");
@@ -79,7 +92,11 @@ const syncManagedInstructionFile = Effect.fn("syncManagedInstructionFile")(funct
       for (const directory of [parent, path.dirname(parent), path.dirname(path.dirname(parent))]) {
         if (!(yield* fs.exists(directory)) || (yield* fs.readDirectory(directory)).length !== 0)
           break;
-        yield* Effect.tryPromise(() => NodeFSP.rmdir(directory));
+        yield* Effect.tryPromise({
+          try: () => NodeFSP.rmdir(directory),
+          catch: (cause) =>
+            new AgentInstructionFileError({ message: `Could not remove ${directory}: ${cause}` }),
+        });
       }
     } else {
       const next = `${marker}\n\n${input.instructions.trim()}\n`;
@@ -147,13 +164,17 @@ export const syncAgentSkillFiles = Effect.fn("syncAgentSkillFiles")(function* (i
       const file = path.join(directory, segments.at(-1)!);
       const bytes = Buffer.from(resource.contentBase64, "base64");
       // lstat also detects dangling symlinks, which exists/realPath alone cannot do.
-      const stat = yield* Effect.tryPromise(async () => {
-        try {
-          return await NodeFSP.lstat(file);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-          throw error;
-        }
+      const stat = yield* Effect.tryPromise({
+        try: async () => {
+          try {
+            return await NodeFSP.lstat(file);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+            throw error;
+          }
+        },
+        catch: (cause) =>
+          new AgentInstructionFileError({ message: `Could not inspect ${file}: ${cause}` }),
       });
       if (stat && !stat.isFile())
         return yield* new AgentInstructionFileError({
@@ -172,9 +193,7 @@ export const syncAgentSkillFiles = Effect.fn("syncAgentSkillFiles")(function* (i
       const mode = resource.executable ? 0o700 : 0o600;
       if (stat && (stat.mode & 0o777) !== mode) yield* fs.chmod(file, mode);
     }
-    entries.push(
-      `- ${quote(skill.name)}: ${quote(skill.description)} (revision ${skill.revision}, updated ${skill.updatedAt}, content ${digest}, file: ${relativePath})`,
-    );
+    entries.push(assignedSkillIndexEntry(skill, digest, relativePath));
   }
   const directory = path.join(input.cwd, root);
   if (yield* fs.exists(directory)) {
@@ -192,7 +211,5 @@ export const syncAgentSkillFiles = Effect.fn("syncAgentSkillFiles")(function* (i
       });
     }
   }
-  return entries.length === 0
-    ? ""
-    : `# Assigned T3 skills\n\nRead the SKILL.md file for each relevant skill before using it. Resolve its relative references, scripts, and assets from that SKILL.md directory. These are the current assignments; previous skill assignments are superseded.\n\n${entries.join("\n")}`;
+  return assignedSkillIndex(entries);
 });

@@ -10,7 +10,7 @@ import {
   OrchestratorMcpThreadWaitResult,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
-import * as Crypto from "effect/Crypto";
+import * as Digest from "effect/crypto/Digest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Hex from "effect/encoding/Hex";
@@ -85,7 +85,7 @@ export class PeerForwarding extends Context.Service<
 export const linkedEnvironmentsOff = new OrchestratorMcpFailure({
   code: "capability_denied",
   message:
-    "Linked environments is off on this machine, so no tool can act on another machine. Leave out environmentId to work here; the user can turn it on in Settings → Labs.",
+    "This machine is not taking part in the device network, so no tool can act on another machine. Leave out environmentId to work here; the user can turn it on in Settings → Connections → Device network.",
 });
 
 /**
@@ -102,19 +102,18 @@ const make = Effect.gen(function* () {
   const peers = yield* PeerMcpClient.PeerMcpClient;
   const links = yield* PeerLinks.PeerLinks;
   const tailnetDevices = yield* TailnetDevices.TailnetDevices;
-  const crypto = yield* Crypto.Crypto;
+  const crypto = yield* Digest.Digest;
   const threads = yield* ThreadManagement.ThreadManagementService;
 
   /**
-   * The caller's own limits, which travel with every forwarded call: the peer sees only the
+   * The caller's own limits and thread, which travel with every forwarded call: the peer sees only the
    * link's credential, so a caller that may not control threads here is refused here. Work a
    * link started never uses this environment's links, since the peer would see this
    * environment's session instead of that link, and its fence could not hold.
    */
-  const callerLimits = (scope: Scope) =>
+  const forwardingCaller = (scope: Scope) =>
     readCaller().pipe(
       Effect.tap((caller) => assertNotLinked(caller, "use this environment's links")),
-      Effect.map((caller) => caller.limits),
       Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
       Effect.provideService(ThreadManagement.ThreadManagementService, threads),
     );
@@ -125,7 +124,7 @@ const make = Effect.gen(function* () {
    * key never collide there, and one agent retrying gets its first result.
    */
   const scopedRequestId = (namespace: string, clientRequestId: string) =>
-    crypto.digest("SHA-256", new TextEncoder().encode(`${namespace}\n${clientRequestId}`)).pipe(
+    crypto.digest(Digest.sha256, new TextEncoder().encode(`${namespace}\n${clientRequestId}`)).pipe(
       Effect.map((digest) => `fwd:${Hex.encode(digest)}`),
       Effect.orDie,
     );
@@ -139,7 +138,7 @@ const make = Effect.gen(function* () {
     environmentId: EnvironmentId,
     params: unknown,
   ) {
-    const limits = yield* callerLimits(scope);
+    const { caller, limits } = yield* forwardingCaller(scope);
     const encoded = (yield* Schema.encodeUnknownEffect(parameters as Schema.Encoder<unknown>)(
       params,
     ).pipe(Effect.mapError(unavailable))) as Record<string, unknown>;
@@ -155,20 +154,28 @@ const make = Effect.gen(function* () {
       args.clientRequestId = yield* scopedRequestId(scope.requestNamespace, args.clientRequestId);
     }
     // The peer sees only the link session, so a launch names its calling thread to nest under.
-    if (toolName === "t3_thread_launch" && scope.thread !== undefined && !args.delegatedFrom) {
-      const threadId = scope.thread.threadId;
-      const shell = yield* threads.getThreadShell(threadId).pipe(Effect.orElseSucceed(() => null));
+    if (toolName === "t3_thread_launch" && caller !== undefined && !args.delegatedFrom) {
       args.delegatedFrom = {
         environmentId: scope.environmentId,
-        threadId,
-        title: shell?.title ?? threadId,
+        threadId: caller.id,
+        title: caller.title,
       };
     }
+    // So a message sent there names the thread that sent it, even to a client that cannot reach here.
+    const sender =
+      caller === undefined
+        ? undefined
+        : {
+            environmentId: scope.environmentId,
+            threadId: caller.id,
+            title: caller.title,
+          };
     return yield* peers.call({
       environmentId,
       tool: toolName,
       arguments: args,
       limits,
+      ...(sender === undefined ? {} : { sender }),
       success: success as Schema.Decoder<A>,
     });
   });
@@ -233,7 +240,7 @@ const make = Effect.gen(function* () {
             ? {}
             : { returnOnQuestion: input.returnOnQuestion }),
         },
-      );
+      ).pipe(Effect.map((waited) => ({ ...waited, environmentId })));
       const result = reportUnreachable
         ? yield* piece.pipe(
             Effect.catchIf(isTransient, (error) =>
@@ -292,7 +299,7 @@ const make = Effect.gen(function* () {
 
   const listLinks: PeerForwarding["Service"]["links"] = Effect.fn("PeerForwarding.listLinks")(
     function* (scope) {
-      yield* callerLimits(scope);
+      yield* forwardingCaller(scope);
       yield* requireEnabled;
       const listed = yield* links.list.pipe(
         Effect.mapError(
@@ -301,7 +308,7 @@ const make = Effect.gen(function* () {
         ),
       );
       // Devices only add to the links, so an unreadable tailnet still lists them.
-      const devices = yield* tailnetDevices.list.pipe(
+      const devices = yield* tailnetDevices.list().pipe(
         Effect.map((snapshot) => snapshot.devices),
         Effect.tapError((error) => Effect.logWarning("Tailnet devices unreadable", error)),
         Effect.orElseSucceed(() => []),
