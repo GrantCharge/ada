@@ -92,7 +92,7 @@ have permission to write code, pull requests and workflows. The built-in GitHub 
 - Apple did not sign this app. Because of this, the app cannot install updates itself.
 - The app tells you when an update is ready. Then do these steps:
   1. Get the `.dmg` file from the [Releases page](https://github.com/GrantCharge/ada/releases).
-  2. Quit T3 Agents.
+  2. Quit Ada.
   3. Open the `.dmg` file. Drag the app into Applications.
 
 **After an update**
@@ -102,7 +102,7 @@ have permission to write code, pull requests and workflows. The built-in GitHub 
 
 ### Rules for this fork
 
-- Grant's changes go only to this fork. They do not go to jayleaton/ada or pingdotgg/t3code.
+- Grant's changes go only to this fork. They do not go to jayleaton/ada or to the upstream project.
 - Do not change Jayj's `fork-*` workflows. They run only on his repository. If you change them,
   you get merge conflicts.
 
