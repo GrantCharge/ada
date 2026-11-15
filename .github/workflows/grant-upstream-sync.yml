@@ -1,7 +1,7 @@
 name: Grant fork sync from jayleaton
 
-# Pulls Jayj Eaton's newest published T3 Agents nightly (jayleaton/t3code) into
-# GrantCharge/t3code. A clean merge whose checks pass goes straight to main, which
+# Pulls Jayj Eaton's newest published T3 Agents nightly (jayleaton/ada) into
+# GrantCharge/ada. A clean merge whose checks pass goes straight to main, which
 # starts grant-release.yml. A merge conflict or a failed check opens a PR instead.
 # Jayleaton's own fork-* workflows stay inactive here: they only run on his repository.
 #
@@ -23,12 +23,12 @@ concurrency:
 
 jobs:
   sync:
-    if: github.repository == 'GrantCharge/t3code'
+    if: github.repository == 'GrantCharge/ada'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
-      UPSTREAM_REPO: jayleaton/t3code
+      UPSTREAM_REPO: jayleaton/ada
     steps:
       - name: Require the sync token
         env:

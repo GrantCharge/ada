@@ -13,7 +13,7 @@
 ## Grant's fork
 
 This is Grant Charge's copy of T3 Agents. It comes from
-[jayleaton/t3code](https://github.com/jayleaton/t3code). Jayj Eaton makes T3 Agents.
+[jayleaton/ada](https://github.com/jayleaton/ada). Jayj Eaton makes T3 Agents.
 Grant adds a small number of changes on top of it.
 
 ### What Grant added
@@ -51,7 +51,7 @@ Grant adds a small number of changes on top of it.
 
 **5. Jayj's newest changes**
 
-- On 7 November 2026, the fork got 772 changes from jayleaton/t3code.
+- On 7 November 2026, the fork got 772 changes from jayleaton/ada.
 
 ### How the fork stays up to date
 
@@ -70,7 +70,7 @@ When `main` changes, a second workflow makes a new release
 ([grant-release.yml](.github/workflows/grant-release.yml)):
 
 1. It builds a Mac app (Apple silicon) and a Linux app (AppImage).
-2. It puts them on this fork's [Releases page](https://github.com/GrantCharge/t3code/releases).
+2. It puts them on this fork's [Releases page](https://github.com/GrantCharge/ada/releases).
 
 The sync workflow needs a secret with the name `FORK_SYNC_TOKEN`. This is a GitHub token. It must
 have permission to write code, pull requests and workflows. The built-in GitHub token cannot do this.
@@ -87,7 +87,7 @@ have permission to write code, pull requests and workflows. The built-in GitHub 
 
 - Apple did not sign this app. Because of this, the app cannot install updates itself.
 - The app tells you when an update is ready. Then do these steps:
-  1. Get the `.dmg` file from the [Releases page](https://github.com/GrantCharge/t3code/releases).
+  1. Get the `.dmg` file from the [Releases page](https://github.com/GrantCharge/ada/releases).
   2. Quit T3 Agents.
   3. Open the `.dmg` file. Drag the app into Applications.
 
@@ -98,7 +98,7 @@ have permission to write code, pull requests and workflows. The built-in GitHub 
 
 ### Rules for this fork
 
-- Grant's changes go only to this fork. They do not go to jayleaton/t3code or pingdotgg/t3code.
+- Grant's changes go only to this fork. They do not go to jayleaton/ada or pingdotgg/t3code.
 - Do not change Jayj's `fork-*` workflows. They run only on his repository. If you change them,
   you get merge conflicts.
 
