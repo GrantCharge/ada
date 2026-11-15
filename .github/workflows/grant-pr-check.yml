@@ -51,6 +51,14 @@ jobs:
             node apps/web/node_modules/playwright/cli.js install-deps chromium
           fi
 
+      - name: Type check the server (errors only)
+        run: |
+          set +e
+          vp run --filter t3 --filter @t3tools/provider-core typecheck > "$RUNNER_TEMP/typecheck.log" 2>&1
+          code=$?
+          grep -v 'suggestion TS' "$RUNNER_TEMP/typecheck.log" | grep -vE '^\s*$' | tail -n 150
+          exit $code
+
       - name: Run jayleaton's release checks
         run: scripts/fork-release-validate.sh
 
@@ -59,4 +67,3 @@ jobs:
           NODE_ENV=test vp test run \
             apps/server/src/orchestration-v2/ResponseStyle.test.ts \
             packages/provider-core/src/server/textGenerationOperations.test.ts
-          vp run --filter @t3tools/server --filter @t3tools/provider-core typecheck
