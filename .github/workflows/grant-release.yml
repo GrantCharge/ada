@@ -1,6 +1,6 @@
 name: Grant fork release
 
-# Builds GrantCharge/t3code's own nightly: an unsigned macOS arm64 app and a Linux
+# Builds GrantCharge/ada's own nightly: an unsigned macOS arm64 app and a Linux
 # x64 AppImage, published as a prerelease on this repository. The omarchy server's
 # t3-headless-update reads nightly-linux.yml from here; the Mac app is installed by hand.
 
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   prepare:
-    if: github.repository == 'GrantCharge/t3code'
+    if: github.repository == 'GrantCharge/ada'
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -146,7 +146,7 @@ jobs:
           ls -la release-assets
           test -f release-assets/nightly-linux.yml
           test -f release-assets/nightly-mac.yml
-          printf 'Grant'"'"'s T3 Agents build from `%s` (jayleaton/t3code plus Grant'"'"'s changes).\n\n- **Mac:** download the `.dmg`, quit T3 Agents, drag the new app into Applications. This build is unsigned, so it does not update itself.\n- **omarchy:** `t3-headless-update` installs the AppImage.\n' "$RELEASE_COMMIT" > "$RUNNER_TEMP/notes.md"
+          printf 'Grant'"'"'s T3 Agents build from `%s` (jayleaton/ada plus Grant'"'"'s changes).\n\n- **Mac:** download the `.dmg`, quit T3 Agents, drag the new app into Applications. This build is unsigned, so it does not update itself.\n- **omarchy:** `t3-headless-update` installs the AppImage.\n' "$RELEASE_COMMIT" > "$RUNNER_TEMP/notes.md"
           gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$RELEASE_COMMIT" \
             --title "T3 Agents (Grant) $VERSION" --notes-file "$RUNNER_TEMP/notes.md" --prerelease --draft
           gh release upload "v$VERSION" release-assets/* --repo "$GITHUB_REPOSITORY"
