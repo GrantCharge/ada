@@ -15,6 +15,10 @@
       "types": "./src/changedFileKind.ts",
       "import": "./src/changedFileKind.ts"
     },
+    "./commandRisk": {
+      "types": "./src/commandRisk.ts",
+      "import": "./src/commandRisk.ts"
+    },
     "./authScopeOptions": {
       "types": "./src/authScopeOptions.ts",
       "import": "./src/authScopeOptions.ts"

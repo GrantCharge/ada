@@ -53,6 +53,8 @@ import { feedbackBannerItem } from "./chat/ComposerFeedback";
 import { freshSessionBannerItem } from "./chat/ComposerFreshSession";
 import { armFreshSession, disarmFreshSession, useFreshSessionArmed } from "./chat/freshSessionArms";
 import { useUsageLimitsPanel } from "./chat/useUsageLimitsPanel";
+import { usePromptCacheBanner } from "./chat/usePromptCacheBanner";
+import { promptCacheTtlMs } from "../lib/promptCache";
 import { useWorktreeSetup } from "./chat/useWorktreeSetup";
 import { useChatShortcuts } from "./chat/useChatShortcuts";
 import { ChatBannerLane } from "./chat/ChatBannerLane";
@@ -3047,6 +3049,18 @@ export default function ChatView(props: ChatViewProps) {
   const sendPreviewAnnotationStable = useStableCallback(sendPreviewAnnotation);
   const onComposerResumeStable = useStableCallback(onResume);
   const onComposerCompactContextStable = useStableCallback(onCompactContext);
+  const activePromptCacheTtlMs = promptCacheTtlMs(
+    selectedProviderEntry?.driverKind,
+    selectedProviderEntry?.snapshot.auth.type,
+  );
+  const promptCacheBanner = usePromptCacheBanner({
+    threadKey: routeThreadKey,
+    ttlMs: activePromptCacheTtlMs,
+    contextWindow: activeContextWindow,
+    isWorking,
+    compactDisabled,
+    onCompact: onComposerCompactContextStable,
+  });
   // Read from the projection the footer renders, so the scroll below sees the new message.
   const pendingGuestMessageIds =
     serverProjection?.thread.guestShare?.messages.flatMap((message) =>
@@ -3427,9 +3441,13 @@ export default function ChatView(props: ChatViewProps) {
                 }
                 isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                 bannerItems={
-                  isDraftHeroState || composerBannerItems.length === 0
+                  isDraftHeroState
                     ? EMPTY_COMPOSER_BANNER_ITEMS
-                    : composerBannerItems
+                    : promptCacheBanner
+                      ? [...composerBannerItems, promptCacheBanner]
+                      : composerBannerItems.length === 0
+                        ? EMPTY_COMPOSER_BANNER_ITEMS
+                        : composerBannerItems
                 }
                 sideChatAvailable={sideChat.available}
                 sideChatDisabledReason={sideChatDisabledReason}

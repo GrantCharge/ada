@@ -114,6 +114,16 @@ export interface TranscriptionPostProcessingResult {
   transcription: string;
 }
 
+export interface DraftRewriteInput {
+  cwd: string;
+  text: string;
+  modelSelection: ModelSelection;
+}
+
+export interface DraftRewriteResult {
+  text: string;
+}
+
 export interface ProviderTextGeneration {
   readonly generateTranscriptionPostProcessing: (
     input: TranscriptionPostProcessingInput,
@@ -138,4 +148,8 @@ export interface ProviderTextGeneration {
   readonly generateReviewGuide: (
     input: ReviewGuideGenerationInput,
   ) => Effect.Effect<ReviewGuideGenerationResult, TextGenerationError>;
+
+  readonly rewriteDraft: (
+    input: DraftRewriteInput,
+  ) => Effect.Effect<DraftRewriteResult, TextGenerationError>;
 }

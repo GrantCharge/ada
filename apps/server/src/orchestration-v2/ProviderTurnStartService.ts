@@ -5,6 +5,7 @@ import {
   agentProfilePrompt,
   agentProfileReminder,
 } from "./AgentProfile.ts";
+import { withResponseStyle } from "./ResponseStyle.ts";
 import { modelSelectionsEqual } from "@t3tools/shared/model";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import {
@@ -1669,16 +1670,24 @@ export const layer: Layer.Layer<
             Effect.provideService(Path.Path, path),
           )
         : "";
+      // A settings read failure must not stop the turn; the style is only a preference.
+      const styledText = withResponseStyle(
+        message.text,
+        yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) => settings.simplifiedTechnicalEnglish),
+          Effect.orElseSucceed(() => true),
+        ),
+      );
       const userText = yield* userTextForProvider({
         text: sendAgentInstructions
           ? agentProfilePrompt(
-              skillIndex ? `${skillIndex}\n\n${message.text}` : message.text,
+              skillIndex ? `${skillIndex}\n\n${styledText}` : styledText,
               profileContent?.systemPrompt,
             )
           : profileContent === undefined || compactionMessageIds.has(message.id)
-            ? message.text
+            ? styledText
             : agentProfileReminder(
-                message.text,
+                styledText,
                 projection.thread.profileSnapshot?.profileName,
                 profileContent,
               ),

@@ -29,6 +29,7 @@ import {
 } from "@t3tools/provider-core/server/textGenerationOperations";
 import {
   buildBranchNamePrompt,
+  buildDraftRewritePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
@@ -36,6 +37,7 @@ import {
 import {
   sanitizeCommitSubject,
   sanitizePrTitle,
+  sanitizeDraftRewrite,
   toJsonSchemaObject,
 } from "@t3tools/provider-core/server/textGenerationUtils";
 import { APP_NAME } from "@t3tools/shared/branding";
@@ -359,6 +361,16 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
         modelSelection: input.modelSelection,
       });
     });
+  const rewriteDraft: ProviderTextGeneration["rewriteDraft"] = Effect.fn(
+    "MuseTextGeneration.rewriteDraft",
+  )(function* (input) {
+    const generated = yield* runMuseJson({
+      operation: "rewriteDraft",
+      ...buildDraftRewritePrompt(input),
+      modelSelection: input.modelSelection,
+    });
+    return { text: sanitizeDraftRewrite(generated.text) };
+  });
   const generateReviewGuide: ProviderTextGeneration["generateReviewGuide"] = () =>
     Effect.fail(investigationUnsupported("generateReviewGuide", "Muse Code"));
   return {
@@ -368,5 +380,6 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
     generateThreadTitle,
     generateReviewGuide,
     generateTranscriptionPostProcessing,
+    rewriteDraft,
   } satisfies ProviderTextGeneration;
 });

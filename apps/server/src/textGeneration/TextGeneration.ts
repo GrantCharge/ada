@@ -47,7 +47,8 @@ type TextGenerationOp =
   | "generateBranchName"
   | "generateThreadTitle"
   | "generateReviewGuide"
-  | "generateTranscriptionPostProcessing";
+  | "generateTranscriptionPostProcessing"
+  | "rewriteDraft";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -201,6 +202,11 @@ export const make = Effect.gen(function* () {
         null,
         (service, modelSelection) =>
           service.generateTranscriptionPostProcessing({ ...input, modelSelection }),
+      );
+    }),
+    rewriteDraft: Effect.fn("TextGeneration.rewriteDraft")(function (input) {
+      return resolveInstance(registry, "rewriteDraft", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.rewriteDraft(input)),
       );
     }),
     generateThreadTitle: Effect.fn("TextGeneration.generateThreadTitle")(function (input) {

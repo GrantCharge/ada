@@ -211,6 +211,7 @@ import {
 } from "./ComposerAttachmentStrip";
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
+import { ComposerRewriteButton } from "./ComposerRewriteButton";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { buildPullRequestReferenceContext } from "../pullRequest/pullRequestDetail.logic";
@@ -3269,10 +3270,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       />
     ) : null;
   const composerAttachButton = showComposerAttachAction ? (
-    <ComposerAttachButton
-      addComposerAttachments={addComposerAttachments}
-      focusComposer={focusComposer}
-    />
+    <div className="flex items-center gap-1">
+      <ComposerAttachButton
+        addComposerAttachments={addComposerAttachments}
+        focusComposer={focusComposer}
+      />
+      <ComposerRewriteButton
+        environmentId={environmentId}
+        prompt={prompt}
+        editPrompt={editPromptFromTraits}
+      />
+    </div>
   ) : null;
   return (
     <form

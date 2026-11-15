@@ -9,12 +9,14 @@ import type { ProviderTextGeneration } from "./textGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
+  buildDraftRewritePrompt,
   buildPrContentPrompt,
   buildReviewGuidePrompt,
   buildThreadTitlePrompt,
 } from "./textGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
+  sanitizeDraftRewrite,
   sanitizePrTitle,
   sanitizeThreadTitle,
 } from "./textGenerationUtils.ts";
@@ -194,6 +196,18 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     });
   });
 
+  const rewriteDraft: ProviderTextGeneration["rewriteDraft"] = Effect.fn(`${name}.rewriteDraft`)(
+    function* (input) {
+      const generated = yield* run({
+        operation: "rewriteDraft",
+        cwd: input.cwd,
+        modelSelection: input.modelSelection,
+        ...buildDraftRewritePrompt(input),
+      });
+      return { text: sanitizeDraftRewrite(generated.text) };
+    },
+  );
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -201,5 +215,6 @@ export function fromRunner(name: string, run: Runner): ProviderTextGeneration {
     generateThreadTitle,
     generateReviewGuide,
     generateTranscriptionPostProcessing,
+    rewriteDraft,
   } satisfies ProviderTextGeneration;
 }
