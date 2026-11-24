@@ -358,6 +358,46 @@ export class OrchestratorRuntimeModeAboveCeilingError extends Schema.TaggedError
   }
 }
 
+/**
+ * A digest's reports wait as pending until its run starts, so a run cancelled before it started
+ * (a restart, a stop) leaves the news to be told again. An acknowledgement counts at once.
+ */
+function syncChildAttention(
+  thread: OrchestrationV2AppThread,
+  command: Extract<OrchestrationV2ServerCommand, { readonly type: "thread.child-attention.sync" }>,
+): OrchestrationV2AppThread {
+  const pending = thread.childAttentionPending ?? null;
+  if (command.resolve !== undefined) {
+    if (pending?.messageId !== command.resolve.messageId) return thread;
+    return {
+      ...thread,
+      childAttentionReported: command.resolve.started
+        ? { ...thread.childAttentionReported, ...pending.reported }
+        : thread.childAttentionReported,
+      childAttentionPending: null,
+    };
+  }
+  if (command.wake !== undefined) {
+    return {
+      ...thread,
+      childAttentionPending: { messageId: command.wake.messageId, reported: command.reported },
+    };
+  }
+  return {
+    ...thread,
+    childAttentionReported: { ...thread.childAttentionReported, ...command.reported },
+    childAttentionPending:
+      pending === null
+        ? pending
+        : {
+            ...pending,
+            reported: Object.fromEntries(
+              Object.entries(pending.reported).filter(([child]) => !(child in command.reported)),
+            ),
+          },
+  };
+}
+
 export class OrchestratorCommandPreviouslyRejectedError extends Schema.TaggedError<OrchestratorCommandPreviouslyRejectedError>()(
   "OrchestratorCommandPreviouslyRejectedError",
   {
@@ -4341,7 +4381,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
           ),
         );
-      const { wake, ...sync } = command;
+      const { wake } = command;
       if (
         wake !== undefined &&
         (hasLiveRun(parent) ||
@@ -4356,7 +4396,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             "The parent started a run, was muted or was archived while its children were read.",
         });
       }
-      yield* dispatchThreadMutation(sync, events, effects);
+      yield* dispatchThreadMutation(command, events, effects);
       if (wake === undefined) return;
       yield* dispatchMessage(
         {
@@ -5161,10 +5201,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ? thread
             : { ...thread, childWakeMutedAt: command.enabled ? null : now };
         case "thread.child-attention.sync":
-          return {
-            ...thread,
-            childAttentionReported: { ...thread.childAttentionReported, ...command.reported },
-          };
+          return syncChildAttention(thread, command);
         case "thread.auto-settle.set": {
           const unchanged = command.enabled === (thread.autoSettleDisabledAt == null);
           return {

@@ -1,9 +1,12 @@
 import {
   type EnvironmentId,
   type McpGatewayRelayThread,
+  type McpGatewayRelayThreadList,
   type OrchestrationV2ChildAttention,
+  OrchestratorMcpFailure,
   OrchestratorMcpThreadWaitResult,
-  RunId,
+  ProviderRequestKind,
+  type RunId,
   RuntimeRequestId,
   type ThreadId,
   type ThreadTask,
@@ -18,10 +21,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { gatewayToolContext, getRemoteThread } from "../mcp/agents/remoteThreads.ts";
+import {
+  gatewayToolContext,
+  getRemoteThread,
+  getRemoteThreadSummary,
+} from "../mcp/agents/remoteThreads.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
 import { forkParked } from "../serverActivation.ts";
@@ -36,14 +44,16 @@ const LONG_POLL_MS = 25_000;
 const FIRST_CURSOR = "attention1:";
 
 /**
- * A wait answered by a server without cursor waits reports a run's end; read the child's state
- * from that the way childAttention reads a shell.
+ * The child's state from a wait. A cursor wait that timed out carries no items: nothing changed,
+ * so null keeps the last reading rather than guessing from the run status. A server without
+ * cursor waits reports a run's end, read the way childAttention reads a shell.
  */
 export function attentionFromWaitResult(
   result: OrchestratorMcpThreadWaitResult,
-): OrchestrationV2ChildAttention {
+): OrchestrationV2ChildAttention | null {
   const item = result.items?.[0];
   if (item !== undefined) return item.attention;
+  if (result.cursor !== undefined) return null;
   const runId = result.runId;
   if (result.pendingApproval !== undefined) {
     return { state: "needs-approval", runId, requestId: result.pendingApproval.requestId };
@@ -51,13 +61,14 @@ export function attentionFromWaitResult(
   if (result.hasPendingQuestion === true && result.pendingRequestId !== undefined) {
     return { state: "needs-input", runId, requestId: result.pendingRequestId };
   }
-  return attentionFromRunStatus(result.status, runId, true);
+  return attentionFromRunStatus(result.status, runId);
 }
 
+// Neither a wait nor the relay says whether a cancelled run had started, and one that had not
+// is not news.
 function attentionFromRunStatus(
-  status: string,
+  status: OrchestratorMcpThreadWaitResult["status"],
   runId: RunId | null,
-  started: boolean,
 ): OrchestrationV2ChildAttention {
   switch (status) {
     case "completed":
@@ -67,7 +78,6 @@ function attentionFromRunStatus(
     case "interrupted":
       return { state: "stopped", runId };
     case "cancelled":
-      return started ? { state: "stopped", runId } : { state: "idle", runId };
     case "idle":
     case "rolled_back":
       return { state: "idle", runId };
@@ -76,9 +86,14 @@ function attentionFromRunStatus(
   }
 }
 
-/** What a relaying app reports of a thread: its runs and pending requests, nothing finer. */
+type RelaySummary = McpGatewayRelayThreadList["items"][number];
+
+const isApprovalKind = Schema.is(ProviderRequestKind);
+
+/** What a relaying app reports of a thread: its runs, pending requests and whether work goes on. */
 export function attentionFromRelayThread(
   thread: McpGatewayRelayThread,
+  summary?: RelaySummary,
 ): OrchestrationV2ChildAttention {
   const latest = thread.runs.at(-1);
   const runId = latest?.id ?? null;
@@ -92,18 +107,23 @@ export function attentionFromRelayThread(
     if (request.status !== undefined && request.status !== "pending") continue;
     if (typeof request.id !== "string") continue;
     const requestId = RuntimeRequestId.make(request.id);
-    return request.kind === "user_input"
-      ? { state: "needs-input", runId, requestId }
-      : { state: "needs-approval", runId, requestId };
+    if (request.kind === "user_input") return { state: "needs-input", runId, requestId };
+    if (isApprovalKind(request.kind)) return { state: "needs-approval", runId, requestId };
+  }
+  if (summary?.hasActiveWork === true || summary?.activeRunId != null) {
+    return { state: "working", runId };
   }
   return latest === undefined
     ? { state: "idle", runId }
-    : attentionFromRunStatus(
-        latest.status,
-        runId,
-        latest.completedAt != null || latest.status !== "cancelled",
-      );
+    : attentionFromRunStatus(latest.status, runId);
 }
+
+/** Whether losing touch with a child in this state could leave its parent waiting on it. */
+const outstanding = (attention: OrchestrationV2ChildAttention | undefined) =>
+  attention !== undefined &&
+  (attention.state === "working" ||
+    attention.state === "needs-input" ||
+    attention.state === "needs-approval");
 
 export class RemoteChildFollower extends Context.Service<
   RemoteChildFollower,
@@ -114,6 +134,15 @@ interface Followed {
   readonly reading: ChildReading | null;
   readonly cursor: string;
   readonly failures: number;
+  /** The relay summary the last full read answered, so an unchanged child is not read again. */
+  readonly summary: string | null;
+}
+
+interface Read {
+  readonly attention: OrchestrationV2ChildAttention | null;
+  readonly longPolled: boolean;
+  readonly settledAtMs: number | null;
+  readonly summary: string | null;
 }
 
 const make = Effect.gen(function* () {
@@ -146,8 +175,8 @@ const make = Effect.gen(function* () {
   const read = Effect.fn("RemoteChildFollower.read")(function* (
     task: ThreadTask,
     environmentId: EnvironmentId,
-    cursor: string,
-  ) {
+    before: Followed,
+  ): Effect.fn.Return<Read, OrchestratorMcpFailure> {
     const linked =
       (yield* links.enabled) &&
       Option.isSome(
@@ -157,29 +186,66 @@ const make = Effect.gen(function* () {
       const result = yield* peers.call({
         environmentId,
         tool: "t3_thread_wait",
-        arguments: { threadId: task.workerThreadId, cursor, timeoutMs: LONG_POLL_MS },
+        arguments: {
+          threadId: task.workerThreadId,
+          cursor: before.cursor,
+          timeoutMs: LONG_POLL_MS,
+        },
         limits: { runtimeMode: "approval-required", interactionMode: "default" },
         success: OrchestratorMcpThreadWaitResult,
       });
-      if (result.unreachable !== undefined) return yield* Effect.fail(result.unreachable);
+      if (result.unreachable !== undefined) {
+        return yield* new OrchestratorMcpFailure({
+          code: "orchestration_error",
+          message: result.unreachable,
+        });
+      }
       return {
         attention: attentionFromWaitResult(result),
-        // A server with cursor waits held the call open; an older one answered at once.
-        longPolled: result.cursor !== undefined,
+        longPolled: true,
         settledAtMs: null,
+        summary: null,
       };
     }
-    if (gateway === undefined) return yield* Effect.fail("No app or link reaches it.");
-    const thread = yield* getRemoteThread(
-      { gateway, environmentId, caller: { environmentId: local, threadId: task.ownerThreadId } },
-      task.workerThreadId,
-    );
+    if (gateway === undefined) {
+      return yield* new OrchestratorMcpFailure({
+        code: "orchestration_error",
+        message: "No connected app or link reaches the child's environment.",
+      });
+    }
+    const remote = {
+      gateway,
+      environmentId,
+      caller: { environmentId: local, threadId: task.ownerThreadId },
+    };
+    // The small list each poll; the thread itself only when its entry changed.
+    const summary = yield* getRemoteThreadSummary(remote, task.workerThreadId);
+    if (summary === undefined) {
+      return yield* new OrchestratorMcpFailure({
+        code: "thread_not_found",
+        message: `Environment ${environmentId} no longer lists thread ${task.workerThreadId}.`,
+      });
+    }
+    const signature = [
+      summary.activeRunId,
+      summary.latestRunId,
+      summary.hasPendingApprovals,
+      summary.hasPendingUserInput,
+      summary.pendingRequestId,
+      summary.hasActiveWork,
+      summary.settledAt,
+    ].join("|");
+    if (before.reading !== null && signature === before.summary) {
+      return { attention: null, longPolled: false, settledAtMs: null, summary: signature };
+    }
+    const thread = yield* getRemoteThread(remote, task.workerThreadId);
     const completedAt = thread.runs.at(-1)?.completedAt;
     return {
-      attention: attentionFromRelayThread(thread),
+      attention: attentionFromRelayThread(thread, summary),
       longPolled: false,
       settledAtMs:
         completedAt == null ? null : DateTime.toEpochMillis(DateTime.makeUnsafe(completedAt)),
+      summary: signature,
     };
   });
 
@@ -187,39 +253,43 @@ const make = Effect.gen(function* () {
     task: ThreadTask,
     environmentId: EnvironmentId,
   ) {
-    const state = yield* Ref.make<Followed>({ reading: null, cursor: FIRST_CURSOR, failures: 0 });
+    const state = yield* Ref.make<Followed>({
+      reading: null,
+      cursor: FIRST_CURSOR,
+      failures: 0,
+      summary: null,
+    });
+    const reading = (
+      attention: OrchestrationV2ChildAttention,
+      settledAtMs: number | null,
+    ): ChildReading => ({
+      threadId: task.workerThreadId,
+      title: task.summary,
+      environmentId,
+      attention,
+      settledAtMs,
+    });
     const step = Effect.gen(function* () {
       const before = yield* Ref.get(state);
-      const outcome = yield* read(task, environmentId, before.cursor).pipe(Effect.result);
+      const outcome = yield* read(task, environmentId, before).pipe(Effect.result);
       const failures = outcome._tag === "Failure" ? before.failures + 1 : 0;
+      const known = before.reading?.attention;
       const next: ChildReading | null =
         outcome._tag === "Success"
-          ? {
-              threadId: task.workerThreadId,
-              title: task.summary,
-              environmentId,
-              attention: outcome.success.attention,
-              settledAtMs: outcome.success.settledAtMs,
-            }
-          : failures >= FAILURES_BEFORE_UNREACHABLE
-            ? {
-                threadId: task.workerThreadId,
-                title: task.summary,
-                environmentId,
-                attention: {
-                  state: "unreachable",
-                  runId: before.reading?.attention.runId ?? null,
-                },
-                settledAtMs: null,
-              }
+          ? outcome.success.attention === null
+            ? before.reading
+            : reading(outcome.success.attention, outcome.success.settledAtMs)
+          : failures >= FAILURES_BEFORE_UNREACHABLE && outstanding(known)
+            ? reading({ state: "unreachable", runId: known?.runId ?? null }, null)
             : before.reading;
       yield* Ref.set(state, {
         reading: next,
         cursor:
-          outcome._tag === "Success" && outcome.success.attention.state !== "unreachable"
-            ? childAttentionCursor(outcome.success.attention)
+          next !== null && next.attention.state !== "unreachable"
+            ? childAttentionCursor(next.attention)
             : before.cursor,
         failures,
+        summary: outcome._tag === "Success" ? outcome.success.summary : before.summary,
       });
       if (
         next !== null &&

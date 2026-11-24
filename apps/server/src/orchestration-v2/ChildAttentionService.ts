@@ -25,6 +25,7 @@ import * as Metric from "effect/Metric";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import { forkParked } from "../serverActivation.ts";
@@ -44,6 +45,7 @@ export interface ChildReading {
 
 export const DIGEST_MESSAGE_PREFIX = "message:child-attention:";
 export const DEBOUNCE = Duration.seconds(5);
+const RETRY_DELAY = Duration.seconds(10);
 const SWEEP_INTERVAL = Duration.minutes(1);
 export const WAKE_WINDOW = Duration.hours(1);
 export const MAX_WAKES_PER_WINDOW = 6;
@@ -67,6 +69,12 @@ export class ChildAttentionService extends Context.Service<
     readonly setRemoteReadings: (
       parentThreadId: ThreadId,
       readings: ReadonlyArray<ChildReading>,
+    ) => Effect.Effect<void>;
+    /** The parent read or waited on a child it follows on another environment and saw this. */
+    readonly acknowledgeRemote: (
+      parentThreadId: ThreadId,
+      childThreadId: ThreadId,
+      attention: OrchestrationV2ChildAttention,
     ) => Effect.Effect<void>;
   }
 >()("t3/orchestration-v2/ChildAttentionService") {}
@@ -151,12 +159,18 @@ function renderDigest(readings: ReadonlyArray<ChildReading>): {
   };
 }
 
-/** Whether a child's reading is news its parent has not been told, within the window's cap. */
+const blocking = (state: OrchestrationV2ChildAttention["state"]) =>
+  state === "needs-input" || state === "needs-approval";
+
+/**
+ * Whether a child's reading is news its parent has not been told: the report to record, or
+ * "capped" while the window's wakes are spent. A blocked child is never capped.
+ */
 export function dueReport(
   reading: ChildReading,
   reported: OrchestrationV2ChildAttentionReport | undefined,
   nowMs: number,
-): OrchestrationV2ChildAttentionReport | null {
+): OrchestrationV2ChildAttentionReport | "capped" | null {
   if (!childAttentionIsActionable(reading.attention)) return null;
   const key = childAttentionKey(reading.attention);
   if (reported?.key === key) return null;
@@ -164,7 +178,9 @@ export function dueReport(
     reported !== undefined &&
     nowMs - DateTime.toEpochMillis(DateTime.makeUnsafe(reported.windowStartedAt)) <
       Duration.toMillis(WAKE_WINDOW);
-  if (windowOpen && reported.wakes >= MAX_WAKES_PER_WINDOW) return null;
+  if (windowOpen && reported.wakes >= MAX_WAKES_PER_WINDOW && !blocking(reading.attention.state)) {
+    return "capped";
+  }
   return {
     key,
     windowStartedAt: windowOpen
@@ -202,13 +218,32 @@ const ACTION_ITEM_TYPES = [
   "file_search",
 ] as const;
 
+const ended = (state: OrchestrationV2ChildAttention["state"]) =>
+  debounced(state) || state === "limited";
+
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const sql = yield* SqlClient.SqlClient;
+  // Runs that ended before parents first heard about children are never news.
+  const baseline = yield* Ref.make<number | null>(null);
+  const loadBaseline = sql<{ readonly enabled_at: string }>`
+    SELECT enabled_at FROM child_attention_baseline WHERE id = 1
+  `.pipe(
+    Effect.flatMap((rows) =>
+      Ref.set(
+        baseline,
+        rows[0] === undefined
+          ? null
+          : DateTime.toEpochMillis(DateTime.makeUnsafe(rows[0].enabled_at)),
+      ),
+    ),
+  );
   const remoteReadings = yield* Ref.make(new Map<ThreadId, ReadonlyArray<ChildReading>>());
   // Parents with news not yet told, for the sweep. Lost with a restart, which reconciles all.
   const unreported = yield* Ref.make(new Set<ThreadId>());
   const debouncing = yield* Ref.make(new Set<ThreadId>());
+  const attempts = yield* Ref.make(0);
   const locks = yield* KeyedLock.make<ThreadId>();
 
   const isLocalChildOf = (child: OrchestrationV2AppThread, parentThreadId: ThreadId) =>
@@ -220,8 +255,13 @@ const make = Effect.gen(function* () {
   const readLocalChildren = Effect.fn("ChildAttentionService.readLocalChildren")(function* (
     parentThreadId: ThreadId,
   ) {
-    const children = (yield* projections.getChildThreads(parentThreadId)).filter((child) =>
-      isLocalChildOf(child, parentThreadId),
+    // A settled child was handled; telling the parent it finished would be stale news.
+    const children = (yield* projections.getChildThreads(parentThreadId)).filter(
+      (child) =>
+        isLocalChildOf(child, parentThreadId) &&
+        child.settledAt === null &&
+        child.archivedAt === null &&
+        child.deletedAt === null,
     );
     if (children.length === 0) return [];
     const delegated = new Set(yield* projections.listAppOwnedChildThreadIds(parentThreadId));
@@ -264,32 +304,84 @@ const make = Effect.gen(function* () {
       return next;
     });
 
+  // The digest sent last counts once its run starts; one cancelled before it started is unsent.
+  const resolvePending = Effect.fn("ChildAttentionService.resolvePending")(function* (
+    parentThreadId: ThreadId,
+    messageId: MessageId,
+  ) {
+    const { runs } = yield* projections.getThreadRecords(parentThreadId, ["runs"], {
+      latestRunLimit: 5,
+    });
+    const run = runs.find((candidate) => candidate.userMessageId === messageId);
+    yield* engine
+      .dispatch({
+        type: "thread.child-attention.sync",
+        commandId: CommandId.make(`server:child-attention-resolve:${messageId}`),
+        threadId: parentThreadId,
+        reported: {},
+        resolve: { messageId, started: run === undefined || run.startedAt !== null },
+      })
+      .pipe(
+        Effect.catchTags({
+          OrchestratorCommandPreviouslyRejectedError: () => Effect.void,
+        }),
+      );
+  });
+
   const reconcileLocked = Effect.fn("ChildAttentionService.reconcileLocked")(function* (
     parentThreadId: ThreadId,
   ) {
-    const parent = yield* projections.findThread(parentThreadId);
+    let parent = yield* projections.findThread(parentThreadId);
     if (parent === null || parent.deletedAt !== null)
       return yield* markUnreported(parentThreadId, false);
+    const shell = yield* engine.getThreadShell(parentThreadId);
+    if (shell === null) return yield* markUnreported(parentThreadId, false);
+    const busy = shell.activityRunStatus != null || shell.status === "queued";
+    const pending = parent.childAttentionPending ?? null;
+    if (pending !== null) {
+      // Its run ending reconciles again.
+      if (busy) return;
+      yield* resolvePending(parentThreadId, pending.messageId);
+      parent = yield* projections.findThread(parentThreadId);
+      if (parent === null) return;
+    }
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    // Unmute, unsettle and unarchive reconcile again; a snooze can end without an event.
+    if (
+      parent.childWakeMutedAt != null ||
+      parent.archivedAt !== null ||
+      parent.settledOverride === "settled"
+    ) {
+      return yield* markUnreported(parentThreadId, false);
+    }
+    if (parent.snoozedUntil != null && DateTime.toEpochMillis(parent.snoozedUntil) > nowMs) {
+      return yield* markUnreported(parentThreadId, true);
+    }
+    const baselineMs = yield* Ref.get(baseline);
     const readings = [
       ...(yield* readLocalChildren(parentThreadId)),
       ...((yield* Ref.get(remoteReadings)).get(parentThreadId) ?? []),
-    ];
-    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    ].filter(
+      (reading) =>
+        baselineMs === null ||
+        !ended(reading.attention.state) ||
+        reading.settledAtMs === null ||
+        reading.settledAtMs >= baselineMs,
+    );
     const reported = parent.childAttentionReported ?? {};
-    const due = readings.flatMap((reading) => {
-      const report = dueReport(reading, reported[reading.threadId], nowMs);
-      return report === null ? [] : [{ reading, report }];
-    });
-    yield* markUnreported(parentThreadId, due.length > 0);
-    if (due.length === 0) return;
-    const silent =
-      parent.childWakeMutedAt != null ||
-      parent.archivedAt !== null ||
-      parent.settledOverride === "settled" ||
-      (parent.snoozedUntil != null && DateTime.toEpochMillis(parent.snoozedUntil) > nowMs);
-    if (silent) return;
-    const shell = yield* engine.getThreadShell(parentThreadId);
-    if (shell === null || shell.activityRunStatus != null || shell.status === "queued") return;
+    const reports = readings.map((reading) => ({
+      reading,
+      report: dueReport(reading, reported[reading.threadId], nowMs),
+    }));
+    const due = reports.flatMap(({ reading, report }) =>
+      report === null || report === "capped" ? [] : [{ reading, report }],
+    );
+    // A capped child's window reopens with no event, so the sweep keeps its parent.
+    yield* markUnreported(
+      parentThreadId,
+      reports.some(({ report }) => report !== null),
+    );
+    if (due.length === 0 || busy) return;
     const waitMs = Math.max(
       0,
       ...due.map(({ reading }) =>
@@ -305,36 +397,50 @@ const make = Effect.gen(function* () {
         .toSorted()
         .join("|"),
     );
+    // A refused attempt keeps its receipt, so every attempt has its own id.
+    const attempt = yield* Ref.getAndUpdate(attempts, (n) => n + 1);
+    const id = `${parentThreadId}:${fingerprint}:${nowMs.toString(36)}.${attempt}`;
     const digest = renderDigest(due.map(({ reading }) => reading));
-    yield* engine
+    const delivered = yield* engine
       .dispatch({
         type: "thread.child-attention.sync",
-        commandId: CommandId.make(`server:child-attention:${parentThreadId}:${fingerprint}`),
+        commandId: CommandId.make(`server:child-attention:${id}`),
         threadId: parentThreadId,
         reported: Object.fromEntries(due.map(({ reading, report }) => [reading.threadId, report])),
-        wake: {
-          messageId: MessageId.make(`${DIGEST_MESSAGE_PREFIX}${parentThreadId}:${fingerprint}`),
-          ...digest,
-        },
+        wake: { messageId: MessageId.make(`${DIGEST_MESSAGE_PREFIX}${id}`), ...digest },
       })
       .pipe(
-        Effect.tap(() =>
-          Effect.forEach(due, ({ reading }) =>
-            Metric.update(Metric.withAttributes(wakesTotal, { state: reading.attention.state }), 1),
+        Effect.tap((result) =>
+          result.replayed === true
+            ? Effect.void
+            : Effect.forEach(due, ({ reading }) =>
+                Metric.update(
+                  Metric.withAttributes(wakesTotal, { state: reading.attention.state }),
+                  1,
+                ),
+              ).pipe(
+                Effect.andThen(
+                  Effect.logInfo("child attention digest queued", {
+                    parentThreadId,
+                    children: due.map(
+                      ({ reading }) => `${reading.threadId}:${reading.attention.state}`,
+                    ),
+                  }),
+                ),
+              ),
+        ),
+        Effect.as(true),
+        // The parent started a run or was muted meanwhile, or the write failed: try again soon.
+        Effect.catch((cause) =>
+          Effect.logDebug("child attention digest deferred", { parentThreadId, cause }).pipe(
+            Effect.as(false),
           ),
         ),
-        Effect.tap(() =>
-          Effect.logInfo("child attention digest queued", {
-            parentThreadId,
-            children: due.map(({ reading }) => `${reading.threadId}:${reading.attention.state}`),
-          }),
-        ),
-        // The parent started a run or was muted meanwhile; its next change reconciles again.
-        Effect.catchTags({
-          OrchestratorDispatchError: (cause) =>
-            Effect.logDebug("child attention digest deferred", { parentThreadId, cause }),
-        }),
       );
+    if (!delivered) {
+      yield* markUnreported(parentThreadId, true);
+      return yield* scheduleReconcile(parentThreadId, RETRY_DELAY);
+    }
     yield* markUnreported(parentThreadId, false);
   });
 
@@ -375,6 +481,34 @@ const make = Effect.gen(function* () {
     Ref.update(remoteReadings, (current) => new Map(current).set(parentThreadId, readings)).pipe(
       Effect.andThen(reconcile(parentThreadId)),
     );
+
+  const acknowledgeRemote: ChildAttentionService["Service"]["acknowledgeRemote"] = Effect.fn(
+    "ChildAttentionService.acknowledgeRemote",
+  )(
+    function* (parentThreadId, childThreadId, attention) {
+      const followed = (yield* Ref.get(remoteReadings)).get(parentThreadId) ?? [];
+      if (!followed.some((reading) => reading.threadId === childThreadId)) return;
+      const parent = yield* projections.findThread(parentThreadId);
+      if (parent === null) return;
+      const report = acknowledgedReport(
+        attention,
+        parent.childAttentionReported?.[childThreadId],
+        DateTime.toEpochMillis(yield* DateTime.now),
+      );
+      if (report === null) return;
+      yield* engine.dispatch({
+        type: "thread.child-attention.sync",
+        commandId: CommandId.make(
+          `server:child-attention-ack:${parentThreadId}:${childThreadId}:${fnv1a(report.key)}`,
+        ),
+        threadId: parentThreadId,
+        reported: { [childThreadId]: report },
+      });
+    },
+    Effect.catchCause((cause) =>
+      Effect.logWarning("recording a remote child's attention the parent saw failed", { cause }),
+    ),
+  );
 
   const measureDigest = Effect.fnUntraced(function* (
     event: Extract<OrchestrationV2DomainEvent, { readonly type: "run.updated" }>,
@@ -441,6 +575,15 @@ const make = Effect.gen(function* () {
 
   const start: ChildAttentionService["Service"]["start"] = Effect.fn("ChildAttentionService.start")(
     function* () {
+      yield* sql`
+        INSERT OR IGNORE INTO child_attention_baseline (id, enabled_at)
+        VALUES (1, ${DateTime.formatIso(yield* DateTime.now)})
+      `.pipe(
+        Effect.andThen(loadBaseline),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("reading the child attention baseline failed", { cause }),
+        ),
+      );
       const runner = yield* KeyedLock.makeRunner<ThreadId>();
       yield* forkParked(
         Stream.runForEach(engine.streamDomainEvents, (event) =>
@@ -492,7 +635,12 @@ const make = Effect.gen(function* () {
     },
   );
 
-  return { start, reconcile, setRemoteReadings } satisfies ChildAttentionService["Service"];
+  return {
+    start,
+    reconcile,
+    setRemoteReadings,
+    acknowledgeRemote,
+  } satisfies ChildAttentionService["Service"];
 });
 
 export const layer = Layer.effect(ChildAttentionService, make);

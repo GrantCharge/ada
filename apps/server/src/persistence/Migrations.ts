@@ -137,6 +137,7 @@ import ForkMigration021 from "./Migrations/fork/021_UpstreamScheduledTaskProfile
 import ForkMigration022 from "./Migrations/fork/022_NetworkContinuity.ts";
 import ForkMigration023 from "./Migrations/fork/023_ScheduledTaskCleanup.ts";
 import ForkMigration024 from "./Migrations/fork/024_PushRegistrations.ts";
+import ForkMigration025 from "./Migrations/fork/025_ChildAttentionBaseline.ts";
 
 const migrationEntries = [
   [1, "OrchestrationEvents", Migration0001],
@@ -272,6 +273,7 @@ const forkMigrationEntries = [
   [22, "NetworkContinuity", ForkMigration022, 81],
   [23, "ScheduledTaskCleanup", ForkMigration023, 81],
   [24, "PushRegistrations", ForkMigration024, 81],
+  [25, "ChildAttentionBaseline", ForkMigration025, 102],
 ] as const;
 
 export const forkMigrationManifest = forkMigrationEntries.map(

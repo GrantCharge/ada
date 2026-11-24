@@ -1583,7 +1583,28 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError(threadManagementFailure));
   });
 
-  // A parent that waited on its child and saw its news needs no digest about it afterwards.
+  // A shell alone says a child finished even while its own children still work.
+  const withSubtreeAttention = <
+    T extends {
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
+      readonly childAttention?: OrchestrationV2ChildAttention | undefined;
+    },
+  >(
+    item: T,
+  ): Effect.Effect<T> =>
+    item.childAttention?.state !== "finished"
+      ? Effect.succeed(item)
+      : threadManagement
+          .readChildAttention({ projectId: item.projectId, threadId: item.threadId })
+          .pipe(
+            Effect.map((reading): T =>
+              reading === null ? item : { ...item, childAttention: reading.attention },
+            ),
+            Effect.orElseSucceed(() => item),
+          );
+
+  // A parent that read or waited on its child and saw its news needs no digest about it afterwards.
   const acknowledgeChildAttention = Effect.fn("OrchestratorMcpService.acknowledgeChildAttention")(
     function* (
       parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
@@ -3744,7 +3765,9 @@ const make = Effect.gen(function* () {
       return {
         projectId,
         currentThreadId: parent?.thread.id ?? null,
-        threads: page.map((shell) => listItemFromShell(scope, shell, nowMs)),
+        threads: yield* Effect.forEach(page, (shell) =>
+          withSubtreeAttention(listItemFromShell(scope, shell, nowMs)),
+        ),
         nextCursor,
         total,
       } satisfies OrchestratorMcpThreadListResult;
@@ -3792,17 +3815,22 @@ const make = Effect.gen(function* () {
         { concurrency: 1 },
       );
       const messagesByThreadId = new Map(sourceMessages);
-      const thread = threadDetail(
-        scope,
-        target,
-        runCount,
-        timeline.totalItems,
-        shell,
-        yield* Clock.currentTimeMillis,
-        input.afterPosition === undefined &&
-          input.beforePosition === undefined &&
-          input.itemId === undefined,
+      const thread = yield* withSubtreeAttention(
+        threadDetail(
+          scope,
+          target,
+          runCount,
+          timeline.totalItems,
+          shell,
+          yield* Clock.currentTimeMillis,
+          input.afterPosition === undefined &&
+            input.beforePosition === undefined &&
+            input.itemId === undefined,
+        ),
       );
+      if (thread.childAttention !== undefined) {
+        yield* acknowledgeChildAttention(parent, target, thread.childAttention);
+      }
       const recentRuns = target.runs
         .toSorted((left, right) => right.ordinal - left.ordinal)
         .slice(0, runLimit)

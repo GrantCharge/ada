@@ -871,8 +871,6 @@ const layerMakeRoutes = Layer.mergeAll(
     }),
   ).pipe(
     Layer.provide(RemoteChildFollower.layer),
-    Layer.provideMerge(ChildAttentionService.layer),
-    Layer.provide(ProjectionStoreV2.layer),
     Layer.provide(ThreadTaskStore.layer),
     Layer.provide(LocalGatewayPort.layer),
   ),
@@ -884,8 +882,13 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
-  // delegate_task to a linked environment, from /mcp and the follower above.
-  Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  // delegate_task to a linked environment, from /mcp and the follower above. One child
+  // attention instance serves its starter above and /mcp acknowledging what a parent read.
+  Layer.provide(
+    Layer.mergeAll(RemoteDelegation.layer, ChildAttentionService.layer).pipe(
+      Layer.provide(ProjectionStoreV2.layer),
+    ),
+  ),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.
   Layer.provide(PeerLinkRequests.layer),
   // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.
