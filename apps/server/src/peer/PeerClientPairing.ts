@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import {
   type AuthEnvironmentScope,
   type AuthSessionId,
@@ -169,10 +170,10 @@ const make = Effect.gen(function* () {
         return (
           client?.label ??
           ([client?.browser, client?.os].filter((part) => part !== undefined).join(" on ") ||
-            "T3 Code client")
+            `${APP_NAME} client`)
         );
       }),
-      Effect.orElseSucceed(() => "T3 Code client"),
+      Effect.orElseSucceed(() => `${APP_NAME} client`),
     );
 
   /** Asks the linked environment for a pairing; `payload` says for whom. */

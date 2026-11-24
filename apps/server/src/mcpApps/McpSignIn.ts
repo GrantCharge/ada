@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import {
   ProviderMcpSignInError,
   type ProviderMcpSignInCompleteInput,
@@ -55,7 +56,7 @@ const make = Effect.gen(function* () {
     );
     if (runtime === undefined) return yield* stopped(input.server);
     if (runtime.mcpSignIn === undefined) {
-      return yield* fail(input.server, "This agent can't sign MCP servers in from T3 Code.");
+      return yield* fail(input.server, `This agent can't sign MCP servers in from ${APP_NAME}.`);
     }
     return { providerThread, mcpSignIn: runtime.mcpSignIn };
   });

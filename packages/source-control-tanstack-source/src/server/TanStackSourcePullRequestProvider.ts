@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import {
   resolvePullRequestAuthorFilter,
   type PullRequestCapabilities,
@@ -786,7 +787,7 @@ export const make = Effect.gen(function* () {
         default:
           return yield* failure(
             input.action,
-            `TanStack Source cannot ${input.action} from T3 Code.`,
+            `TanStack Source cannot ${input.action} from ${APP_NAME}.`,
           );
       }
     }),

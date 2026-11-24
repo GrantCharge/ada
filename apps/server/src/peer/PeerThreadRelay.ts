@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import {
   OrchestrationV2GetTurnItemResult,
   OrchestrationV2ThreadHistoryPage,
@@ -103,7 +104,7 @@ const fromStatus = (status: number, code: string | undefined, label: string) => 
     return new PeerLinkThreadReadError({
       reason: "incompatible",
       label,
-      message: `${label} runs a T3 Code version that does not share its threads over a link. Update it to read its threads from here.`,
+      message: `${label} runs an ${APP_NAME} version that does not share its threads over a link. Update it to read its threads from here.`,
     });
   }
   if (status === 401 || status === 403) {

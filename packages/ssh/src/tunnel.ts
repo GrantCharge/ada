@@ -936,7 +936,7 @@ elif [ -n "$REMOTE_PORT" ] && managed_server_running "$REMOTE_PID"; then
   elif managed_server_stopping; then
     wait_for_pid_exit "$REMOTE_PID"
     if managed_server_running "$REMOTE_PID"; then
-      printf 'The previous remote T3 server (PID %s) is still shutting down. Retry once it has exited.\\n' "$REMOTE_PID" >&2
+      printf 'The previous remote ${APP_NAME} server (PID %s) is still shutting down. Retry once it has exited.\\n' "$REMOTE_PID" >&2
       exit 1
     fi
     REMOTE_PID=""

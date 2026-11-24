@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 // --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
+import { APP_NAME } from "@t3tools/shared/branding";
 import {
   BrowserProfile,
   BrowserProfileId,
@@ -2884,8 +2885,7 @@ const make = Effect.gen(function* () {
         if (tab.desktopResizeUndrawn) {
           throw new ServerBrowserPage.ServerBrowserOperationError({
             tag: "PreviewAutomationExecutionError",
-            message:
-              "The desktop did not draw the page at the new size. Show or restore the T3 Code window and try again.",
+            message: `The desktop did not draw the page at the new size. Show or restore the ${APP_NAME} window and try again.`,
           });
         }
         // Only a read after the draw, with no page resize or load during it, measures this resize.

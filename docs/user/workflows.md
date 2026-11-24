@@ -6,7 +6,7 @@ For one prompt on a timer or webhook, use a scheduled task. Use a workflow when 
 
 ## Turn on workflows
 
-Workflows are a Labs feature, off by default. Turn on **Settings → Labs → Workflows** for the server that runs them. On a server without a desktop, set `"workflowsEnabled": true` in `userdata/settings.json` in its T3 home (`~/.t3` by default). While off, nothing in the workflows folder runs and `ada workflow` says how to turn it on; runs are kept and continue once it is on again.
+Workflows are a Labs feature, off by default. Turn on **Settings → Labs → Workflows** for the server that runs them. On a server without a desktop, set `"workflowsEnabled": true` in `userdata/settings.json` in its Ada home (`~/.t3` by default). While off, nothing in the workflows folder runs and `ada workflow` says how to turn it on; runs are kept and continue once it is on again.
 
 ## Create a workflow
 
@@ -36,7 +36,7 @@ export default workflow(
 );
 ```
 
-Start it with `ada workflow start release --input '{"name":"v1.4"}' --key v1.4`, then answer its question in the app. `T3`, `Effect`, `Schema` and `Option` are provided; a workflow file imports nothing from T3 or Effect. Name files with letters, digits, `-`, `_` and `.`; other names are skipped with a warning.
+Start it with `ada workflow start release --input '{"name":"v1.4"}' --key v1.4`, then answer its question in the app. `T3`, `Effect`, `Schema` and `Option` are provided; a workflow file imports nothing from `T3` or `Effect`. Name files with letters, digits, `-`, `_` and `.`; other names are skipped with a warning.
 
 Saving checks that the file loads, does not duplicate a workflow name and version, and does not remove a version with unfinished runs. A file that fails these checks keeps its last working version while the Workflows page (and the server log) shows why; other files are not affected. A change held back by unfinished runs goes in by itself once those runs end or are cancelled. Mistakes inside a workflow body surface when a run hits them and pauses. To change steps while runs are unfinished, add the new body under a higher `version` and keep the old one until those runs end.
 
@@ -45,17 +45,17 @@ Dot-files and subfolders are ignored. Keep shared helpers in a subfolder and res
 ## Start and steer
 
 ```sh
-t3 workflow start <name> --input '<json>' --key <key>
-t3 workflow list [--status paused]
-t3 workflow show <run>
-t3 workflow resume <run>
-t3 workflow cancel <run> [--reason '<why>']
-t3 workflow questions
-t3 workflow signal '{"choice":"yes"}' --run <run> --wait <name>
-t3 workflow signal '<json>' --workflow <name> --channel <channel>
-t3 workflow hooks
-t3 workflow store list
-t3 workflow store set <key> '<json>'
+ada workflow start <name> --input '<json>' --key <key>
+ada workflow list [--status paused]
+ada workflow show <run>
+ada workflow resume <run>
+ada workflow cancel <run> [--reason '<why>']
+ada workflow questions
+ada workflow signal '{"choice":"yes"}' --run <run> --wait <name>
+ada workflow signal '<json>' --workflow <name> --channel <channel>
+ada workflow hooks
+ada workflow store list
+ada workflow store set <key> '<json>'
 ```
 
 Every start needs a `--key`: starting twice with the same key returns the same run — even after a version bump — so retries do not duplicate work. Use `signal` with `--run` and `--wait` to answer a question or wake a run, or with `--workflow` and `--channel` to wake whichever run waits on that channel. A signal for a question that is no longer open is kept for a later wait rather than refused, so check `ada workflow questions` first. Use `store` to read or change state kept between runs.

@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - the launcher loads only Node builtins so it starts in milliseconds.
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as NodeChildProcess from "node:child_process";
 import type * as NodeNet from "node:net";
 
@@ -52,7 +53,7 @@ const stopReading = (socket: NodeNet.Socket) =>
 export function runProcessLauncher(): void {
   const channel = process.send?.bind(process);
   if (!channel) {
-    process.stderr.write("The process launcher is started by the T3 server.\n");
+    process.stderr.write(`The process launcher is started by the ${APP_NAME} server.\n`);
     process.exitCode = 1;
     return;
   }

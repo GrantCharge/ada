@@ -1,6 +1,7 @@
 // A project bound to a standalone tracker (Linear) in settings lists it beside its git host's.
 // References outside the project's own repositories (upstream and fork) may be read on the host,
 // but every write must pass through requireWritable.
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -826,7 +827,7 @@ const make = Effect.gen(function* () {
         if (found === null) {
           return yield* new IssueOperationError({
             operation: "resolveUrl",
-            detail: `No project in T3 Code is on ${link.host}. Add any ${link.host} project to read its issues.`,
+            detail: `No project in ${APP_NAME} is on ${link.host}. Add any ${link.host} project to read its issues.`,
           });
         }
         return found.resolved;
