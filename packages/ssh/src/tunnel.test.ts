@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off - Runs the generated runner in a real shell.
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
@@ -1523,7 +1524,7 @@ server.listen(Number(flag("--port") ?? 0), "127.0.0.1", () => {
       const error = yield* Effect.flip(launch);
       assert.include(
         error.message,
-        `The previous remote T3 server (PID ${pid}) is still shutting down.`,
+        `The previous remote ${APP_NAME} server (PID ${pid}) is still shutting down.`,
       );
       assert.isTrue(yield* isRunning(pid), "the launcher signalled the stopping server");
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))),
