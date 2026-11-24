@@ -886,7 +886,7 @@ const layerMakeRoutes = Layer.mergeAll(
   // attention instance serves its starter above and /mcp acknowledging what a parent read.
   Layer.provide(
     Layer.mergeAll(RemoteDelegation.layer, ChildAttentionService.layer).pipe(
-      Layer.provide(ProjectionStoreV2.layer),
+      Layer.provide(Layer.mergeAll(ProjectionStoreV2.layer, ThreadTaskStore.layer)),
     ),
   ),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.

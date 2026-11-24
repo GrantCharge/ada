@@ -453,14 +453,14 @@ class RemoteThreadListError extends Schema.TaggedError<RemoteThreadListError>()(
 
 const decodeSummaries = Schema.decodeUnknownEffect(McpGatewayRelayThreadList);
 
-/** One thread's entry in the relaying app's small thread list, or undefined when it is not listed. */
-export const getRemoteThreadSummary = (remote: RemoteEnvironment, threadId: ThreadId) =>
+/** The relaying app's small summary of every thread on the environment. */
+export const listRemoteThreadSummaries = (remote: RemoteEnvironment) =>
   Effect.tryPromise({
     try: () => remote.gateway.contextFor(remote.modeCeiling).port.listThreads(remote.environmentId),
     catch: (cause) => new RemoteThreadListError({ cause }),
   }).pipe(
     Effect.flatMap(decodeSummaries),
-    Effect.map(({ items }) => items.find((summary) => summary.id === threadId)),
+    Effect.map(({ items }) => items),
     Effect.mapError(
       () =>
         new OrchestratorMcpFailure({

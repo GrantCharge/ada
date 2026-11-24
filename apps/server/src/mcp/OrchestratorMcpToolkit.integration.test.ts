@@ -693,6 +693,14 @@ describe("orchestrator MCP toolkit", () => {
         expect(wait.structuredContent).toEqual(expectedWait);
         expect(messageReads).toEqual([]);
         expect(transferReads).toHaveLength(0);
+        const cursorWait = yield* invoke(
+          "t3_thread_wait",
+          { threadId: delegated.childThreadId, cursor: "attention1:" },
+          { ...invocation, thread: undefined },
+        );
+        expect(cursorWait.structuredContent).toMatchObject({
+          items: [{ threadId: delegated.childThreadId, completedAt: expect.any(String) }],
+        });
         const settledWait = yield* invoke(
           "t3_thread_wait",
           {
