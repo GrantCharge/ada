@@ -139,7 +139,7 @@ jobs:
       product_name: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
       update_repository: ${{ github.repository }}
       label: macOS arm64
-      runner: macos-15
+      runner: macos-26
       platform: mac
       target: dmg
       arch: arm64
@@ -161,7 +161,7 @@ jobs:
       product_name: ${{ vars.FORK_PRODUCT_NAME || 'Ada' }}
       update_repository: ${{ github.repository }}
       label: macOS x64
-      runner: macos-15-intel
+      runner: macos-26-intel
       platform: mac
       target: dmg
       arch: x64
