@@ -158,8 +158,8 @@ const make = Effect.gen(function* () {
   });
 
   // Runs for every domain event; most events return before any work is needed.
-  const handle: DelegatedTaskQuestionReactor["Service"]["handle"] = Effect.fnUntraced(
-    function* (event) {
+  const react = Effect.fnUntraced(
+    function* (event: OrchestrationV2DomainEvent) {
       if (event.type === "message.updated") return yield* closeAnsweredQuestions(event);
       if (event.type === "run.updated") {
         if (!["completed", "failed", "waiting"].includes(event.payload.status)) return;
@@ -304,15 +304,28 @@ const make = Effect.gen(function* () {
       case "subagent.updated":
         return Effect.succeed(event.payload.threadId);
       case "runtime-request.updated":
-        return event.payload.kind === "user_input"
-          ? projections
-              .getThread(event.threadId)
-              .pipe(Effect.map((child) => child.lineage.parentThreadId))
+        return wakesParent(event.payload.kind)
+          ? projections.getThread(event.threadId).pipe(Effect.map(localParentThreadId))
           : Effect.succeed(null);
+      case "message.updated":
+        return Effect.succeed(
+          event.payload.role === "user" ? (event.payload.senderThreadId ?? null) : null,
+        );
       default:
         return Effect.succeed(null);
     }
   };
+
+  const handle: DelegatedTaskQuestionReactor["Service"]["handle"] = (event) =>
+    parentOf(event).pipe(
+      Effect.flatMap((parentThreadId) => (parentThreadId === null ? Effect.void : react(event))),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("finding the parent of a delegated task question failed", {
+          threadId: event.threadId,
+          cause,
+        }),
+      ),
+    );
 
   const start: DelegatedTaskQuestionReactor["Service"]["start"] = Effect.fn(
     "DelegatedTaskQuestionReactor.start",
@@ -324,7 +337,7 @@ const make = Effect.gen(function* () {
           Effect.flatMap((parentThreadId) =>
             parentThreadId === null
               ? Effect.void
-              : parentReactions.run(parentThreadId, handle(event)),
+              : parentReactions.run(parentThreadId, react(event)),
           ),
           Effect.catchCause((cause) =>
             Effect.logWarning("finding the parent of a delegated task question failed", {
