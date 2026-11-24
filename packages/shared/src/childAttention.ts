@@ -72,3 +72,24 @@ export function childAttention(
       return { state: "idle", runId };
   }
 }
+
+/** Something the parent should act on, as opposed to work in progress or nothing at all. */
+export function childAttentionIsActionable(attention: OrchestrationV2ChildAttention): boolean {
+  return attention.state !== "working" && attention.state !== "idle";
+}
+
+/** Two readings with the same key are the same news. */
+export function childAttentionKey(attention: OrchestrationV2ChildAttention): string {
+  return `${attention.state}:${attention.runId ?? ""}:${attention.requestId ?? ""}`;
+}
+
+const CURSOR_PREFIX = "attention1:";
+
+export function childAttentionCursor(attention: OrchestrationV2ChildAttention): string {
+  return `${CURSOR_PREFIX}${childAttentionKey(attention)}`;
+}
+
+/** The key a cursor saw, or null for a cursor this build cannot read. */
+export function childAttentionCursorKey(cursor: string): string | null {
+  return cursor.startsWith(CURSOR_PREFIX) ? cursor.slice(CURSOR_PREFIX.length) : null;
+}

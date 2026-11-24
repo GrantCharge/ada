@@ -688,6 +688,7 @@ describe("orchestrator MCP toolkit", () => {
           runId: queuedFollowup.runId,
           status: "completed",
           timedOut: false,
+          cursor: `attention1:finished:${queuedFollowup.runId}:`,
         };
         expect(wait.structuredContent).toEqual(expectedWait);
         expect(messageReads).toEqual([]);

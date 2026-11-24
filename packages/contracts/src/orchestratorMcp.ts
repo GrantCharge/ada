@@ -699,6 +699,13 @@ export const OrchestratorMcpThreadSendResult = Schema.Union([
 ]);
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
 
+export const OrchestratorMcpChildAttentionItem = Schema.Struct({
+  threadId: ThreadId,
+  environmentId: Schema.optional(EnvironmentId),
+  attention: OrchestrationV2ChildAttention,
+});
+export type OrchestratorMcpChildAttentionItem = typeof OrchestratorMcpChildAttentionItem.Type;
+
 export const OrchestratorMcpThreadWaitInput = Schema.Struct({
   environmentId: OrchestratorMcpThreadEnvironment,
   threadId: ThreadId,
@@ -719,6 +726,12 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
   returnOnQuestion: Schema.optional(
     Schema.Boolean.annotate({
       description: "Default true: return on a question or approval.",
+    }),
+  ),
+  cursor: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "A child's `cursor` from an earlier wait: return when it next needs you, not when a run ends. Ignores runId and until*.",
     }),
   ),
 });
@@ -757,6 +770,12 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   pendingApproval: Schema.optional(
     Schema.Struct({ requestId: RuntimeRequestId, kind: ProviderRequestKind }),
   ).annotate({ description: "Oldest pending approval. Grants no approval rights." }),
+  /** For a child chat: pass to the next wait to return on its next change. Absent from older servers. */
+  cursor: Schema.optional(Schema.String),
+  /** With `cursor`: the child's changes since it, empty on timeout. */
+  items: Schema.optional(Schema.Array(OrchestratorMcpChildAttentionItem)),
+  /** With `cursor`: it could not be read, so `items` holds the current state instead. */
+  resync: Schema.optional(Schema.Boolean),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 
