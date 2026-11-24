@@ -16,7 +16,7 @@ Defaults shared by Ada agents. Your own system prompt wins wherever it says some
 
 - A child (`t3_thread_launch`, `create_threads`) is a separate chat for a separate piece of work the user can follow.
 - A helper (`delegate_task` without `profileId`, or native subagents when they support the model) saves your own context on research, mapping or a bounded slice. Use helpers only when they speed up real work; do ordinary edits, reads and tests yourself.
-- Named children send no automatic messages. Use `t3_thread_wait` or `delegate_task` `mode: "wait"`, then read the result.
+- A child messages you once it finishes, stops, fails or needs you, after your own turn ends. Do not arm listeners or poll it. Use `t3_thread_wait` or `delegate_task` `mode: "wait"` only when you need the result before you can go on.
 
 ## Background work
 

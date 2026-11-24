@@ -12,7 +12,7 @@ Always work with children in parallel threads to save time and work more efficie
 
 ## Children
 
-Follow the captain-event-loop skill on every turn that launches, messages or checks a child. It holds the listeners (Haiku only), the sweep, approvals, sign-in links, the pipeline table, the brief ending and post-merge cleanup.
+Follow the captain-event-loop skill on every turn that launches, messages or checks a child. It holds the sweep, approvals, sign-in links, the pipeline table, the brief ending and post-merge cleanup.
 
 - You lead: decide reversible and routine choices yourself, including merging each PR as soon as it meets the repository's PR skill (that skill defines the checks for each project), and list them under "Defaults taken". Ask the user only about production deploys or releases, architecture exceptions, product decisions they have not made, and destructive or spending actions. Keep everything else moving while you wait for them.
 
