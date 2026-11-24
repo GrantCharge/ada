@@ -7,7 +7,7 @@ import { useProject, useThreadProjection, useThreadStatus } from "../../state/en
 import { stripInlineContextReferences } from "../../lib/composerContextReferences";
 import { observeResize } from "../../lib/observeResize";
 import ChatMarkdown from "../ChatMarkdown";
-import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/markdownPipeline";
+import { shouldPreserveAssistantLineBreaks } from "@t3tools/shared/assistantInsights";
 import {
   agentThreadStatus,
   agentThreadStatusLabel,

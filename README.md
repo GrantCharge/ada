@@ -69,7 +69,7 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
 - [Run Ada as a background service](./docs/user/background-service.md)
 
-Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
+Building from source? Start at [docs/internals/01_architecture.md](./docs/internals/01_architecture.md).
 
 ## If you REALLY want to contribute still.... read this first
 

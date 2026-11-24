@@ -473,6 +473,11 @@ export interface ComposerDraftWorkspaceSelection {
    * included) until the user picks a branch, rather than pinning the first name refs reported.
    */
   readonly followsCurrentCheckout?: boolean;
+  /**
+   * Tracked repositories a new worktree takes, by path. Absent until the user chooses, so the
+   * server's default applies.
+   */
+  readonly repositories?: ReadonlyArray<string>;
 }
 
 export type ComposerDraftSettingsUpdate = Pick<
@@ -493,6 +498,7 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
   pullRequestReference: Schema.optional(Schema.String),
   followsCurrentCheckout: Schema.optional(Schema.Boolean),
+  repositories: Schema.optional(Schema.Array(Schema.String)),
 });
 
 const ComposerDraftProjectSchema = Schema.Struct({
@@ -1158,14 +1164,14 @@ export function appendComposerDraftText(draftKey: string, value: string): void {
   });
 }
 
-// Pasted images all share one name, so an image's inline bytes decide whether it is a repeat.
+// Pasted images all share one name, so an image's bytes decide whether it is a repeat.
 function isSameAttachment(a: DraftComposerAttachment, b: DraftComposerAttachment): boolean {
-  return (
-    a.mimeType === b.mimeType &&
-    a.sizeBytes === b.sizeBytes &&
-    a.name === b.name &&
-    (a.type !== "image" || b.type !== "image" || a.dataUrl === b.dataUrl)
-  );
+  if (a.mimeType !== b.mimeType || a.sizeBytes !== b.sizeBytes || a.name !== b.name) return false;
+  if (a.type !== "image" || b.type !== "image") return true;
+  if (a.contentDigest !== undefined && b.contentDigest !== undefined) {
+    return a.contentDigest === b.contentDigest;
+  }
+  return a.dataUrl === b.dataUrl && a.fileUri === b.fileUri;
 }
 
 /**

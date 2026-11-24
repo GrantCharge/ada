@@ -20,7 +20,7 @@ The existing code provides:
 - `packages/client-runtime/src/gateway`: `GatewayRuntimePort` as the client/runtime boundary.
 - Web Settings: enable/disable state, a minimum-16-character bridge token, and the current per-environment `read`, `create`, and `send` grant matrix. The v3 Settings UX for that matrix is defined in §9.4; it remains a sidecar setting and does not alter stock T3 when MCP is off.
 - Loopback bridge default `ws://127.0.0.1:47631`, challenge/proof authentication, one configured client, request timeouts, and replacement handling.
-- Existing T3 connection/runtime boundaries described in `docs/internals/remote.md`, `docs/internals/connection-runtime.md`, and `docs/internals/environment-auth.md`.
+- Existing T3 connection/runtime boundaries described in `docs/internals/05_remote.md`, `docs/internals/09_connection-runtime.md`, and `docs/internals/04_environment-auth.md`.
 - Tailscale and SSH remain endpoint/launch helpers, not new environment types.
 
 The v3 work must preserve environment identity, scoped authorization, reconnect behavior, and the rule that projects and threads remain environment-local. A repository identity may correlate related clones but must never route a command.

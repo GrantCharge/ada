@@ -888,6 +888,9 @@ describe("buildThreadListV2ListItems", () => {
               : "settled-shelf",
       ),
     ).toEqual(["unsent", "queued-1", "queued-2", "active", "settled-shelf", "settled"]);
+    expect(threadJumpTarget(items, "thread.jump.1")).toMatchObject({
+      pendingTask: { draftKey: "new-task:unsent" },
+    });
     expect(
       items.flatMap((item) => (item.type === "v2-pending" ? [item.showPendingDivider] : [])),
     ).toEqual([true, false, false]);
@@ -936,16 +939,28 @@ describe("buildThreadListV2ListItems", () => {
       "v2-settled-shelf",
       "v2-thread",
     ]);
-    expect(threadJumpTarget(items, "thread.jump.1")?.id).toBe("active");
-    expect(threadJumpTarget(items, "thread.jump.2")?.id).toBe("settled");
-    expect(threadJumpTarget(items, "thread.jump.3")).toBeNull();
+    expect(threadJumpTarget(items, "thread.jump.1")).toMatchObject({
+      type: "v2-pending",
+      pendingTask: { key: "pending-task:queued" },
+    });
+    expect(threadJumpTarget(items, "thread.jump.2")).toMatchObject({
+      item: { thread: { id: "active" } },
+    });
+    expect(threadJumpTarget(items, "thread.jump.3")).toMatchObject({
+      item: { thread: { id: "settled" } },
+    });
+    expect(threadJumpTarget(items, "thread.jump.4")).toBeNull();
     const agentItems = items.flatMap((item) =>
       item.type === "v2-thread"
         ? [{ type: "agent-thread" as const, thread: item.item.thread }]
         : [],
     );
-    expect(threadJumpTarget(agentItems, "thread.jump.1")?.id).toBe("active");
-    expect(threadJumpTarget(agentItems, "thread.jump.2")?.id).toBe("settled");
+    expect(threadJumpTarget(agentItems, "thread.jump.1")).toMatchObject({
+      thread: { id: "active" },
+    });
+    expect(threadJumpTarget(agentItems, "thread.jump.2")).toMatchObject({
+      thread: { id: "settled" },
+    });
     expect(threadJumpTarget(agentItems, "thread.jump.3")).toBeNull();
   });
 });

@@ -44,18 +44,18 @@ const TAILSCALE_INSTALL_LOCATIONS: Partial<Record<NodeJS.Platform, ReadonlyArray
 };
 
 /** PATH first, then the platform's install locations. */
-export function findTailscaleExecutable(input: {
+export async function findTailscaleExecutable(input: {
   readonly platform: NodeJS.Platform;
   readonly env: NodeJS.ProcessEnv;
   readonly resolve: SpawnExecutableResolver;
-}): string {
+}): Promise<string> {
   const windows = input.platform === "win32";
   const name = windows ? "tailscale.exe" : "tailscale";
   const installed = windows
     ? [`${input.env.ProgramFiles ?? "C:\\Program Files"}\\Tailscale\\tailscale.exe`]
     : (TAILSCALE_INSTALL_LOCATIONS[input.platform] ?? []);
   for (const candidate of [name, ...installed]) {
-    const resolved = input.resolve(candidate, input.platform, input.env);
+    const resolved = await input.resolve(candidate, input.platform, input.env);
     if (resolved !== undefined) return resolved;
   }
   // Unresolved, the bare name still spawns through PATH and fails as before.
@@ -76,7 +76,7 @@ const tailscaleExecutable = Effect.gen(function* () {
   const cached = byPlatform.get(platform);
   if (cached !== undefined) return cached;
   const env = yield* HostProcess.Environment;
-  const path = findTailscaleExecutable({ platform, env, resolve });
+  const path = yield* Effect.promise(() => findTailscaleExecutable({ platform, env, resolve }));
   byPlatform.set(platform, path);
   return path;
 });

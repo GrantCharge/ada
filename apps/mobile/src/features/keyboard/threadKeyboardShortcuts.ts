@@ -1,6 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 
+import type { PendingNewTask } from "../../state/pending-new-tasks-model";
 import type { ThreadListV2ListItem } from "../threads/threadListV2";
 import {
   useHardwareKeyboardCommand,
@@ -25,13 +26,10 @@ export function threadJumpTarget(
   let index = threadJumpIndex(command);
   if (index < 0) return null;
   for (const item of items) {
-    const thread =
-      item.type === "v2-thread"
-        ? item.item.thread
-        : item.type === "agent-thread"
-          ? item.thread
-          : null;
-    if (thread !== null && index-- === 0) return thread;
+    if (item.type !== "v2-thread" && item.type !== "v2-pending" && item.type !== "agent-thread") {
+      continue;
+    }
+    if (index-- === 0) return item;
   }
   return null;
 }
@@ -39,11 +37,14 @@ export function threadJumpTarget(
 export function useThreadJumpShortcuts(
   items: ReadonlyArray<ThreadShortcutListItem>,
   onSelectThread: (thread: EnvironmentThreadShell) => void,
+  onSelectPendingTask?: (pendingTask: PendingNewTask) => void,
   enabled = true,
 ) {
   const jumpToThread = (command: HardwareKeyboardCommand) => {
-    const thread = threadJumpTarget(items, command);
-    if (thread !== null) onSelectThread(thread);
+    const target = threadJumpTarget(items, command);
+    if (target?.type === "v2-thread") onSelectThread(target.item.thread);
+    if (target?.type === "agent-thread") onSelectThread(target.thread);
+    if (target?.type === "v2-pending") onSelectPendingTask?.(target.pendingTask);
     return true;
   };
   useHardwareKeyboardCommand(

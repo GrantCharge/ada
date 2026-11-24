@@ -29,6 +29,7 @@ import * as BootService from "../service/bootService.ts";
 import {
   ensurePinnedRuntimeInstalled,
   findPosixLauncher,
+  generatedWindowsShimTarget,
   launcherOwnsVersionsDir,
   isUnpublishedRelease,
   pinnedRuntimePaths,
@@ -165,7 +166,7 @@ const ownedLaunchers = Effect.fn("cli.update.owned_launchers")(function* (input:
         );
   const launcher =
     platform === "win32"
-      ? yield* findWindowsShim(input.launchedAs)
+      ? yield* findWindowsShim(input.launchedAs, versionsDir)
       : yield* findPosixLauncher({ launchedAs: input.launchedAs, versionsDir });
   if (launcher === undefined || !(yield* owned(launcher))) return [];
   const result = [launcher];
@@ -309,9 +310,10 @@ const launcherSiblings = (path: Path.Path, launcher: string) => {
     .map((other) => path.join(path.dirname(launcher), `${other}${extension}`));
 };
 
-/** Windows executables see their own path, so find the installer shim by matching t3.cmd targets on PATH. */
+/** Windows executables see their own path, so locate the installer shim by matching its target. */
 export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(function* (
   executablePath: string,
+  versionsDir?: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -319,19 +321,34 @@ export const findWindowsShim = Effect.fn("cli.update.find_windows_shim")(functio
   const candidates = [
     ...(environment["T3CODE_INSTALL_BIN_DIR"] ? [environment["T3CODE_INSTALL_BIN_DIR"]] : []),
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(";"),
-  ].filter((entry) => entry.trim().length > 0);
-  for (const directory of candidates) {
-    for (const name of [LEGACY_CLI_COMMAND, CLI_COMMAND]) {
-      const shimPath = path.join(directory, `${name}.cmd`);
-      const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
-      if (Option.isNone(contents)) continue;
-      const target = windowsShimTarget(contents.value);
-      if (
-        target !== undefined &&
-        path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
-      ) {
-        return shimPath;
+  ]
+    .filter((entry) => entry.trim().length > 0)
+    .flatMap((directory) =>
+      [LEGACY_CLI_COMMAND, CLI_COMMAND].map((name) => ({
+        shimPath: path.join(directory, `${name}.cmd`),
+        parseTarget: windowsShimTarget,
+      })),
+    );
+  if (versionsDir !== undefined) {
+    const shimNames = [LEGACY_CLI_COMMAND, CLI_COMMAND].map((name) => `${name}.cmd`);
+    const recorded = yield* fs
+      .readFileString(path.join(path.dirname(versionsDir), "launchers"))
+      .pipe(Effect.orElseSucceed(() => ""));
+    for (const shimPath of recorded.split(/\r?\n/)) {
+      if (path.isAbsolute(shimPath) && shimNames.includes(path.basename(shimPath).toLowerCase())) {
+        candidates.push({ shimPath, parseTarget: generatedWindowsShimTarget });
       }
+    }
+  }
+  for (const { shimPath, parseTarget } of candidates) {
+    const contents = yield* fs.readFileString(shimPath).pipe(Effect.option);
+    if (Option.isNone(contents)) continue;
+    const target = parseTarget(contents.value);
+    if (
+      target !== undefined &&
+      path.resolve(target).toLowerCase() === path.resolve(executablePath).toLowerCase()
+    ) {
+      return shimPath;
     }
   }
   return undefined;
@@ -582,9 +599,7 @@ export const runUpdate = Effect.fn("cli.update.run")(function* (input: {
 
   const status = yield* service.status;
   // Service names are per user, so another home's unit belongs to a different install.
-  const servesThisHome =
-    status.installedBaseDir !== undefined &&
-    path.resolve(status.installedBaseDir) === path.resolve(input.baseDir);
+  const servesThisHome = status.installedBaseDir !== undefined && status.otherBaseDir === undefined;
   const serviceInstalled = status.supported && status.installed && servesThisHome;
   const foreground = yield* findForegroundServer({
     serverRuntimeStatePath: input.serverRuntimeStatePath,
