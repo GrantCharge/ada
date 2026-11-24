@@ -106,6 +106,7 @@ export function HomeRouteScreen() {
     pinThread,
     unpinThread,
     setThreadAutoSettle,
+    setThreadChildWake,
     moveThread,
     renameThread,
     regenerateThreadTitle,
@@ -230,6 +231,7 @@ export function HomeRouteScreen() {
             onPinThread={pinThread}
             onUnpinThread={unpinThread}
             onSetThreadAutoSettle={setThreadAutoSettle}
+            onSetThreadChildWake={setThreadChildWake}
             onMoveThread={moveThread}
             onRenameThread={renameThread}
             onRegenerateThreadTitle={regenerateThreadTitle}

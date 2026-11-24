@@ -1,6 +1,7 @@
 import { resolveScheduledTaskProfileRouting } from "@t3tools/client-runtime/gateway";
 import {
   CommandId,
+  type OrchestrationV2ChildAttention,
   type RunId,
   isProviderAvailable,
   MessageId,
@@ -73,6 +74,7 @@ import {
 } from "@t3tools/contracts";
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@t3tools/shared/model";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { acknowledgedReport, fnv1a } from "../orchestration-v2/ChildAttentionService.ts";
 import {
   childAttention,
   childAttentionCursor,
@@ -1580,6 +1582,37 @@ const make = Effect.gen(function* () {
       .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
       .pipe(Effect.mapError(threadManagementFailure));
   });
+
+  // A parent that waited on its child and saw its news needs no digest about it afterwards.
+  const acknowledgeChildAttention = Effect.fn("OrchestratorMcpService.acknowledgeChildAttention")(
+    function* (
+      parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
+      child: Pick<OrchestrationV2ThreadProjection, "thread">,
+      attention: OrchestrationV2ChildAttention,
+    ) {
+      if (parent === undefined || child.thread.parentThreadId !== parent.thread.id) return;
+      const report = acknowledgedReport(
+        attention,
+        parent.thread.childAttentionReported?.[child.thread.id],
+        yield* Clock.currentTimeMillis,
+      );
+      if (report === null) return;
+      yield* threadManagement
+        .dispatch({
+          type: "thread.child-attention.sync",
+          commandId: CommandId.make(
+            `server:child-attention-ack:${parent.thread.id}:${child.thread.id}:${fnv1a(report.key)}`,
+          ),
+          threadId: parent.thread.id,
+          reported: { [child.thread.id]: report },
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("recording a child's attention the parent saw failed", { cause }),
+          ),
+        );
+    },
+  );
 
   const loadScopedThread = Effect.fn("OrchestratorMcpService.loadScopedThread")(function* <
     K extends "runs",
@@ -3936,6 +3969,7 @@ const make = Effect.gen(function* () {
         if (reading === null) {
           return yield* failure("thread_not_found", `Thread ${input.threadId} no longer exists.`);
         }
+        if (changed) yield* acknowledgeChildAttention(parent, target, reading.attention);
         return {
           environmentId: scope.environmentId,
           threadId: input.threadId,
@@ -3987,6 +4021,9 @@ const make = Effect.gen(function* () {
           : yield* threadManagement
               .readChildAttention(thread)
               .pipe(Effect.mapError(threadManagementFailure));
+      if (reading !== null && !result.timedOut) {
+        yield* acknowledgeChildAttention(parent, target, reading.attention);
+      }
       return {
         environmentId: scope.environmentId,
         threadId: input.threadId,
