@@ -73,6 +73,7 @@ import {
 } from "@t3tools/contracts";
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@t3tools/shared/model";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { childAttention } from "@t3tools/shared/childAttention";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
@@ -988,6 +989,12 @@ function threadSnooze(
   };
 }
 
+function threadChildAttention(
+  shell: OrchestrationV2ThreadShell,
+): Pick<OrchestratorMcpThreadListItem, "childAttention"> {
+  return shell.parentThreadId == null ? {} : { childAttention: childAttention(shell) };
+}
+
 // Provider-internal links (parentTaskId, providerInstanceId) stay out of agent results.
 function threadBackgroundWork(
   thread: Pick<OrchestrationV2ThreadShell, "blockedOnThreadWait" | "pendingBackgroundTasks">,
@@ -1088,6 +1095,7 @@ function listItemFromShell(
     ...threadSnooze(shell, nowMs),
     pinned: shell.pinnedAt != null,
     ...threadBackgroundWork(shell),
+    ...threadChildAttention(shell),
     ...(scope.client?.linked === true ? linkedThreadParent(shell) : threadParent(shell)),
     ...(shell.delegatedFrom == null ? {} : { delegatedFrom: shell.delegatedFrom }),
     itemCount: shell.visibleItemCount,
@@ -1154,6 +1162,7 @@ function threadDetail(
     ...threadSnooze(shell, nowMs),
     pinned: shell.pinnedAt != null,
     ...threadBackgroundWork(shell),
+    ...threadChildAttention(shell),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),
   };

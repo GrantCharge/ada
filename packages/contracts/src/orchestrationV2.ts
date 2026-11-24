@@ -2325,6 +2325,30 @@ export const OrchestrationV2LatestVisibleMessageSummary = Schema.Struct({
 export type OrchestrationV2LatestVisibleMessageSummary =
   typeof OrchestrationV2LatestVisibleMessageSummary.Type;
 
+/** What a child chat needs from its parent now. Derived by `childAttention` in shared. */
+export const OrchestrationV2ChildAttentionState = Schema.Literals([
+  "working",
+  "idle",
+  "finished",
+  "needs-input",
+  "needs-approval",
+  "stopped",
+  "failed",
+  "limited",
+]);
+export type OrchestrationV2ChildAttentionState = typeof OrchestrationV2ChildAttentionState.Type;
+
+export const OrchestrationV2ChildAttention = Schema.Struct({
+  state: OrchestrationV2ChildAttentionState,
+  runId: Schema.NullOr(RunId),
+  requestId: Schema.optional(RuntimeRequestId),
+  errorClass: Schema.optional(OrchestrationV2ProviderFailureClass),
+  resetAt: Schema.optional(IsoDateTime),
+  /** Ada resumes the child itself at `resetAt`. */
+  autoResume: Schema.optional(Schema.Boolean),
+});
+export type OrchestrationV2ChildAttention = typeof OrchestrationV2ChildAttention.Type;
+
 export const OrchestrationV2ThreadShell = Schema.Struct({
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   parentThreadId: Schema.optional(Schema.NullOr(ThreadId)),

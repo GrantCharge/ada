@@ -38,6 +38,7 @@ import { LastThreadTitleRegeneration, ThreadTitleRegeneration } from "./threadTi
 import { PeerLinkOrigin, TailnetDeviceAccess, TailnetDeviceStatus } from "./tailnetDevices.ts";
 import {
   OrchestrationV2Actor,
+  OrchestrationV2ChildAttention,
   OrchestrationV2CreationSource,
   OrchestrationV2DelegatedFrom,
   OrchestrationV2RunStatus,
@@ -439,6 +440,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   blockedOnThreadWait: Schema.optional(Schema.Boolean),
   /** Absent from linked environments that predate it. */
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
+  /** For a child chat: what it needs from its parent now. Absent for top-level threads and older environments. */
+  childAttention: Schema.optional(OrchestrationV2ChildAttention),
   /**
    * The chat this one belongs to. `relationshipToParent` says how: `"child"` is
    * a separate agent chat with its own context that a parent launched or nested
@@ -546,6 +549,8 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   blockedOnThreadWait: Schema.optional(Schema.Boolean),
   /** Absent from linked environments that predate it. */
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
+  /** For a child chat: what it needs from its parent now. Absent for top-level threads and older environments. */
+  childAttention: Schema.optional(OrchestrationV2ChildAttention),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
