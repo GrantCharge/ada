@@ -73,7 +73,11 @@ import {
 } from "@t3tools/contracts";
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@t3tools/shared/model";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
-import { childAttention } from "@t3tools/shared/childAttention";
+import {
+  childAttention,
+  childAttentionCursor,
+  childAttentionCursorKey,
+} from "@t3tools/shared/childAttention";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
@@ -3915,6 +3919,34 @@ const make = Effect.gen(function* () {
     }),
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
       const { parent, target } = yield* loadScopedThread(scope, input.threadId, []);
+      const thread = { projectId: target.thread.projectId, threadId: input.threadId };
+      if (input.cursor !== undefined) {
+        const afterKey = childAttentionCursorKey(input.cursor);
+        const { reading, changed } = yield* (
+          afterKey === null
+            ? threadManagement
+                .readChildAttention(thread)
+                .pipe(Effect.map((reading) => ({ reading, changed: true })))
+            : threadManagement.waitForChildAttention({
+                ...thread,
+                afterKey,
+                timeoutMs: clampWaitTimeoutMs(input.timeoutMs),
+              })
+        ).pipe(Effect.mapError(threadManagementFailure));
+        if (reading === null) {
+          return yield* failure("thread_not_found", `Thread ${input.threadId} no longer exists.`);
+        }
+        return {
+          environmentId: scope.environmentId,
+          threadId: input.threadId,
+          runId: reading.shell.latestRunId,
+          status: listedThreadStatus(reading.shell),
+          timedOut: !changed,
+          cursor: changed ? childAttentionCursor(reading.attention) : input.cursor,
+          items: changed ? [{ threadId: input.threadId, attention: reading.attention }] : [],
+          ...(afterKey === null ? { resync: true } : {}),
+        } satisfies OrchestratorMcpThreadWaitResult;
+      }
       const result = yield* threadManagement
         .waitForThread({
           projectId: target.thread.projectId,
@@ -3949,6 +3981,12 @@ const make = Effect.gen(function* () {
         : [];
       const wakesCaller =
         ownedTask && !childRequests.some((request) => request.status === "pending");
+      const reading =
+        target.thread.parentThreadId == null
+          ? null
+          : yield* threadManagement
+              .readChildAttention(thread)
+              .pipe(Effect.mapError(threadManagementFailure));
       return {
         environmentId: scope.environmentId,
         threadId: input.threadId,
@@ -3971,6 +4009,7 @@ const make = Effect.gen(function* () {
         ...(result.pendingBackgroundTaskCount === undefined
           ? {}
           : { pendingBackgroundTaskCount: result.pendingBackgroundTaskCount }),
+        ...(reading === null ? {} : { cursor: childAttentionCursor(reading.attention) }),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     interruptThread: Effect.fn("OrchestratorMcpService.interruptThread")(function* (scope, input) {
