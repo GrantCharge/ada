@@ -318,7 +318,7 @@ const callRelayed = (remote: RemoteEnvironment, name: string, args: Record<strin
 
 const decodeRemoteThread = Schema.decodeUnknownEffect(McpGatewayRelayThread);
 
-const getRemoteThread = (remote: RemoteEnvironment, threadId: ThreadId) =>
+export const getRemoteThread = (remote: RemoteEnvironment, threadId: ThreadId) =>
   callRemote(remote, "t3_get_thread", { threadId }).pipe(
     Effect.flatMap((value) =>
       decodeRemoteThread(value).pipe(
