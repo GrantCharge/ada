@@ -25,13 +25,23 @@ recorded one: any fork id in upstream's table masks a future upstream migration.
 migration names the upstream migration it runs after, so a fresh database replays the order
 existing ones ran in. Fork builds before the split recorded both in one table (fork ids 52,
 53, 56, 58, 61, 62, 65, 75, 77, 78); `splitLegacyForkLedger` moves those rows once, keeping
-exactly the applied set, and refuses ledgers that mix in V2 preview numbering.
+exactly the applied set, and refuses ledgers that mix in V2 preview numbering. The migrator
+compares ids only, so a database that ran a different migration under an id this build assigns
+never receives it; `runMigrations` refuses a history that would skip a migration at id 55 or later
+without its expected name. A refused history exits the server with
+`SERVER_EXIT_CODE_DATABASE_REFUSED` before any change, and the desktop app and service launcher stop
+instead of restarting, since every restart would be refused again.
 Fork migration 3 created a differently shaped `scheduled_tasks`; the fork's V2 migration (upstream 55) renames it to
 `legacy_scheduled_tasks` before upstream's `CREATE TABLE IF NOT EXISTS` would keep the
 wrong columns, and `ScheduledTaskService` imports and drops it at startup, when profiles
 can be resolved. Scheduled tasks otherwise run on upstream's service; the fork adds an
 optional `profileId` (runs launch with the profile's latest revision and reuse the thread
 the first run created) and `cron`/`once` schedules.
+The server archives stale tasks and deletes them 30 days later; `list_scheduled_tasks` hides them
+unless `includeArchived`, and `schedule_task` with `enabled: true` restores one. In-process agents
+use the four `schedule_task` tools; the `t3_*_scheduled_task` tools stay on the standalone gateway
+for outside clients and are deprecated aliases in-process
+([`AgentsMcpTools.ts`](../../apps/server/src/mcp/agents/AgentsMcpTools.ts)).
 Tests use memory databases; integrated verification uses a read-only SQLite backup
 copy in the worktree. Never experiment against the installed database.
 
@@ -211,4 +221,8 @@ worktree, branch name, or attachments), a read returns messages rather than the 
 cannot steer or restart, and a wait re-reads the thread with backoff because the relay streams
 nothing. With no app connected they go over a stored link instead (`McpToolAccess.routed`). Whatever a remote call cannot honor is refused rather than dropped, and a named child
 created there, by either launch tool, is assigned as a remote task at once so the owner's sweep
-lists it.
+lists it. With `untilDelegatedWorkSettled`, `t3_thread_wait` also holds for the work that will wake
+the thread again, by the same rule as `task_status`, and only for background work the agent marked
+awaited. On another environment, a route that stops answering ends the agent's wait with
+`unreachable` instead of an error; RemoteDelegation's follower still gets the error because it backs
+off on it.

@@ -1,4 +1,5 @@
 import { useMessages } from "gt-react";
+import { hasFeatureFlag } from "@t3tools/client-runtime/state/server";
 import { AuthEnvironmentMaintainScope } from "@t3tools/contracts";
 
 import { isElectron } from "~/env";
@@ -13,6 +14,14 @@ import {
   filterAvailableSettingsSearchItems,
   getThreadAutoSettlementSearchAvailability,
 } from "./settingsSearch";
+
+/** Any environment whose server enables secret providers; gates the Secrets page, nav and search. */
+export function useHasSecretProvidersEnvironment() {
+  const { environments } = useEnvironments();
+  return environments.some((environment) =>
+    hasFeatureFlag(environment.serverConfig, "secretProviders"),
+  );
+}
 
 export function useAvailableSettingsSearchItems() {
   const { environments } = useEnvironments();
@@ -39,6 +48,7 @@ export function useAvailableSettingsSearchItems() {
         environment.serverConfig !== null &&
         environment.serverConfig.managedPolicy?.limits?.providers?.allowedDrivers === undefined,
     ) === true;
+  const hasSecretProvidersEnvironment = useHasSecretProvidersEnvironment();
   const hasThreadAutoSettlement =
     getThreadAutoSettlementSearchAvailability(environments).eligibleEnvironmentIds.length > 0;
   const hasThreadAutoSettleFinishedChildren =
@@ -77,5 +87,6 @@ export function useAvailableSettingsSearchItems() {
     hasFastWorktreeCheckoutEnvironment,
     hasTextGeneratorsEnvironment,
     hasPrimaryEnvironment: primaryEnvironmentId !== null,
+    hasSecretProvidersEnvironment,
   });
 }

@@ -112,7 +112,7 @@ export const OrchestratorMcpTarget = Schema.Struct({
   options: Schema.optional(
     OrchestratorMcpTargetOptions.annotate({
       description:
-        "Options from `orchestrator_capabilities`, such as {effort:'max'}. Given values override inherited. [] or {} clears.",
+        "Ids vary by provider; see `orchestrator_capabilities`. Given values override inherited. [] or {} clears.",
     }),
   ),
   environmentId: Schema.optional(
@@ -669,6 +669,12 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
         "Start a new provider session without the thread's earlier context, like /clear. Never steers.",
     }),
   ),
+  outputSchema: Schema.optional(
+    Schema.Record(Schema.String, Schema.Json).annotate({
+      description:
+        "JSON Schema for a result the turn must return as data, read back as `output` from `t3_thread_wait`. Never steers.",
+    }),
+  ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
 });
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
@@ -730,6 +736,12 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
       description: "Default true: return on a question or approval.",
     }),
   ),
+  untilOutput: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Also wait for the `output` the run was asked for, which a later turn may submit.",
+    }),
+  ),
   cursor: Schema.optional(
     Schema.String.annotate({
       description:
@@ -778,6 +790,8 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   items: Schema.optional(Schema.Array(OrchestratorMcpChildAttentionItem)),
   /** With `cursor`: it could not be read, so `items` holds the current state instead. */
   resync: Schema.optional(Schema.Boolean),
+  /** What the run returned against the `outputSchema` it was sent with. Absent until submitted. */
+  output: Schema.optional(Schema.Json),
 });
 export type OrchestratorMcpThreadWaitResult = typeof OrchestratorMcpThreadWaitResult.Type;
 
@@ -1025,6 +1039,25 @@ const PastedSecretValue = Schema.String.check(
   Schema.makeFilter((value: string) => value.length > 0, { expected: "a non-empty string" }),
 );
 
+const RequestSecretFields = Schema.Array(
+  Schema.Struct({
+    name: TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z][A-Za-z0-9_]{0,31}$/)),
+    label: TrimmedNonEmptyString,
+    placeholder: Schema.optional(TrimmedNonEmptyString),
+    secret: Schema.optional(Schema.Boolean).annotate({
+      description: "false shows the typed value, e.g. an email.",
+    }),
+  }),
+)
+  .check(Schema.isMinLength(1), Schema.isMaxLength(8))
+  .check(
+    Schema.makeFilter((fields) =>
+      new Set(fields.map((field) => field.name)).size === fields.length
+        ? true
+        : "Field names must be unique.",
+    ),
+  );
+
 export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   label: TrimmedNonEmptyString.annotate({
     description: "Card title, such as 'GitHub webhook secret'.",
@@ -1044,6 +1077,10 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   placeholder: Schema.optional(TrimmedNonEmptyString),
   delivery: Schema.optional(Schema.Literals(["secretRef", "file"])).annotate({
     description: "secretRef (default) for an Ada tool; file for a command.",
+  }),
+  fields: Schema.optional(RequestSecretFields).annotate({
+    description:
+      'Values only the user has, in one card, e.g. email + password, with delivery "file". Returns `files` by name.',
   }),
   value: Schema.optional(PastedSecretValue).annotate({
     description: "Pasted in this thread; no card.",
@@ -1070,6 +1107,12 @@ export const OrchestratorMcpRequestSecretResult = Schema.Union([
     file: Schema.String.annotate({
       description:
         "Owner-only file with the value. Read it inside commands and never print it. Deleted after 24 hours.",
+    }),
+  }),
+  Schema.Struct({
+    status: Schema.Literal("saved"),
+    files: Schema.Record(Schema.String, Schema.String).annotate({
+      description: "One file per field name, used like `file`.",
     }),
   }),
   Schema.Struct({
@@ -1146,6 +1189,7 @@ export type OrchestratorMcpEnvironmentUnlinkInput =
 export const OrchestratorMcpEnvironmentUnlinkResult = Schema.Struct({
   environmentId: EnvironmentId,
   removed: Schema.Boolean,
+  endedThere: Schema.Boolean,
 });
 export type OrchestratorMcpEnvironmentUnlinkResult =
   typeof OrchestratorMcpEnvironmentUnlinkResult.Type;

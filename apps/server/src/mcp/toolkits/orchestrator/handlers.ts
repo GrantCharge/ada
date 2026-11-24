@@ -316,7 +316,7 @@ export const layer = McpToolAccess.toLayer(
       t3_environment_unlink: McpToolAccess.writesEnvironment(({ environmentId }) =>
         Effect.gen(function* () {
           const links = yield* PeerLinks.PeerLinks;
-          const removed = yield* links.unlink(environmentId).pipe(
+          const result = yield* links.unlink(environmentId).pipe(
             Effect.mapError(
               (error) =>
                 new OrchestratorMcpFailure({
@@ -325,7 +325,7 @@ export const layer = McpToolAccess.toLayer(
                 }),
             ),
           );
-          return { environmentId, removed };
+          return { environmentId, ...result };
         }),
       ),
       // A device's access holds on every one of the user's machines, so it is

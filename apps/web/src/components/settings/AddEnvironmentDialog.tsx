@@ -48,6 +48,7 @@ import {
 import { useEnvironmentQuery } from "~/state/query";
 import { desktopSshHostsStateAtom, filterDiscoveredSshHosts } from "~/state/desktopSshHosts";
 import type { EnvironmentPresentation } from "~/state/environments";
+import type { AddEnvironmentPrefill } from "~/state/linkedThreadView";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import {
@@ -72,14 +73,20 @@ const sshHostSuggestionValue = (target: DesktopDiscoveredSshHost) =>
 
 export function AddEnvironmentDialog({
   open,
+  prefill = null,
   routeTarget,
   error,
   savedEnvironments,
+  initialHost = "",
   onOpenChange,
   onErrorChange,
 }: {
   readonly open: boolean;
+  /** A machine the user chose elsewhere to pair with; they supply only the pairing code. */
+  readonly prefill?: AddEnvironmentPrefill | null;
   readonly routeTarget: EnvironmentPresentation | null;
+  /** An address already known for the machine being added, such as one a link uses. */
+  readonly initialHost?: string;
   readonly error: string | null;
   readonly savedEnvironments: ReadonlyArray<EnvironmentPresentation>;
   readonly onOpenChange: (open: boolean) => void;
@@ -110,7 +117,7 @@ export function AddEnvironmentDialog({
     return keys;
   })();
   const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
-  const [savedBackendHost, setSavedBackendHost] = useState("");
+  const [savedBackendHost, setSavedBackendHost] = useState(prefill?.host ?? initialHost);
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
@@ -152,7 +159,7 @@ export function AddEnvironmentDialog({
     if (!nextOpen) {
       savedBackendSessionRef.current += 1;
       setSavedBackendMode("remote");
-      setSavedBackendHost("");
+      setSavedBackendHost(initialHost);
       setSavedBackendPairingCode("");
       setSavedBackendSshHost("");
       setSavedBackendSshUsername("");
@@ -234,9 +241,10 @@ export function AddEnvironmentDialog({
       return;
     }
 
+    const expected = routeTarget ?? prefill;
     const result = await connectPairing({
       ...remotePairingInput,
-      ...(routeTarget ? { expectedEnvironmentId: routeTarget.environmentId } : {}),
+      ...(expected ? { expectedEnvironmentId: expected.environmentId } : {}),
     });
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
@@ -614,12 +622,25 @@ export function AddEnvironmentDialog({
       <DialogPopup className="max-h-[80dvh] sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>
-            {routeTarget ? `Add a route to ${routeTarget.label}` : "Connect without Tailscale"}
+            {routeTarget
+              ? gt("Add a route to {environment}", { environment: routeTarget.label })
+              : prefill
+                ? gt("Connect to {environment}", { environment: prefill.label })
+                : gt("Connect without Tailscale")}
           </DialogTitle>
           <DialogDescription>
             {routeTarget
-              ? "Pair this machine again over another address, such as its Tailscale name. It joins the existing routes instead of adding a second machine."
-              : "Machines on your Tailscale account show up by themselves. Pair any other machine here."}
+              ? gt(
+                  "Pair this machine again over another address, such as its Tailscale name. It joins the existing routes instead of adding a second machine.",
+                )
+              : prefill
+                ? gt(
+                    "Create a pairing code on {environment}, in its Settings → Connections or with `ada auth pairing create`, and enter it here.",
+                    { environment: prefill.label },
+                  )
+                : gt(
+                    "Machines on your Tailscale account show up by themselves. Pair any other machine here.",
+                  )}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>

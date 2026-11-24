@@ -18,6 +18,7 @@ import { Route as AgentsIndexRouteImport } from './routes/agents.index'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as AgentsScheduledRouteImport } from './routes/agents.scheduled'
+import { Route as ChatWorkflowsRouteImport } from './routes/_chat.workflows'
 import { Route as ChatUsageRouteImport } from './routes/_chat.usage'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
@@ -56,6 +57,7 @@ import { Route as ChatSettingsAccessRouteImport } from './routes/_chat.settings.
 import { Route as ChatSettingsAboutRouteImport } from './routes/_chat.settings.about'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
+import { Route as ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRouteImport } from './routes/_chat.linked.$viaEnvironmentId.$linkedEnvironmentId.$linkedThreadId'
 
 const WelcomeRoute = WelcomeRouteImport.update({
   id: '/welcome',
@@ -100,6 +102,11 @@ const AgentsScheduledRoute = AgentsScheduledRouteImport.update({
   id: '/scheduled',
   path: '/scheduled',
   getParentRoute: () => AgentsRoute,
+} as any)
+const ChatWorkflowsRoute = ChatWorkflowsRouteImport.update({
+  id: '/workflows',
+  path: '/workflows',
+  getParentRoute: () => ChatRoute,
 } as any)
 const ChatUsageRoute = ChatUsageRouteImport.update({
   id: '/usage',
@@ -298,6 +305,14 @@ const ChatEnvironmentIdThreadIdRoute =
     path: '/$environmentId/$threadId',
     getParentRoute: () => ChatRoute,
   } as any)
+const ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRoute =
+  ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRouteImport.update(
+    {
+      id: '/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId',
+      path: '/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId',
+      getParentRoute: () => ChatRoute,
+    } as any,
+  )
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
@@ -310,6 +325,7 @@ export interface FileRoutesByFullPath {
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
   '/usage': typeof ChatUsageRoute
+  '/workflows': typeof ChatWorkflowsRoute
   '/agents/scheduled': typeof AgentsScheduledRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/agents/': typeof AgentsIndexRoute
@@ -346,6 +362,7 @@ export interface FileRoutesByFullPath {
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/agents/$environmentId/$threadId': typeof AgentsEnvironmentIdThreadIdRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId': typeof ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRoute
 }
 export interface FileRoutesByTo {
   '/connect-agent': typeof ConnectAgentRoute
@@ -356,6 +373,7 @@ export interface FileRoutesByTo {
   '/pull-requests': typeof ChatPullRequestsRoute
   '/settings': typeof ChatSettingsRouteWithChildren
   '/usage': typeof ChatUsageRoute
+  '/workflows': typeof ChatWorkflowsRoute
   '/agents/scheduled': typeof AgentsScheduledRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/': typeof ChatIndexRoute
@@ -393,6 +411,7 @@ export interface FileRoutesByTo {
   '/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/agents/$environmentId/$threadId': typeof AgentsEnvironmentIdThreadIdRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId': typeof ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -406,6 +425,7 @@ export interface FileRoutesById {
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/_chat/settings': typeof ChatSettingsRouteWithChildren
   '/_chat/usage': typeof ChatUsageRoute
+  '/_chat/workflows': typeof ChatWorkflowsRoute
   '/agents/scheduled': typeof AgentsScheduledRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/_chat/': typeof ChatIndexRoute
@@ -443,6 +463,7 @@ export interface FileRoutesById {
   '/_chat/settings/worktrees': typeof ChatSettingsWorktreesRoute
   '/agents/$environmentId/$threadId': typeof AgentsEnvironmentIdThreadIdRoute
   '/threads/$environmentId/$threadId': typeof ThreadsEnvironmentIdThreadIdRoute
+  '/_chat/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId': typeof ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -457,6 +478,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/settings'
     | '/usage'
+    | '/workflows'
     | '/agents/scheduled'
     | '/projects/$projectKey'
     | '/agents/'
@@ -493,6 +515,7 @@ export interface FileRouteTypes {
     | '/settings/worktrees'
     | '/agents/$environmentId/$threadId'
     | '/threads/$environmentId/$threadId'
+    | '/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect-agent'
@@ -503,6 +526,7 @@ export interface FileRouteTypes {
     | '/pull-requests'
     | '/settings'
     | '/usage'
+    | '/workflows'
     | '/agents/scheduled'
     | '/projects/$projectKey'
     | '/'
@@ -540,6 +564,7 @@ export interface FileRouteTypes {
     | '/settings/worktrees'
     | '/agents/$environmentId/$threadId'
     | '/threads/$environmentId/$threadId'
+    | '/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId'
   id:
     | '__root__'
     | '/_chat'
@@ -552,6 +577,7 @@ export interface FileRouteTypes {
     | '/_chat/pull-requests'
     | '/_chat/settings'
     | '/_chat/usage'
+    | '/_chat/workflows'
     | '/agents/scheduled'
     | '/projects/$projectKey'
     | '/_chat/'
@@ -589,6 +615,7 @@ export interface FileRouteTypes {
     | '/_chat/settings/worktrees'
     | '/agents/$environmentId/$threadId'
     | '/threads/$environmentId/$threadId'
+    | '/_chat/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -665,6 +692,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/agents/scheduled'
       preLoaderRoute: typeof AgentsScheduledRouteImport
       parentRoute: typeof AgentsRoute
+    }
+    '/_chat/workflows': {
+      id: '/_chat/workflows'
+      path: '/workflows'
+      fullPath: '/workflows'
+      preLoaderRoute: typeof ChatWorkflowsRouteImport
+      parentRoute: typeof ChatRoute
     }
     '/_chat/usage': {
       id: '/_chat/usage'
@@ -932,6 +966,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatEnvironmentIdThreadIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId': {
+      id: '/_chat/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId'
+      path: '/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId'
+      fullPath: '/linked/$viaEnvironmentId/$linkedEnvironmentId/$linkedThreadId'
+      preLoaderRoute: typeof ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRouteImport
+      parentRoute: typeof ChatRoute
+    }
   }
 }
 
@@ -1009,9 +1050,11 @@ interface ChatRouteChildren {
   ChatPullRequestsRoute: typeof ChatPullRequestsRoute
   ChatSettingsRoute: typeof ChatSettingsRouteWithChildren
   ChatUsageRoute: typeof ChatUsageRoute
+  ChatWorkflowsRoute: typeof ChatWorkflowsRoute
   ChatIndexRoute: typeof ChatIndexRoute
   ChatEnvironmentIdThreadIdRoute: typeof ChatEnvironmentIdThreadIdRoute
   ChatDraftDraftIdRoute: typeof ChatDraftDraftIdRoute
+  ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRoute: typeof ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRoute
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
@@ -1020,9 +1063,12 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatPullRequestsRoute: ChatPullRequestsRoute,
   ChatSettingsRoute: ChatSettingsRouteWithChildren,
   ChatUsageRoute: ChatUsageRoute,
+  ChatWorkflowsRoute: ChatWorkflowsRoute,
   ChatIndexRoute: ChatIndexRoute,
   ChatEnvironmentIdThreadIdRoute: ChatEnvironmentIdThreadIdRoute,
   ChatDraftDraftIdRoute: ChatDraftDraftIdRoute,
+  ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRoute:
+    ChatLinkedViaEnvironmentIdLinkedEnvironmentIdLinkedThreadIdRoute,
 }
 
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)

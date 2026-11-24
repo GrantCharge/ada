@@ -22,6 +22,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import {
+  type BackgroundWorkLossCause,
   awaitingProviderThreadId,
   cancelledRosterTaskWork,
   cancelledTurnItemWork,
@@ -246,6 +247,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
     readonly reason?: "update";
     /** A server still on this version never installed the update it paused for. */
     readonly pausedOnVersion?: string;
+    readonly cause?: BackgroundWorkLossCause;
   }) {
     const settings = yield* ServerSettings.ServerSettingsService;
     const enabled = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
@@ -325,7 +327,9 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       projection.attempts,
     );
     const noteText =
-      note.work.length === 0 ? undefined : restartCancelledBackgroundWorkNote(note.work);
+      note.work.length === 0
+        ? undefined
+        : restartCancelledBackgroundWorkNote(note.work, input.cause);
     const updated =
       input.reason === "update" ? input.pausedOnVersion !== packageJson.version : undefined;
     const continuePrompt =
@@ -348,13 +352,16 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
         notification: {
           source: { kind: "system" },
           outcome: "updated",
-          summary: note.settled
-            ? `${APP_NAME} restarted and stopped background work`
-            : updated === true
-              ? `${APP_NAME} updated and resumed this turn`
-              : updated === false
-                ? "Update didn't install; resumed"
-                : `${APP_NAME} restarted and resumed this turn`,
+          summary:
+            input.cause === "provider_exit"
+              ? "The agent runtime exited and stopped background work"
+              : note.settled
+                ? `${APP_NAME} restarted and stopped background work`
+                : updated === true
+                  ? `${APP_NAME} updated and resumed this turn`
+                  : updated === false
+                    ? "Update didn't install; resumed"
+                    : `${APP_NAME} restarted and resumed this turn`,
           detail: text,
         },
         attachments: [],

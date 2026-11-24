@@ -10,7 +10,6 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
-import { formatHostForUrl, isWildcardHost } from "@t3tools/shared/hostClassification";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
@@ -51,7 +50,11 @@ import { UpdatePause } from "./updatePause.ts";
 import { forkParked, forkParkedFiber } from "./serverActivation.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { formatHeadlessServeOutput, issueHeadlessServeAccessInfo } from "./startupAccess.ts";
+import {
+  formatHeadlessServeOutput,
+  issueHeadlessServeAccessInfo,
+  resolveLocalOrigin,
+} from "./startupAccess.ts";
 import { APP_NAME } from "@t3tools/shared/branding";
 
 export class ServerRuntimeStartupError extends Schema.TaggedError<ServerRuntimeStartupError>()(
@@ -193,7 +196,10 @@ export const autoPullProjects = Effect.fn("autoPullProjects")(function* (
     workspaceRoots,
     (cwd) =>
       Effect.gen(function* () {
-        const status = yield* git.statusDetails(cwd);
+        // Startup checks once, so it waits for the fetch rather than reading the old references.
+        const status = yield* git
+          .statusDetails(cwd)
+          .pipe(Effect.provideService(GitVcsDriver.AwaitStatusFetch, true));
         if (
           !status.isRepo ||
           !status.isDefaultBranch ||
@@ -332,12 +338,8 @@ const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
 const resolveStartupBrowserTarget = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-  const localUrl = `http://localhost:${serverConfig.port}`;
-  const bindUrl =
-    serverConfig.host && !isWildcardHost(serverConfig.host)
-      ? `http://${formatHostForUrl(serverConfig.host)}:${serverConfig.port}`
-      : localUrl;
-  const baseTarget = serverConfig.devUrl?.toString() ?? bindUrl;
+  const baseTarget =
+    serverConfig.devUrl?.toString() ?? resolveLocalOrigin(serverConfig.host, serverConfig.port);
   return serverConfig.mode === "desktop"
     ? baseTarget
     : yield* serverAuth.issueStartupPairingUrl(baseTarget);

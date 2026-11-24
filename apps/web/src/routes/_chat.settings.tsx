@@ -52,7 +52,7 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
   const m = useMessages();
   const hash = useLocation({ select: (location) => location.hash });
   const searchTarget = getSettingsSearchTargetScope(hash);
-  const autoSettlementAvailability = searchTarget?.requiresCapability
+  const targetAvailability = searchTarget?.requiresCapability
     ? getThreadAutoSettlementSearchAvailability(
         environments,
         scope,
@@ -62,16 +62,16 @@ function SettingsScopeBoundary({ pathname, children }: { pathname: string; child
   if (
     scope.kind !== "unavailable" &&
     searchTarget &&
-    autoSettlementAvailability &&
-    !autoSettlementAvailability.isTargetAvailable
+    targetAvailability &&
+    !targetAvailability.isTargetAvailable
   ) {
     return (
       <SettingsScopeNotice
         target="environment"
         targetId={hash}
-        eligibleEnvironmentIds={autoSettlementAvailability.eligibleEnvironmentIds}
+        eligibleEnvironmentIds={targetAvailability.eligibleEnvironmentIds}
       >
-        {autoSettlementAvailability.eligibleEnvironmentIds.length > 0
+        {targetAvailability.eligibleEnvironmentIds.length > 0
           ? gt("{title} requires a supporting environment. Choose one to continue.", {
               title: m(searchTarget.title),
             })

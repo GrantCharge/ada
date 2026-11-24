@@ -542,11 +542,11 @@ describe("computer toolkit", () => {
       const tap = yield* host
         .authorize({ taskId: task.taskId, step: 1, action: click("Send") })
         .pipe(Effect.forkScoped);
+      const result = yield* Fiber.join(use);
       const pending = yield* call("computer_status", {});
       const approvalId = (
         pending.structuredContent as { approvals: ReadonlyArray<{ approvalId: string }> }
       ).approvals[0]!.approvalId;
-      const result = yield* Fiber.join(use);
       yield* service.respondToApproval({
         approvalId,
         approve: false,

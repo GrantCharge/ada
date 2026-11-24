@@ -33,6 +33,12 @@ export async function runCliCommand() {
   } else if (command === "__computer-helper") {
     const { runChild } = await import("@t3tools/computer-helper/child");
     runChild();
+  } else if (command === "__cursor-sdk-worker") {
+    const [NodeServices, { runCursorSdkWorker }] = await Promise.all([
+      import("@effect/platform-node/NodeServices"),
+      import("@t3tools/provider-cursor/server/worker"),
+    ]);
+    await runCursorSdkWorker(NodeServices.layer);
   } else {
     enableCliCompileCache();
     // Windows desktop launches without stdin; attach before reading, except on fast paths using pipes.

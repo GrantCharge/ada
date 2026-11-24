@@ -4,7 +4,7 @@ import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels
 import { SessionPermissions } from "./SessionPermissions";
 import { useSearch } from "@tanstack/react-router";
 import { ChevronRightIcon } from "lucide-react";
-import { useAtomValue } from "@effect/atom-react";
+import { useAtom, useAtomValue } from "@effect/atom-react";
 import { type ReactNode, useState } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
 import {
@@ -46,6 +46,7 @@ import { useSearchableSetting } from "./settingsSearch";
 import { EnvironmentActionsMenu } from "./EnvironmentActionsMenu";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { MachinesSettings } from "./NetworkSettings";
+import { addEnvironmentPrefillAtom } from "~/state/linkedThreadView";
 import { LoadBalancingSettings } from "./LoadBalancingSettings";
 import { McpGatewaySettings } from "./McpGatewaySettings";
 import { PullRequestRoutingSettings } from "./PullRequestRoutingSettings";
@@ -328,13 +329,21 @@ function ConnectionsSettingsContent({
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
   const [routeTarget, setRouteTarget] = useState<EnvironmentPresentation | null>(null);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
+  // Set by a read-only linked thread whose machine this client is about to pair with.
+  const [addPrefill, setAddPrefill] = useAtom(addEnvironmentPrefillAtom);
   const handleAddBackendDialogOpenChange = (open: boolean) => {
     setAddBackendDialogOpen(open);
     if (open) {
       setRouteTarget(null);
     } else {
       setSavedBackendError(null);
+      setAddPrefill(null);
     }
+  };
+  const openAddRoute = (target: EnvironmentPresentation) => {
+    setRouteTarget(target);
+    setSavedBackendError(null);
+    setAddBackendDialogOpen(true);
   };
   const [removingSavedEnvironmentId, setRemovingSavedEnvironmentId] =
     useState<EnvironmentId | null>(null);
@@ -1661,7 +1670,9 @@ function ConnectionsSettingsContent({
               <ServerUpdatesAction targets={savedServerUpdateTargets} variant="ghost-muted" />
             ) : null}
             <AddEnvironmentDialog
-              open={addBackendDialogOpen}
+              key={addPrefill?.environmentId ?? "any"}
+              open={addBackendDialogOpen || addPrefill !== null}
+              prefill={addPrefill}
               routeTarget={routeTarget}
               error={savedBackendError}
               savedEnvironments={savedEnvironments}
@@ -1678,11 +1689,7 @@ function ConnectionsSettingsContent({
             removingEnvironmentId={removingSavedEnvironmentId}
             onSetEnabled={handleSetSavedBackendEnabled}
             onRemove={handleRemoveSavedBackend}
-            onAddRoute={(target) => {
-              setRouteTarget(target);
-              setSavedBackendError(null);
-              setAddBackendDialogOpen(true);
-            }}
+            onAddRoute={openAddRoute}
           />
         )}
         empty={<RemoteEnvironmentsEmptyRow savedEnvironments={savedEnvironments} />}

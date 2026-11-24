@@ -39,6 +39,8 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     processLossCount: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
     reason: Schema.optional(Schema.Literal("update")),
     pausedOnVersion: Schema.optional(Schema.String),
+    /** Set when the provider process exited under a live server; absent means a server restart. */
+    cause: Schema.optional(Schema.Literal("provider_exit")),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-session.detach"),

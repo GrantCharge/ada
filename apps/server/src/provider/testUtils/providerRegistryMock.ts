@@ -7,11 +7,13 @@ import { makeManualOnlyProviderMaintenanceCapabilities } from "@t3tools/provider
 
 const makeProviderRegistryMock = (
   providers: ReadonlyArray<ServerProvider> = [],
+  refreshed: ReadonlyArray<ServerProvider> = providers,
 ): ProviderRegistry.ProviderRegistry["Service"] => ({
   getProviders: Effect.succeed(providers),
-  refresh: () => Effect.succeed(providers),
-  refreshInstance: () => Effect.succeed(providers),
+  refresh: () => Effect.succeed(refreshed),
+  refreshInstance: () => Effect.succeed(refreshed),
   reloadSecretsAndRefresh: () => Effect.succeed(providers),
+  rebuildMissingAndRefresh: Effect.succeed(providers),
   applySecretAndRefresh: () => Effect.succeed(providers),
   refreshAfterUpdate: () => Effect.succeed(providers),
   refreshWorkspaceSnapshot: () => Effect.succeed(providers),
@@ -24,5 +26,9 @@ const makeProviderRegistryMock = (
   streamChanges: Stream.empty,
 });
 
-export const layer = (providers: ReadonlyArray<ServerProvider> = []) =>
-  Layer.succeed(ProviderRegistry.ProviderRegistry, makeProviderRegistryMock(providers));
+/** `refreshed` is what a refresh returns, for a catalog that is stale until refreshed. */
+export const layer = (
+  providers: ReadonlyArray<ServerProvider> = [],
+  refreshed: ReadonlyArray<ServerProvider> = providers,
+) =>
+  Layer.succeed(ProviderRegistry.ProviderRegistry, makeProviderRegistryMock(providers, refreshed));

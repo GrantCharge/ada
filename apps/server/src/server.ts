@@ -13,6 +13,8 @@ import * as ChildAttentionService from "./orchestration-v2/ChildAttentionService
 import * as RemoteChildFollower from "./orchestration-v2/RemoteChildFollower.ts";
 import * as ThreadTaskStore from "./threadTask/ThreadTaskStore.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
+import * as MilestoneHub from "./milestones/MilestoneHub.ts";
+import * as OrchestrationMilestones from "./milestones/OrchestrationMilestones.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
@@ -21,6 +23,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@t3tools/contracts";
+import * as FeatureFlags from "@t3tools/shared/FeatureFlags";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -33,7 +36,6 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ClientFocusBroker from "./clients/ClientFocusBroker.ts";
 import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
-import * as NonBlockingSpawner from "./process/NonBlockingSpawner.ts";
 import * as KeepAwake from "./background/KeepAwake.ts";
 import * as ServerConfig from "./config.ts";
 import { withRootRequestSpans, withUntracedRequests } from "./http.ts";
@@ -49,6 +51,7 @@ import * as Ws from "./ws.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
 import * as AgentTempDirLive from "./process/agentTempDir.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import * as ProcessLauncher from "./process/ProcessLauncher.ts";
 import * as SpawnWorker from "./process/SpawnWorker.ts";
 import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import * as PullRequestHttp from "./pullRequest/http.ts";
@@ -77,6 +80,7 @@ import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderS
 import * as OpenCodeRuntime from "@t3tools/provider-opencode/server/OpenCodeRuntime";
 import * as OpenCodeServerLedger from "@t3tools/provider-opencode/server/OpenCodeServerLedger";
 import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
+import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as AcpRegistrySupport from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -89,18 +93,22 @@ import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as SecretCheck from "./secrets/SecretCheck.ts";
 import * as SecretResolver from "./secrets/SecretResolver.ts";
 import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
+import * as ProviderHostPathWatcher from "./provider/ProviderHostPathWatcher.ts";
 import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
 import * as DefaultAgentSkills from "./defaultAgentSkills.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
+import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
+import * as PeerClientPairingHttp from "./peer/http.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as TailnetDevices from "./peer/TailnetDevices.ts";
 import * as TailnetDevicesHttp from "./peer/tailnetDevicesHttp.ts";
 import * as TailnetIdentity from "./peer/TailnetIdentity.ts";
 import * as PeerMcpClient from "./peer/PeerMcpClient.ts";
+import * as PeerThreadRelay from "./peer/PeerThreadRelay.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -143,6 +151,9 @@ import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as WorkspaceFolders from "./workspace/WorkspaceFolders.ts";
+import * as TaskFolders from "./workspace/TaskFolders.ts";
+import * as TaskFolderStore from "./workspace/TaskFolderStore.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
@@ -178,6 +189,7 @@ import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
 import { ScheduledTaskWebhookOrigin } from "./scheduledTasks/ScheduledTaskService.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as EnvironmentAuthPolicy from "./auth/EnvironmentAuthPolicy.ts";
+import * as LinkThreadHttp from "./peer/linkThreadHttp.ts";
 import * as ServerSelfUpdate from "./service/selfUpdate.ts";
 import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
 import * as ServiceLauncherClient from "./service/serviceLauncherClient.ts";
@@ -200,6 +212,7 @@ import * as UsageService from "./usage/UsageService.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
 import * as ThreadViewers from "./orchestration-v2/ThreadViewers.ts";
+import * as WorkflowForge from "./workflows/WorkflowForge.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
@@ -364,11 +377,11 @@ const layerHttpServer = Layer.unwrap(
 ).pipe(
   Layer.provide(ManagedPolicy.layer),
   // NodeHttpServer.layer also outputs NodeServices, whose spawner would shadow the wrapped one.
-  (layer) => NonBlockingSpawner.layer.pipe(Layer.provideMerge(layer)),
+  (layer) => ProcessLauncher.layerServer.pipe(Layer.provideMerge(layer)),
 );
 
 const layerPlatformServices = DocumentText.layer.pipe(
-  Layer.provideMerge(NonBlockingSpawner.layer),
+  Layer.provideMerge(ProcessLauncher.layerServer),
   Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, layerSpawner)),
 );
 
@@ -524,6 +537,9 @@ const layerWorkspace = Layer.mergeAll(
   WorkspacePaths.layer,
   layerWorkspaceEntries,
   layerWorkspaceFileSystem,
+  WorkspaceFolders.layer.pipe(
+    Layer.provide(Layer.merge(ProjectStore.layer, TaskFolderStore.layer)),
+  ),
 );
 
 const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
@@ -574,7 +590,26 @@ const layerComputer = ComputerService.layer.pipe(
   Layer.provide(ProjectionStoreV2.layer),
 );
 
+const layerTaskFolders = TaskFolders.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      TaskFolderStore.layer,
+      ProjectStore.layer,
+      ProjectionStoreV2.layer,
+      VcsProcess.layer,
+    ),
+  ),
+  Layer.provide(layerGitWorkflow),
+);
+
 const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
+  Layer.provide(
+    WorkflowForge.layer.pipe(
+      Layer.provide(layerIssueService),
+      Layer.provide(layerPullRequestService),
+      Layer.provide(RuntimeLayer.layerProjectService),
+    ),
+  ),
   // Tasks split across machines reach the other environment through the same
   // broker the WebSocket routes serve (one memoized instance).
   Layer.provide(ThreadTaskTransport.layerFromBroker.pipe(Layer.provide(layerMcpGatewayBroker))),
@@ -583,6 +618,7 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
   // Remote settlement settles children over this server's own links first.
   Layer.provide(layerPeerLinks),
   Layer.provide(UsageLimitSources.layerResetFallback),
+  Layer.provide(layerTaskFolders),
   Layer.provide(layerScheduledTaskWebhookOrigin),
   Layer.provide(layerCheckpointStore),
   Layer.provide(layerGitWorkflow),
@@ -676,6 +712,7 @@ const layerServerRestart = Layer.effect(
 );
 
 const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  ProviderHostPathWatcher.layer.pipe(Layer.provide(layerDesktopTelemetryReceiver)),
   layerThreadSettlementWorker,
   layerThreadTaskWorker,
   layerIdleCompactionWorker,
@@ -720,6 +757,11 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     }),
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
   AgentTempDirLive.layerSettledCleanup.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      yield* (yield* OrchestrationMilestones.OrchestrationMilestones).start();
+    }),
+  ).pipe(Layer.provide(OrchestrationMilestones.layer), Layer.provide(ProjectionStoreV2.layer)),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
   ProviderInstallation.layer,
@@ -729,6 +771,9 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   Layer.effectDiscard(Effect.forkScoped(DefaultAgentSkills.seed())),
 ).pipe(
   Layer.provideMerge(layerOrchestrationApplication),
+  // One hub, which the feeders above and the workflow store inside the runtime publish to.
+  Layer.provideMerge(MilestoneHub.layer),
+  Layer.provideMerge(layerTaskFolders),
   Layer.provideMerge(RuntimeLayer.layerEventInfrastructure),
   Layer.provideMerge(Layer.merge(ProjectStore.layer, ThreadSearch.layer)),
   Layer.provideMerge(SecretCheck.layer),
@@ -828,6 +873,7 @@ const layerMakeRoutes = Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
       Layer.provide(AuthHttp.layer),
       Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
+      Layer.provide(PeerClientPairingHttp.layer.pipe(Layer.provide(PeerClientPairing.layerIssuer))),
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(UpdatePauseHttp.layer),
@@ -837,10 +883,12 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(WebhookRoute.layer),
       Layer.provide(TailnetDevicesHttp.layer),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),
+      Layer.provide(ServerHttp.layerApiBodyLimit),
     ),
     ServerHttp.layerOtlpTracesProxyRoute,
     ServerHttp.layerAssetRoute,
     ServerHttp.layerAttachmentUploadRoute,
+    LinkThreadHttp.layer,
     DeviceHubProxy.layer,
     ServerBrowserStream.routeLayer,
     PreviewTunnel.routeLayer,
@@ -902,7 +950,12 @@ const layerMakeRoutes = Layer.mergeAll(
     ),
   ),
   Layer.provide(PreviewBrowser.layer),
-  Layer.provide(PeerForwarding.layer.pipe(Layer.provideMerge(layerPeerLinks))),
+  // Links to other environments, shared by clients (WebSocket) and agents (/mcp).
+  Layer.provide(
+    Layer.mergeAll(PeerForwarding.layer, PeerThreadRelay.layer, PeerClientPairing.layer).pipe(
+      Layer.provideMerge(layerPeerLinks),
+    ),
+  ),
   Layer.provide(
     SpeechService.layer.pipe(
       Layer.provide(layerServerSettings),
@@ -915,10 +968,10 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(ClientFocusBroker.layer),
   Layer.provide(layerMcpGatewayBroker),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
+  Layer.provide(ProviderMaintenanceRunner.layer),
   Layer.provide(layerCommandReadiness),
   Layer.provide(ServerHttp.layerBrowserApiCors),
   Layer.provide(ServerHttp.layerHttpCompression),
-  Layer.provide(ServerHttp.layerUnloggedSignedRequests),
 );
 
 const layerMakeServer = Layer.unwrap(
@@ -1254,6 +1307,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provideMerge(AgentScopeLive.layer),
       Layer.provideMerge(AgentTempDirLive.layer),
       Layer.provideMerge(layerPlatformServices),
+      Layer.provideMerge(FeatureFlags.layer),
       Layer.provide(Layer.succeed(HostProcess.InvokedAs, invokedAs)),
     );
   }),
@@ -1261,5 +1315,7 @@ const layerMakeServer = Layer.unwrap(
 
 export const runServer = Layer.launch(
   // For the layers above whose spawner requirement is not met by one of them.
-  layerMakeServer.pipe(Layer.provide(NonBlockingSpawner.layer.pipe(Layer.provide(layerSpawner)))),
+  layerMakeServer.pipe(
+    Layer.provide(ProcessLauncher.layerServer.pipe(Layer.provide(layerSpawner))),
+  ),
 );

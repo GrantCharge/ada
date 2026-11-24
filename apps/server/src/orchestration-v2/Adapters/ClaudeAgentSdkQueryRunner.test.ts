@@ -18,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 
@@ -31,7 +32,7 @@ import {
   ClaudeAgentSdkQueryRunner,
   type ClaudeAgentSdkQueryOpenInput,
   layerQueryRunner,
-  makeClaudeDescendantTracking,
+  makeClaudeDescendantPoll,
   spawnClaudeProcessGroup,
 } from "./ClaudeAdapterV2.ts";
 
@@ -610,47 +611,6 @@ const openFakeCli = (cli: string) =>
     });
   });
 
-it.effect("one process-table read a second serves every live Claude CLI", () =>
-  Effect.gen(function* () {
-    const row = (pid: number, ppid: number, pgid: number) => ({
-      pid,
-      ppid,
-      pgid,
-      started: "Sun Nov 15 12:00:00 2026",
-    });
-    // Each CLI has started one job that left its process group.
-    let table = [row(100, 1, 100), row(101, 100, 101), row(200, 1, 200), row(201, 200, 201)];
-    let reads = 0;
-    const killed: Array<number> = [];
-    const track = yield* makeClaudeDescendantTracking(
-      Effect.sync(() => {
-        reads += 1;
-        return table;
-      }),
-      (job) => killed.push(job.pid),
-    );
-
-    yield* TestClock.adjust("3 seconds");
-    assert.strictEqual(reads, 0, "nothing is read while no CLI runs");
-
-    const first = track(100);
-    const second = track(200);
-    yield* TestClock.adjust("2 seconds");
-    assert.strictEqual(reads, 3, "one read at the start and one per second, not one per CLI");
-
-    // The first CLI exits: its job is re-parented, so only the shared read could have recorded it.
-    table = [row(101, 1, 101), row(200, 1, 200), row(201, 200, 201)];
-    yield* first.stop;
-    assert.deepStrictEqual(killed, [101]);
-
-    yield* second.stop;
-    assert.deepStrictEqual(killed, [101, 201]);
-    const readsAfterExit = reads;
-    yield* TestClock.adjust("3 seconds");
-    assert.strictEqual(reads, readsAfterExit);
-  }),
-);
-
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI process", () => {
   // The leftover child holds a FIFO open; its death produces EOF without polling.
   it.effect("stops what the CLI left running when the session closes", () =>
@@ -775,16 +735,9 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
     "keeps only the descendants the CLI still has running, however many jobs it ran",
     () => {
       let table: ReadonlyArray<ReturnType<typeof processRow>> = [];
-      const killed: number[] = [];
-      let current = table;
-      const runner = makeClaudeDescendantTracking(
-        Effect.sync(() => current),
-        (row) => killed.push(row.pid),
-      );
+      const tracker = makeClaudeDescendantPoll(Effect.sync(() => table)).track(1000);
       const jobs = (poll: number) => [0, 1, 2, 3].map((job) => 1100 + poll * 4 + job);
       return Effect.gen(function* () {
-        const track = yield* runner;
-        const tracker = track(1000);
         for (let poll = 0; poll < 50; poll++) {
           table = [
             processRow(1000, 10, 0),
@@ -794,16 +747,235 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")("Claude CLI pro
             processRow(1002, poll === 0 ? 1003 : 1, 0),
             ...jobs(poll).map((pid) => processRow(pid, 1001, 1)),
           ];
-          current = table;
           yield* tracker.refresh;
-          current = [];
+          // A failed `ps` reads as no rows.
+          table = [];
           yield* tracker.refresh;
         }
-        current = table;
-        yield* tracker.stop;
-        assert.deepStrictEqual(killed.toSorted(byNumber), [1001, 1002, ...jobs(49)]);
+        assert.strictEqual(tracker.tracked.size, 6);
+        assert.deepStrictEqual(
+          [...tracker.tracked.values()].map((row) => row.pid).toSorted(byNumber),
+          [1001, 1002, ...jobs(49)],
+        );
       });
     },
+  );
+
+  it.effect(
+    "stops at exit only what the CLI left running, never a process that took a job's pid",
+    () => {
+      const orphan = processRow(1300, 1, 1);
+      // Unrelated processes take both finished jobs' pids, one in the second its job started.
+      const unrelated = [processRow(1100, 1, 2), processRow(1200, 1, 1)];
+      const tables = [
+        [
+          processRow(1000, 10, 0),
+          processRow(1001, 1000, 0),
+          processRow(1100, 1001, 1),
+          processRow(1200, 1001, 1),
+          processRow(1300, 1001, 1),
+        ],
+        [processRow(1000, 10, 0), orphan],
+        [processRow(1000, 10, 0), ...unrelated, orphan],
+        [...unrelated, orphan],
+      ];
+      const tracker = makeClaudeDescendantPoll(Effect.sync(() => tables.shift() ?? [])).track(1000);
+      return Effect.gen(function* () {
+        yield* tracker.refresh;
+        yield* tracker.refresh;
+        yield* tracker.refresh;
+        assert.deepStrictEqual(
+          (yield* tracker.leftovers).map((row) => row.pid),
+          [1300],
+        );
+      });
+    },
+  );
+
+  // The poll and a session close read the table independently. The older table still lists a
+  // re-parented job and the child it just started; the newer one lists a job started since.
+  it.effect(
+    "stops at exit what the poll and a session close found, reading at the same time",
+    () => {
+      type Table = ReadonlyArray<ReturnType<typeof processRow>>;
+      const cli = processRow(1000, 10, 0);
+      const olderReadStarted = Deferred.makeUnsafe<void>();
+      const olderRead = Deferred.makeUnsafe<Table>();
+      let read: Effect.Effect<Table> = Effect.succeed([
+        cli,
+        processRow(1001, 1000, 0),
+        processRow(1100, 1001, 1),
+      ]);
+      const tracker = makeClaudeDescendantPoll(Effect.suspend(() => read)).track(1000);
+      return Effect.gen(function* () {
+        yield* tracker.refresh;
+        read = Deferred.succeed(olderReadStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(olderRead)),
+        );
+        const older = yield* tracker.refresh.pipe(Effect.forkChild);
+        yield* Deferred.await(olderReadStarted);
+        read = Effect.succeed([cli, processRow(1200, 1, 1), processRow(1300, 1000, 2)]);
+        const newer = yield* tracker.refresh.pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(olderRead, [
+          cli,
+          processRow(1100, 1, 1),
+          processRow(1200, 1100, 1),
+        ]);
+        yield* Fiber.join(older);
+        yield* Fiber.join(newer);
+        read = Effect.succeed([processRow(1200, 1, 1), processRow(1300, 1, 2)]);
+        assert.deepStrictEqual(
+          (yield* tracker.leftovers).map((row) => row.pid).toSorted(byNumber),
+          [1200, 1300],
+        );
+      });
+    },
+  );
+
+  it.effect("reads the process table once per poll for every working CLI", () => {
+    let reads = 0;
+    const descendantPoll = makeClaudeDescendantPoll(
+      Effect.sync(() => {
+        reads++;
+        return [
+          processRow(1000, 10, 0),
+          processRow(1100, 1000, 1),
+          processRow(2000, 10, 0),
+          processRow(2100, 2000, 1),
+        ];
+      }),
+    );
+    const first = descendantPoll.track(1000);
+    const second = descendantPoll.track(2000);
+    return Effect.gen(function* () {
+      first.work();
+      second.work();
+      yield* descendantPoll.poll;
+      assert.strictEqual(reads, 1);
+      assert.deepStrictEqual(
+        [...first.tracked.values()].map((row) => row.pid),
+        [1100],
+      );
+      assert.deepStrictEqual(
+        [...second.tracked.values()].map((row) => row.pid),
+        [2100],
+      );
+      yield* first.leftovers;
+      assert.isTrue(descendantPoll.hasLive());
+      // A settled turn reads the table once more, then idles out of polls.
+      yield* second.settle;
+      assert.strictEqual(reads, 3);
+      assert.isFalse(descendantPoll.hasLive());
+      yield* descendantPoll.poll;
+      assert.strictEqual(reads, 3);
+    });
+  });
+
+  it.effect(
+    "does not record a poll's table into a CLI that started working after the read began",
+    () => {
+      const readStarted = Deferred.makeUnsafe<void>();
+      const table = Deferred.makeUnsafe<ReadonlyArray<ReturnType<typeof processRow>>>();
+      const descendantPoll = makeClaudeDescendantPoll(
+        Deferred.succeed(readStarted, undefined).pipe(Effect.andThen(Deferred.await(table))),
+      );
+      return Effect.gen(function* () {
+        const first = descendantPoll.track(1000);
+        first.work();
+        const polling = yield* descendantPoll.poll.pipe(Effect.forkChild);
+        yield* Deferred.await(readStarted);
+        // The earlier process at pid 2000 exited and the pid went to a newly tracked CLI.
+        const late = descendantPoll.track(2000);
+        late.work();
+        yield* Deferred.succeed(table, [
+          processRow(1000, 10, 0),
+          processRow(1100, 1000, 1),
+          processRow(2000, 10, 0),
+          processRow(2100, 2000, 1),
+        ]);
+        yield* Fiber.join(polling);
+        assert.deepStrictEqual(
+          [...first.tracked.values()].map((row) => row.pid),
+          [1100],
+        );
+        assert.strictEqual(late.tracked.size, 0);
+      });
+    },
+  );
+
+  it.effect("reads the CLI's process tree once when its turn ends and not while it is idle", () =>
+    Effect.gen(function* () {
+      const cli = fakeClaudeCli(
+        [
+          'dir=$(dirname "$0")',
+          `while read -r line; do case "$line" in *'"type":"user"'*) break;; esac; done`,
+          `perl -e 'setpgrp(0, 0); exec @ARGV' sleep 600 > "$dir/alive" &`,
+          'echo $! > "$dir/leftover.pid"',
+          `echo '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"native-session-fake-cli"}'`,
+          'read -r _ < "$dir/exit"',
+        ].join("\n"),
+      );
+      const dir = NodePath.dirname(cli);
+      NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "alive")]);
+      NodeChildProcess.execFileSync("mkfifo", [NodePath.join(dir, "exit")]);
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          try {
+            process.kill(Number(NodeFS.readFileSync(NodePath.join(dir, "leftover.pid"), "utf8")));
+          } catch {}
+          NodeFS.rmSync(dir, { recursive: true, force: true });
+        }),
+      );
+      const alive = NodeFS.createReadStream(NodePath.join(dir, "alive"));
+      const leftoverStopped = new Promise<void>((resolve) => alive.once("close", () => resolve()));
+      alive.resume();
+      let listings = 0;
+      const countingSpawner = Layer.effect(
+        ChildProcessSpawner.ChildProcessSpawner,
+        Effect.gen(function* () {
+          const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+          return ChildProcessSpawner.make((command) => {
+            if (command._tag === "StandardCommand" && command.command === "ps") listings += 1;
+            return spawner.spawn(command);
+          });
+        }),
+      ).pipe(Layer.provide(NodeServices.layer));
+
+      const session = yield* openFakeCli(cli).pipe(
+        Effect.provide(
+          layerQueryRunner.pipe(
+            Layer.provide(countingSpawner),
+            Layer.provide(PortScanner.layerTest),
+            Layer.provide(
+              Layer.succeed(ProviderEventLoggers, { native: undefined, canonical: undefined }),
+            ),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          ),
+        ),
+      );
+      const turnEnded = yield* Deferred.make<void>();
+      yield* session.messages.pipe(
+        Stream.tap((message) =>
+          message.type === "result" ? Deferred.succeed(turnEnded, undefined) : Effect.void,
+        ),
+        Stream.runDrain,
+        Effect.ignore,
+        Effect.forkScoped,
+      );
+      yield* session.offer({
+        type: "user",
+        message: { role: "user", content: "Start a job." },
+        parent_tool_use_id: null,
+        session_id: "native-session-fake-cli",
+      });
+      yield* Deferred.await(turnEnded);
+      const listingsAtTurnEnd = listings;
+      yield* TestClock.adjust("1 minute");
+      // The CLI exits on its own, so only the turn-end read can have recorded the job.
+      yield* Effect.promise(() => NodeFS.promises.writeFile(NodePath.join(dir, "exit"), "\n"));
+      yield* Effect.promise(() => leftoverStopped);
+      assert.equal(listings, listingsAtTurnEnd + 1);
+    }),
   );
 
   const rootRefusal =

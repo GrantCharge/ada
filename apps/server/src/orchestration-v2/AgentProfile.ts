@@ -43,6 +43,16 @@ export function agentProfileSelection(
   };
 }
 
+export function labelledProviders(
+  profile: Pick<McpGatewayProfile, "providerLabel">,
+  providers: ReadonlyArray<ServerProvider>,
+): ReadonlyArray<ServerProvider> {
+  if (profile.providerLabel === undefined) return [];
+  return providers.filter(
+    (provider) => (provider.displayName?.trim() || provider.driver) === profile.providerLabel,
+  );
+}
+
 export function resolveThreadCreateProfile<
   T extends {
     readonly modelSelection?: McpGatewayProfile["modelSelection"] | undefined;
@@ -92,15 +102,8 @@ export function resolveThreadCreateProfile<
   }> =
     profile.providerLabel === undefined || profile.modelLabel === undefined
       ? []
-      : providers.flatMap((provider) => {
-          const providerLabel = provider.displayName?.trim() || provider.driver;
-          if (
-            provider.enabled !== true ||
-            provider.availability === "unavailable" ||
-            providerLabel !== profile.providerLabel
-          ) {
-            return [];
-          }
+      : labelledProviders(profile, providers).flatMap((provider) => {
+          if (provider.enabled !== true || provider.availability === "unavailable") return [];
           return matchModelLabel(provider.models, profile.modelLabel!).map(({ model, effort }) => ({
             selection: { instanceId: provider.instanceId, model: model.slug },
             effort,
