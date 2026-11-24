@@ -50,16 +50,15 @@ const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
 
-  // `task` is undefined for a child chat from t3_thread_launch or create_threads.
   const wakeParent = Effect.fnUntraced(function* (
     parentThreadId: ThreadId,
-    child: Pick<OrchestrationV2AppThread, "id" | "title">,
+    child: Pick<OrchestrationV2AppThread, "id">,
     request: OrchestrationV2RuntimeRequest,
-    task: OrchestrationV2Subagent | undefined,
+    task: OrchestrationV2Subagent,
   ) {
     const key = `${parentThreadId}:${request.id}`;
-    const label = reportLabel(task === undefined ? child.title : task.title?.trim() || task.prompt);
-    const subject = task === undefined ? `Child thread ${child.id}` : `Delegated task ${task.id}`;
+    const label = reportLabel(task.title?.trim() || task.prompt);
+    const subject = `Delegated task ${task.id}`;
     const approval = isApprovalRequestKind(request.kind);
     const situation =
       request.responseCapability.type === "message"
@@ -74,12 +73,9 @@ const make = Effect.gen(function* () {
         ? `${subject} is blocked on an approval and cannot continue. Read it with t3_thread_read view activity on threadId ${child.id} (the approval_request item), or t3_get_pending_questions. Answer with t3_respond_to_approval threadId ${child.id}, approvalRequestId ${request.id} (add confirmDestructive true for a destructive-command check you approve). Approve it only if the command fits the child's task; otherwise decline and tell the child the safe form.`
         : `${situation} Read it with t3_pending_request action read, threadId ${child.id}, and requestId ${request.id}. Answer it with action respond when the answer follows from the task or the user's instructions; otherwise ask the user, then answer it. If it is no longer pending, it was answered or dismissed.`,
       notification: {
-        source:
-          task === undefined
-            ? { kind: "subagent", childThreadId: child.id }
-            : { kind: "delegated_task", taskIds: [task.id], childThreadId: child.id },
+        source: { kind: "delegated_task", taskIds: [task.id], childThreadId: child.id },
         outcome: "updated",
-        summary: `${task === undefined ? "Child thread" : "Delegated task"}${label === undefined ? "" : ` "${label}"`} ${approval ? "is waiting for approval" : "has a question"}`,
+        summary: `Delegated task${label === undefined ? "" : ` "${label}"`} ${approval ? "is waiting for approval" : "has a question"}`,
       },
       attachments: [],
       dispatchMode: { type: "queue_after_active" },
@@ -158,8 +154,8 @@ const make = Effect.gen(function* () {
   });
 
   // Runs for every domain event; most events return before any work is needed.
-  const handle: DelegatedTaskQuestionReactor["Service"]["handle"] = Effect.fnUntraced(
-    function* (event) {
+  const react = Effect.fnUntraced(
+    function* (event: OrchestrationV2DomainEvent) {
       if (event.type === "message.updated") return yield* closeAnsweredQuestions(event);
       if (event.type === "run.updated") {
         if (!["completed", "failed", "waiting"].includes(event.payload.status)) return;
@@ -244,7 +240,6 @@ const make = Effect.gen(function* () {
         return;
       }
       const child = yield* projections.getThread(event.threadId);
-      const relationship = threadParentRelationship(child);
       const parentThreadId = localParentThreadId(child);
       if (parentThreadId === null) return;
       const request = yield* projections.getRuntimeRequest(event.threadId, event.payload.id);
@@ -263,8 +258,9 @@ const make = Effect.gen(function* () {
       const task = parent.subagents.find(
         (candidate) => candidate.origin === "app_owned" && candidate.id === taskId,
       );
+      // A child chat without a task reports through ChildAttentionService.
       if (
-        (task === undefined && relationship !== "child") ||
+        task === undefined ||
         parent.thread.archivedAt !== null ||
         parent.thread.deletedAt !== null
       ) {
@@ -304,15 +300,28 @@ const make = Effect.gen(function* () {
       case "subagent.updated":
         return Effect.succeed(event.payload.threadId);
       case "runtime-request.updated":
-        return event.payload.kind === "user_input"
-          ? projections
-              .getThread(event.threadId)
-              .pipe(Effect.map((child) => child.lineage.parentThreadId))
+        return wakesParent(event.payload.kind)
+          ? projections.getThread(event.threadId).pipe(Effect.map(localParentThreadId))
           : Effect.succeed(null);
+      case "message.updated":
+        return Effect.succeed(
+          event.payload.role === "user" ? (event.payload.senderThreadId ?? null) : null,
+        );
       default:
         return Effect.succeed(null);
     }
   };
+
+  const handle: DelegatedTaskQuestionReactor["Service"]["handle"] = (event) =>
+    parentOf(event).pipe(
+      Effect.flatMap((parentThreadId) => (parentThreadId === null ? Effect.void : react(event))),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("finding the parent of a delegated task question failed", {
+          threadId: event.threadId,
+          cause,
+        }),
+      ),
+    );
 
   const start: DelegatedTaskQuestionReactor["Service"]["start"] = Effect.fn(
     "DelegatedTaskQuestionReactor.start",
@@ -324,7 +333,7 @@ const make = Effect.gen(function* () {
           Effect.flatMap((parentThreadId) =>
             parentThreadId === null
               ? Effect.void
-              : parentReactions.run(parentThreadId, handle(event)),
+              : parentReactions.run(parentThreadId, react(event)),
           ),
           Effect.catchCause((cause) =>
             Effect.logWarning("finding the parent of a delegated task question failed", {

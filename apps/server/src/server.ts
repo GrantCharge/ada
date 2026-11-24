@@ -9,6 +9,9 @@ import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
 import * as HeadlessGatewayHost from "./mcp/agents/HeadlessGatewayHost.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
+import * as ChildAttentionService from "./orchestration-v2/ChildAttentionService.ts";
+import * as RemoteChildFollower from "./orchestration-v2/RemoteChildFollower.ts";
+import * as ThreadTaskStore from "./threadTask/ThreadTaskStore.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
 import * as MilestoneHub from "./milestones/MilestoneHub.ts";
 import * as OrchestrationMilestones from "./milestones/OrchestrationMilestones.ts";
@@ -908,6 +911,17 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
   ),
+  // Tells parents about their child chats, here and on other environments.
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      yield* (yield* ChildAttentionService.ChildAttentionService).start();
+      yield* (yield* RemoteChildFollower.RemoteChildFollower).start();
+    }),
+  ).pipe(
+    Layer.provide(RemoteChildFollower.layer),
+    Layer.provide(ThreadTaskStore.layer),
+    Layer.provide(LocalGatewayPort.layer),
+  ),
   // Finds and links this user's other T3 servers on the tailnet.
   Layer.effectDiscard(
     TailnetDevices.TailnetDevices.pipe(Effect.flatMap((devices) => devices.start)),
@@ -916,8 +930,13 @@ const layerMakeRoutes = Layer.mergeAll(
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),
-  // delegate_task to a linked environment, from /mcp and the follower above.
-  Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  // delegate_task to a linked environment, from /mcp and the follower above. One child
+  // attention instance serves its starter above and /mcp acknowledging what a parent read.
+  Layer.provide(
+    Layer.mergeAll(RemoteDelegation.layer, ChildAttentionService.layer).pipe(
+      Layer.provide(Layer.mergeAll(ProjectionStoreV2.layer, ThreadTaskStore.layer)),
+    ),
+  ),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.
   Layer.provide(PeerLinkRequests.layer),
   // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.

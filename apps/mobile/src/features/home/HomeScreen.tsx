@@ -144,6 +144,10 @@ interface HomeScreenProps {
     thread: EnvironmentThreadShell,
     enabled: boolean,
   ) => Promise<boolean>;
+  readonly onSetThreadChildWake: (
+    thread: EnvironmentThreadShell,
+    enabled: boolean,
+  ) => Promise<boolean>;
   readonly onMoveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
@@ -374,6 +378,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const handleMoveThread = props.onMoveThread;
   const handleUnpinThread = props.onUnpinThread;
   const handleSetThreadAutoSettle = props.onSetThreadAutoSettle;
+  const handleSetThreadChildWake = props.onSetThreadChildWake;
   const handleRegenerateThreadTitle = props.onRegenerateThreadTitle;
   const handleRenameThread = props.onRenameThread;
   const handleRemoveThreadFromParent = (thread: EnvironmentThreadShell) => {
@@ -412,6 +417,7 @@ export function HomeScreen(props: HomeScreenProps) {
     snoozePresetsByEnvironmentId,
     pinningEnvironmentIds,
     autoSettleOptOutEnvironmentIds,
+    childWakeEnvironmentIds,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
@@ -597,6 +603,7 @@ export function HomeScreen(props: HomeScreenProps) {
         snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
         pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
         autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
+        childWakeSupported={childWakeEnvironmentIds.has(thread.environmentId)}
         reorderSupported={
           // A child chat's place follows its parent's.
           item.item.depth === 0 &&
@@ -612,6 +619,7 @@ export function HomeScreen(props: HomeScreenProps) {
         onPinThread={handlePinThread}
         onUnpinThread={handleUnpinThread}
         onSetThreadAutoSettle={handleSetThreadAutoSettle}
+        onSetThreadChildWake={handleSetThreadChildWake}
         onMoveThread={handleMoveThread}
         onSwipeableClose={handleSwipeableClose}
         onSwipeableWillOpen={handleSwipeableWillOpen}

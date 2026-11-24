@@ -1015,6 +1015,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     unpinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadChildWake,
     turnThreadIntoProject,
     reorderPinnedThread,
     reorderActiveThread,
@@ -2755,6 +2756,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const supportsAutoSettleOptOut =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadAutoSettleOptOut === true;
+        const supportsChildWake =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadChildWake ===
+          true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
@@ -2791,6 +2795,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               isPinned,
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
+              childWakeEnabled: thread.childWakeMutedAt == null,
               isSnoozed,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
@@ -2801,6 +2806,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               supports: {
                 settlement: configLoaded,
                 autoSettleOptOut: supportsAutoSettleOptOut,
+                childWake: supportsChildWake,
                 snooze: configLoaded,
                 pinning: configLoaded,
                 titleRegeneration: configLoaded,
@@ -2911,6 +2917,24 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 stackedThreadToast({
                   type: "error",
                   title: gt("Failed to update auto-settle"),
+                  description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
+                }),
+              );
+            }
+            return;
+          }
+          case "child-wake:enabled":
+          case "child-wake:disabled": {
+            const result = await setThreadChildWake(
+              threadRef,
+              clicked.value === "child-wake:enabled",
+            );
+            if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: gt("Failed to update child chat messages"),
                   description: thrownErrorMessage(error, m) ?? gt("An error occurred."),
                 }),
               );

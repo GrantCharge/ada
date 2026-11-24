@@ -17,6 +17,9 @@ export type ThreadActionMenuId =
   | "auto-settle"
   | "auto-settle:enabled"
   | "auto-settle:disabled"
+  | "child-wake"
+  | "child-wake:enabled"
+  | "child-wake:disabled"
   | "snooze"
   | `snooze:${string}`
   | "unsnooze"
@@ -105,6 +108,7 @@ export interface ThreadActionMenuState {
   readonly isPinned: boolean;
   readonly isSettled: boolean;
   readonly autoSettleEnabled: boolean;
+  readonly childWakeEnabled: boolean;
   readonly isSnoozed: boolean;
   readonly canSnoozeNow: boolean;
   readonly isRegeneratingTitle: boolean;
@@ -115,6 +119,7 @@ export interface ThreadActionMenuState {
   readonly supports: {
     readonly settlement: boolean;
     readonly autoSettleOptOut: boolean;
+    readonly childWake: boolean;
     readonly snooze: boolean;
     readonly pinning: boolean;
     readonly titleRegeneration: boolean;
@@ -257,6 +262,27 @@ export function buildThreadActionMenuItems(
                 id: "auto-settle:disabled" as const,
                 label: resolve(msg("Never", { $context: "auto-settle never" })),
                 checked: !state.autoSettleEnabled,
+              },
+            ],
+          },
+        ]
+      : []),
+    ...(state.supports.childWake
+      ? [
+          {
+            id: "child-wake" as const,
+            label: resolve(msg("Child chat messages")),
+            icon: "message-square",
+            children: [
+              {
+                id: "child-wake:enabled" as const,
+                label: resolve(msg("Message me", { $context: "child chat messages on" })),
+                checked: state.childWakeEnabled,
+              },
+              {
+                id: "child-wake:disabled" as const,
+                label: resolve(msg("Never", { $context: "child chat messages never" })),
+                checked: !state.childWakeEnabled,
               },
             ],
           },

@@ -1,6 +1,7 @@
 import { resolveScheduledTaskProfileRouting } from "@t3tools/client-runtime/gateway";
 import {
   CommandId,
+  type OrchestrationV2ChildAttention,
   type RunId,
   idleCompactionOf,
   isProviderAvailable,
@@ -74,6 +75,12 @@ import {
 } from "@t3tools/contracts";
 import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@t3tools/shared/model";
 import { backgroundWorkHoldsCompletion } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import { acknowledgedReport, fnv1a } from "../orchestration-v2/ChildAttentionService.ts";
+import {
+  childAttention,
+  childAttentionCursor,
+  childAttentionCursorKey,
+} from "@t3tools/shared/childAttention";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { formatThreadLink } from "@t3tools/shared/threadLinks";
@@ -1006,6 +1013,12 @@ function threadSnooze(
   };
 }
 
+function threadChildAttention(
+  shell: OrchestrationV2ThreadShell,
+): Pick<OrchestratorMcpThreadListItem, "childAttention"> {
+  return shell.parentThreadId == null ? {} : { childAttention: childAttention(shell) };
+}
+
 // Provider-internal links (parentTaskId, providerInstanceId) stay out of agent results.
 function threadBackgroundWork(
   thread: Pick<OrchestrationV2ThreadShell, "blockedOnThreadWait" | "pendingBackgroundTasks">,
@@ -1106,6 +1119,7 @@ function listItemFromShell(
     ...threadSnooze(shell, nowMs),
     pinned: shell.pinnedAt != null,
     ...threadBackgroundWork(shell),
+    ...threadChildAttention(shell),
     ...(scope.client?.linked === true ? linkedThreadParent(shell) : threadParent(shell)),
     ...(shell.delegatedFrom == null ? {} : { delegatedFrom: shell.delegatedFrom }),
     itemCount: shell.visibleItemCount,
@@ -1172,6 +1186,7 @@ function threadDetail(
     ...threadSnooze(shell, nowMs),
     pinned: shell.pinnedAt != null,
     ...threadBackgroundWork(shell),
+    ...threadChildAttention(shell),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),
   };
@@ -1606,6 +1621,58 @@ const make = Effect.gen(function* () {
       .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
       .pipe(Effect.mapError(threadManagementFailure));
   });
+
+  // A shell alone says a child finished even while its own children still work.
+  const withSubtreeAttention = <
+    T extends {
+      readonly threadId: ThreadId;
+      readonly projectId: ProjectId;
+      readonly childAttention?: OrchestrationV2ChildAttention | undefined;
+    },
+  >(
+    item: T,
+  ): Effect.Effect<T> =>
+    item.childAttention?.state !== "finished"
+      ? Effect.succeed(item)
+      : threadManagement
+          .readChildAttention({ projectId: item.projectId, threadId: item.threadId })
+          .pipe(
+            Effect.map((reading): T =>
+              reading === null ? item : { ...item, childAttention: reading.attention },
+            ),
+            Effect.orElseSucceed(() => item),
+          );
+
+  // A parent that read or waited on its child and saw its news needs no digest about it afterwards.
+  const acknowledgeChildAttention = Effect.fn("OrchestratorMcpService.acknowledgeChildAttention")(
+    function* (
+      parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
+      child: Pick<OrchestrationV2ThreadProjection, "thread">,
+      attention: OrchestrationV2ChildAttention,
+    ) {
+      if (parent === undefined || child.thread.parentThreadId !== parent.thread.id) return;
+      const report = acknowledgedReport(
+        attention,
+        parent.thread.childAttentionReported?.[child.thread.id],
+        yield* Clock.currentTimeMillis,
+      );
+      if (report === null) return;
+      yield* threadManagement
+        .dispatch({
+          type: "thread.child-attention.sync",
+          commandId: CommandId.make(
+            `server:child-attention-ack:${parent.thread.id}:${child.thread.id}:${fnv1a(report.key)}`,
+          ),
+          threadId: parent.thread.id,
+          reported: { [child.thread.id]: report },
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("recording a child's attention the parent saw failed", { cause }),
+          ),
+        );
+    },
+  );
 
   const loadScopedThread = Effect.fn("OrchestratorMcpService.loadScopedThread")(function* <
     K extends "runs",
@@ -3797,7 +3864,9 @@ const make = Effect.gen(function* () {
       return {
         projectId,
         currentThreadId: parent?.thread.id ?? null,
-        threads: page.map((shell) => listItemFromShell(scope, shell, nowMs)),
+        threads: yield* Effect.forEach(page, (shell) =>
+          withSubtreeAttention(listItemFromShell(scope, shell, nowMs)),
+        ),
         nextCursor,
         total,
       } satisfies OrchestratorMcpThreadListResult;
@@ -3844,17 +3913,22 @@ const make = Effect.gen(function* () {
         { concurrency: 1 },
       );
       const messagesByThreadId = new Map(sourceMessages);
-      const thread = threadDetail(
-        scope,
-        target,
-        runCount,
-        timeline.totalItems,
-        shell,
-        yield* Clock.currentTimeMillis,
-        input.afterPosition === undefined &&
-          input.itemId === undefined &&
-          (input.beforePosition === undefined || input.beforePosition >= timeline.totalItems),
+      const thread = yield* withSubtreeAttention(
+        threadDetail(
+          scope,
+          target,
+          runCount,
+          timeline.totalItems,
+          shell,
+          yield* Clock.currentTimeMillis,
+          input.afterPosition === undefined &&
+            input.itemId === undefined &&
+            (input.beforePosition === undefined || input.beforePosition >= timeline.totalItems),
+        ),
       );
+      if (thread.childAttention !== undefined) {
+        yield* acknowledgeChildAttention(parent, target, thread.childAttention);
+      }
       const recentRuns = target.runs
         .toSorted((left, right) => right.ordinal - left.ordinal)
         .slice(0, runLimit)
@@ -4005,6 +4079,45 @@ const make = Effect.gen(function* () {
     }),
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
       const { parent, target } = yield* loadScopedThread(scope, input.threadId, []);
+      const thread = { projectId: target.thread.projectId, threadId: input.threadId };
+      if (input.cursor !== undefined) {
+        const afterKey = childAttentionCursorKey(input.cursor);
+        const { reading, changed } = yield* (
+          afterKey === null
+            ? threadManagement
+                .readChildAttention(thread)
+                .pipe(Effect.map((reading) => ({ reading, changed: true })))
+            : threadManagement.waitForChildAttention({
+                ...thread,
+                afterKey,
+                timeoutMs: clampWaitTimeoutMs(input.timeoutMs),
+              })
+        ).pipe(Effect.mapError(threadManagementFailure));
+        if (reading === null) {
+          return yield* failure("thread_not_found", `Thread ${input.threadId} no longer exists.`);
+        }
+        if (changed) yield* acknowledgeChildAttention(parent, target, reading.attention);
+        return {
+          environmentId: scope.environmentId,
+          threadId: input.threadId,
+          runId: reading.shell.latestRunId,
+          status: listedThreadStatus(reading.shell),
+          timedOut: !changed,
+          cursor: changed ? childAttentionCursor(reading.attention) : input.cursor,
+          items: changed
+            ? [
+                {
+                  threadId: input.threadId,
+                  attention: reading.attention,
+                  ...(reading.shell.latestRunCompletedAt == null
+                    ? {}
+                    : { completedAt: DateTime.formatIso(reading.shell.latestRunCompletedAt) }),
+                },
+              ]
+            : [],
+          ...(afterKey === null ? { resync: true } : {}),
+        } satisfies OrchestratorMcpThreadWaitResult;
+      }
       const result = yield* threadManagement
         .waitForThread({
           projectId: target.thread.projectId,
@@ -4048,6 +4161,15 @@ const make = Effect.gen(function* () {
         !childRequests.some(
           (request) => request.status === "pending" && request.responseCapability.type === "live",
         );
+      const reading =
+        target.thread.parentThreadId == null
+          ? null
+          : yield* threadManagement
+              .readChildAttention(thread)
+              .pipe(Effect.mapError(threadManagementFailure));
+      if (reading !== null && !result.timedOut) {
+        yield* acknowledgeChildAttention(parent, target, reading.attention);
+      }
       return {
         environmentId: scope.environmentId,
         threadId: input.threadId,
@@ -4071,6 +4193,7 @@ const make = Effect.gen(function* () {
           ? {}
           : { pendingBackgroundTaskCount: result.pendingBackgroundTaskCount }),
         ...(result.run?.output === undefined ? {} : { output: result.run.output.value }),
+        ...(reading === null ? {} : { cursor: childAttentionCursor(reading.attention) }),
       } satisfies OrchestratorMcpThreadWaitResult;
     }),
     interruptThread: Effect.fn("OrchestratorMcpService.interruptThread")(function* (scope, input) {

@@ -56,6 +56,13 @@ function environmentSupportsAutoSettleOptOut(
   );
 }
 
+function environmentSupportsChildWake(environmentId: EnvironmentThreadShell["environmentId"]) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadChildWake === true
+  );
+}
+
 type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
 
 const ACTION_FAILURES: Record<ThreadListAction, string> = {
@@ -240,6 +247,10 @@ export function useThreadListActions(): {
     thread: EnvironmentThreadShell,
     enabled: boolean,
   ) => Promise<boolean>;
+  readonly setThreadChildWake: (
+    thread: EnvironmentThreadShell,
+    enabled: boolean,
+  ) => Promise<boolean>;
   readonly moveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
@@ -255,6 +266,9 @@ export function useThreadListActions(): {
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
   const setAutoSettleMutation = useAtomCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
+  const setChildWakeMutation = useAtomCommand(threadEnvironment.setChildWake, {
     reportFailure: false,
   });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -575,6 +589,35 @@ export function useThreadListActions(): {
     }
     return true;
   };
+  const setThreadChildWake = async (thread: EnvironmentThreadShell, enabled: boolean) => {
+    if (!environmentSupportsChildWake(thread.environmentId)) {
+      Dialog.alert(
+        m(msg("Could not update child chat messages")),
+        m(
+          msg(
+            "This environment's server does not support child chat messages yet. Update the server to use it.",
+          ),
+        ),
+      );
+      return false;
+    }
+    selectionHaptic();
+    const result = await setChildWakeMutation({
+      environmentId: thread.environmentId,
+      input: { threadId: thread.id, enabled },
+    });
+    if (result._tag === "Failure") {
+      const error = Cause.squash(result.cause);
+      Dialog.alert(
+        m(msg("Could not update child chat messages")),
+        error instanceof Error && errorDisplayMessage(error, m) !== null
+          ? (errorDisplayMessage(error, m) ?? error.message)
+          : m(msg("The child chat messages setting could not be changed.")),
+      );
+      return false;
+    }
+    return true;
+  };
   const regenerateThreadTitle = async (thread: EnvironmentThreadShell) => {
     if (!checkThreadOperationPermission(thread, m(msg("Could not regenerate title")))) return false;
     const key = scopedThreadKey(thread.environmentId, thread.id);
@@ -838,6 +881,7 @@ export function useThreadListActions(): {
     pinThread: (thread) => pinThread(liveThread(thread)),
     unpinThread: (thread) => unpinThread(liveThread(thread)),
     setThreadAutoSettle: (thread, enabled) => setThreadAutoSettle(liveThread(thread), enabled),
+    setThreadChildWake: (thread, enabled) => setThreadChildWake(liveThread(thread), enabled),
     moveThread,
     renameThread: (thread) => renameThread(liveThread(thread)),
     regenerateThreadTitle: (thread) => regenerateThreadTitle(liveThread(thread)),

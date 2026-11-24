@@ -91,6 +91,11 @@ export class ThreadTaskStore extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<ThreadTask>, ThreadTaskStoreError>;
     /** Tasks with an undelivered wake or an unfinished settlement, for restart recovery. */
     readonly listUnfinished: () => Effect.Effect<ReadonlyArray<ThreadTask>, ThreadTaskStoreError>;
+    /** Mirrors of children on other environments whose owner is here, not yet settled. */
+    readonly listRemoteWorkers: () => Effect.Effect<
+      ReadonlyArray<ThreadTask>,
+      ThreadTaskStoreError
+    >;
     readonly latestCursor: Effect.Effect<number, ThreadTaskStoreError>;
     readonly getLink: (
       workerThreadId: ThreadId,
@@ -290,6 +295,18 @@ const make = Effect.gen(function* () {
       `.pipe(
         Effect.mapError(fail("list-unfinished")),
         Effect.flatMap(decodeRows("list-unfinished")),
+      ),
+    ),
+    listRemoteWorkers: Effect.fn("ThreadTaskStore.listRemoteWorkers")(() =>
+      sql<{ readonly payload: string }>`
+        SELECT payload_json AS payload FROM thread_tasks
+        WHERE json_extract(payload_json, '$.workerEnvironmentId') IS NOT NULL
+          AND json_extract(payload_json, '$.ownerEnvironmentId') IS NULL
+          AND json_extract(payload_json, '$.settlement.state') IS NOT 'settled'
+        ORDER BY cursor
+      `.pipe(
+        Effect.mapError(fail("list-remote-workers")),
+        Effect.flatMap(decodeRows("list-remote-workers")),
       ),
     ),
     latestCursor,

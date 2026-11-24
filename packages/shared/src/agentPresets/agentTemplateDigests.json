@@ -4,8 +4,8 @@
     "updatedAt": "2026-11-17T00:00:00.000Z"
   },
   "presets/captain": {
-    "digest": "ecee84276b285d7d",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "d6e6f5e4062a0496",
+    "updatedAt": "2026-11-24T00:00:00.000Z"
   },
   "presets/cleaner": {
     "digest": "32cd5fed10f88823",
@@ -28,8 +28,8 @@
     "updatedAt": "2026-11-17T00:00:00.000Z"
   },
   "skills/captain-event-loop": {
-    "digest": "90cc73a308d0c20d",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "fe0507d2befa0db0",
+    "updatedAt": "2026-11-24T00:00:00.000Z"
   },
   "skills/diagnose": {
     "digest": "17854abc1dcc89d6",
@@ -64,8 +64,8 @@
     "updatedAt": "2026-11-17T00:00:00.000Z"
   },
   "skills/t3-agents": {
-    "digest": "bbbd884d51db45cb",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "4ffed9769d21ab3c",
+    "updatedAt": "2026-11-24T00:00:00.000Z"
   },
   "skills/worktree-cleanup-rule": {
     "digest": "33873f2a8a055f60",

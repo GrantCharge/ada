@@ -392,6 +392,88 @@ it.effect("waitForThread follows a restart continuation instead of the cut run",
   }),
 );
 
+it.effect("waitForChildAttention returns on the child's next news, not on a replayed run", () =>
+  Effect.gen(function* () {
+    const projectId = ProjectId.make("project:thread-management:attention");
+    const threadId = ThreadId.make("thread:thread-management:attention");
+    const first = RunId.make("run:thread-management:attention:1");
+    const second = RunId.make("run:thread-management:attention:2");
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+    let shell = { status: "completed", latestRunId: first, latestRunStartedAt: null };
+    const runUpdated = (sequence: number) =>
+      ({
+        sequence,
+        event: { threadId, type: "run.updated", payload: {} },
+      }) as unknown as OrchestrationV2StoredEvent;
+    const layerTest = ThreadManagementService.layer.pipe(
+      Layer.provide(
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          hasActiveDescendants: () => Effect.succeed(false),
+        }),
+      ),
+      Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+      Layer.provide(
+        Layer.mock(Orchestrator.OrchestratorV2)({
+          getThreadEventSequence: () => Effect.succeed(0),
+          getThreadShell: () =>
+            Effect.sync(
+              () =>
+                ({
+                  ...shell,
+                  pendingRuntimeRequest: null,
+                  pendingBackgroundTasks: [],
+                  deletedAt: null,
+                }) as unknown as OrchestrationV2ThreadShell,
+            ),
+          streamStoredEventsFrom: (input) =>
+            input?.eventType === "run.updated"
+              ? Stream.fromEffect(Deferred.succeed(subscribed, undefined)).pipe(
+                  Stream.drain,
+                  Stream.concat(Stream.fromQueue(events)),
+                )
+              : Stream.never,
+        }),
+      ),
+      Layer.provide(ServerSettings.layerTest()),
+      Layer.provide(layerReceiptsTest),
+    );
+    const service = yield* ThreadManagementService.ThreadManagementService.pipe(
+      Effect.provide(layerTest),
+    );
+    const afterKey = `finished:${first}:`;
+    const fiber = yield* service
+      .waitForChildAttention({ projectId, threadId, afterKey, timeoutMs: 60 * 60 * 1_000 })
+      .pipe(Effect.forkChild);
+    yield* Effect.raceFirst(Deferred.await(subscribed), Fiber.await(fiber));
+    // A rewrite of the finished run and the next run's start are not news.
+    yield* Queue.offer(events, runUpdated(1));
+    shell = { status: "running", latestRunId: second, latestRunStartedAt: null };
+    yield* Queue.offer(events, runUpdated(2));
+    shell = { status: "completed", latestRunId: second, latestRunStartedAt: null };
+    yield* Queue.offer(events, runUpdated(3));
+
+    expect(yield* Fiber.join(fiber)).toMatchObject({
+      changed: true,
+      reading: { attention: { state: "finished", runId: second } },
+    });
+
+    const quiet = yield* service
+      .waitForChildAttention({
+        projectId,
+        threadId,
+        afterKey: `finished:${second}:`,
+        timeoutMs: 1_000,
+      })
+      .pipe(Effect.forkChild);
+    yield* TestClock.adjust(Duration.millis(1_000));
+    expect(yield* Fiber.join(quiet)).toMatchObject({
+      changed: false,
+      reading: { attention: { state: "finished", runId: second } },
+    });
+  }),
+);
+
 it.effect("waitForThread returns early once the thread blocks on a live question", () =>
   Effect.gen(function* () {
     const projectId = ProjectId.make("project:thread-management:wait-question");

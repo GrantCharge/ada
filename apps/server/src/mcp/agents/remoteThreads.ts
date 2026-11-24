@@ -318,7 +318,7 @@ const callRelayed = (remote: RemoteEnvironment, name: string, args: Record<strin
 
 const decodeRemoteThread = Schema.decodeUnknownEffect(McpGatewayRelayThread);
 
-const getRemoteThread = (remote: RemoteEnvironment, threadId: ThreadId) =>
+export const getRemoteThread = (remote: RemoteEnvironment, threadId: ThreadId) =>
   callRemote(remote, "t3_get_thread", { threadId }).pipe(
     Effect.flatMap((value) =>
       decodeRemoteThread(value).pipe(
@@ -452,6 +452,23 @@ class RemoteThreadListError extends Schema.TaggedError<RemoteThreadListError>()(
 ) {}
 
 const decodeSummaries = Schema.decodeUnknownEffect(McpGatewayRelayThreadList);
+
+/** The relaying app's small summary of every thread on the environment. */
+export const listRemoteThreadSummaries = (remote: RemoteEnvironment) =>
+  Effect.tryPromise({
+    try: () => remote.gateway.contextFor(remote.modeCeiling).port.listThreads(remote.environmentId),
+    catch: (cause) => new RemoteThreadListError({ cause }),
+  }).pipe(
+    Effect.flatMap(decodeSummaries),
+    Effect.map(({ items }) => items),
+    Effect.mapError(
+      () =>
+        new OrchestratorMcpFailure({
+          code: "orchestration_error",
+          message: `Environment ${remote.environmentId} did not list its threads.`,
+        }),
+    ),
+  );
 
 /** Whether the environment's thread list still shows this run active: a small read per poll. */
 const stillActive = (remote: RemoteEnvironment, threadId: ThreadId, runId: RunId) =>

@@ -71,6 +71,7 @@ import type {
 } from "./port.ts";
 import { APP_NAME } from "@t3tools/shared/branding";
 import { findReasoningEffortDescriptor, matchModelLabel } from "@t3tools/shared/model";
+import { threadShellHasActiveWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 
 /**
  * Agent tools act on an environment this gateway already connected to, so the
@@ -349,9 +350,11 @@ function gatewayThreadShellProjection(thread: OrchestrationV2ThreadShell) {
     hasPendingApprovals:
       thread.pendingRuntimeRequest !== null && thread.pendingRuntimeRequest.kind !== "user_input",
     hasPendingUserInput: thread.pendingRuntimeRequest?.kind === "user_input",
+    pendingRequestId: thread.pendingRuntimeRequest?.id ?? null,
     modelSelection: thread.modelSelection,
     latestRunId: thread.latestRunId,
     activeRunId: thread.activeRunId,
+    hasActiveWork: threadShellHasActiveWork(thread),
     createdAt: iso(thread.createdAt),
     updatedAt: iso(thread.updatedAt),
   };

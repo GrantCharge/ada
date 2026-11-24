@@ -830,6 +830,12 @@ wake it or a chat below it later, such as a watched pull request, a background m
 scheduled task bound to the chat. A child chat starts with a **Child of** link to its parent, and a
 parent's details list its **Children** with their status.
 
+When a child chat finishes, stops, fails, hits a usage limit, needs an answer or approval, or
+stops answering on another machine, its parent agent gets one message about it once the parent is
+idle, so a lead agent never has to keep checking on its children. To stop these messages for one
+chat, open its menu and set **Child chat messages** to **Never**; set it back to **Message me** to
+hear about anything still waiting.
+
 Manually settling a parent card also settles its child chats through the existing cascade.
 Child chats on another machine follow over that machine's full-access link, or through the desktop
 app; one that is offline catches up within a minute of answering again, for up to seven days.

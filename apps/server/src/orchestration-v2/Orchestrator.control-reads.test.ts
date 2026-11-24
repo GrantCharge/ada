@@ -1318,7 +1318,7 @@ it.effect("keeps delegated child pull-request links independent of the parent", 
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("a named child's or child chat's question or approval wakes its parent", () =>
+it.effect("a named child's question wakes its parent; a child chat reports through attention", () =>
   Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -1425,11 +1425,6 @@ it.effect("a named child's or child chat's question or approval wakes its parent
       wakes.map((wake) => wake.notification),
       [
         {
-          source: { kind: "subagent", childThreadId: launchedThreadId },
-          outcome: "updated",
-          summary: 'Child thread "Reviewer" has a question',
-        },
-        {
           source: {
             kind: "delegated_task",
             taskIds: [task.id],
@@ -1439,10 +1434,6 @@ it.effect("a named child's or child chat's question or approval wakes its parent
           summary: 'Delegated task "Research the sources" has a question',
         },
       ],
-    );
-    assert.include(
-      wakes[0]?.text,
-      `Child thread ${launchedThreadId} asked a question and is still working. Read it with t3_pending_request action read, threadId ${launchedThreadId}, and requestId ${launched.payload.id}.`,
     );
 
     const sendFrom = (senderThreadId: ThreadId, threadId: ThreadId) =>
@@ -1523,39 +1514,10 @@ it.effect("a named child's or child chat's question or approval wakes its parent
     yield* reactor.handle(approval);
     yield* reactor.handle(approval);
     yield* reactor.handle(remoteApproval);
-    const approvalWakes = (yield* projections.getThreadRecords(parentThreadId, [
-      "messages",
-    ])).messages.filter((message) => message.notification?.summary.includes("approval"));
-    assert.deepEqual(
-      approvalWakes.map((wake) => wake.notification),
-      [
-        {
-          source: { kind: "subagent", childThreadId: launchedThreadId },
-          outcome: "updated",
-          summary: 'Child thread "Reviewer" is waiting for approval',
-        },
-      ],
-    );
-    assert.include(
-      approvalWakes[0]?.text,
-      `Child thread ${launchedThreadId} is blocked on an approval and cannot continue. Read it with t3_thread_read view activity on threadId ${launchedThreadId} (the approval_request item), or t3_get_pending_questions. Answer with t3_respond_to_approval threadId ${launchedThreadId}, approvalRequestId ${approval.payload.id}`,
-    );
-    const approvalWakeRun = (yield* projections.getThreadRecords(parentThreadId, [
-      "runs",
-    ])).runs.find((run) => run.userMessageId === approvalWakes[0]!.id)!;
-    assert.equal(approvalWakeRun.status, "queued");
-    const approved = {
-      ...approval,
-      id: EventId.make("event:launched-approval-resolved"),
-      payload: { ...approval.payload, status: "resolved" as const, resolvedAt: now },
-    };
-    yield* eventSink.write({ events: [approved] });
-    yield* reactor.handle(approved);
-    assert.equal(
-      (yield* projections.getThreadRecords(parentThreadId, ["runs"])).runs.find(
-        (run) => run.id === approvalWakeRun.id,
-      )?.status,
-      "cancelled",
+    assert.isFalse(
+      (yield* projections.getThreadRecords(parentThreadId, ["messages"])).messages.some((message) =>
+        message.notification?.summary.includes("approval"),
+      ),
     );
   }).pipe(Effect.provide(DelegatedTaskQuestionReactor.layer.pipe(Layer.provideMerge(layerTest)))),
 );

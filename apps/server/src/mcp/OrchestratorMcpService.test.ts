@@ -5694,6 +5694,7 @@ describe("OrchestratorMcpService thread list", () => {
                 (thread) => input.projectId === undefined || thread.projectId === input.projectId,
               ),
             ),
+          readChildAttention: () => Effect.succeed(null),
           listActiveShellIndex: () =>
             Effect.succeed(
               shells.map((thread) => ({

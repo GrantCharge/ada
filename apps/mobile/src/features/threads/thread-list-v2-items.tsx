@@ -844,11 +844,13 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onPinThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnpinThread: (thread: EnvironmentThreadShell) => void;
   readonly onSetThreadAutoSettle: (thread: EnvironmentThreadShell, enabled: boolean) => void;
+  readonly onSetThreadChildWake: (thread: EnvironmentThreadShell, enabled: boolean) => void;
   readonly settlementSupported: boolean;
   readonly snoozeSupported: boolean;
   readonly snoozePresets: ReadonlyArray<SnoozePresetSetting> | undefined;
   readonly pinningSupported: boolean;
   readonly autoSettleOptOutSupported: boolean;
+  readonly childWakeSupported: boolean;
   readonly titleRegenerationSupported: boolean;
   readonly reorderSupported?: boolean;
   readonly onMoveThread?: (
@@ -895,6 +897,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onPinThread,
     onUnpinThread,
     onSetThreadAutoSettle,
+    onSetThreadChildWake,
     onMoveThread,
   } = props;
   const snoozedRow = props.snoozed === true;
@@ -1026,6 +1029,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     (enabled: boolean) => onSetThreadAutoSettle(thread, enabled),
     [onSetThreadAutoSettle, thread],
   );
+  const handleSetChildWake = useCallback(
+    (enabled: boolean) => onSetThreadChildWake(thread, enabled),
+    [onSetThreadChildWake, thread],
+  );
   const handleMoveUp = useCallback(() => onMoveThread?.(thread, "up"), [onMoveThread, thread]);
   const handleMoveDown = useCallback(() => onMoveThread?.(thread, "down"), [onMoveThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
@@ -1127,6 +1134,31 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         : [],
     [gt, props.autoSettleOptOutSupported, thread.autoSettleDisabledAt],
   );
+  const childWakeMenuItems = useMemo<MenuAction[]>(
+    () =>
+      props.childWakeSupported
+        ? [
+            {
+              id: "child-wake",
+              title: gt("Child chat messages"),
+              image: "bubble.left.and.bubble.right",
+              subactions: [
+                {
+                  id: "child-wake:enabled",
+                  title: gt("Message me", { $context: "child chat messages on" }),
+                  state: thread.childWakeMutedAt == null ? "on" : "off",
+                },
+                {
+                  id: "child-wake:disabled",
+                  title: gt("Never", { $context: "child chat messages never" }),
+                  state: thread.childWakeMutedAt == null ? "off" : "on",
+                },
+              ],
+            } satisfies MenuAction,
+          ]
+        : [],
+    [gt, props.childWakeSupported, thread.childWakeMutedAt],
+  );
   const canTurnIntoProject = canTurnThreadIntoProject(thread);
   const titleMenuItems = useMemo<MenuAction[]>(
     () => [
@@ -1197,6 +1229,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           secondary: [
             ...titleMenuItems,
             ...autoSettleMenuItems,
+            ...childWakeMenuItems,
             localized(LEGACY_MENU_ACTIONS[0]!),
             localized(SNOOZED_MENU_ACTIONS[1]!),
           ],
@@ -1228,6 +1261,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           secondary: [
             ...titleMenuItems,
             ...autoSettleMenuItems,
+            ...childWakeMenuItems,
             localized(LEGACY_MENU_ACTIONS[0]!),
             localized(SLIM_MENU_ACTIONS[1]!),
           ],
@@ -1257,6 +1291,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         secondary: [
           ...titleMenuItems,
           ...autoSettleMenuItems,
+          ...childWakeMenuItems,
           localized(LEGACY_MENU_ACTIONS[0]!),
           localized(CARD_MENU_ACTIONS[1]!),
         ],
@@ -1265,6 +1300,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     );
   }, [
     autoSettleMenuItems,
+    childWakeMenuItems,
     canUnsettle,
     pinMenuItems,
     props.settlementSupported,
@@ -1288,6 +1324,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "unpin") handleUnpin();
       if (nativeEvent.event === "auto-settle:enabled") handleSetAutoSettle(true);
       if (nativeEvent.event === "auto-settle:disabled") handleSetAutoSettle(false);
+      if (nativeEvent.event === "child-wake:enabled") handleSetChildWake(true);
+      if (nativeEvent.event === "child-wake:disabled") handleSetChildWake(false);
       if (nativeEvent.event === "arrange") appAtomRegistry.set(threadArrangementOpenAtom, true);
       if (nativeEvent.event === "move-up") handleMoveUp();
       if (nativeEvent.event === "move-down") handleMoveDown();
@@ -1352,6 +1390,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleSettle,
       handleSnooze,
       handleSetAutoSettle,
+      handleSetChildWake,
       handleUnpin,
       handleUnsettle,
       handleUnsnooze,

@@ -38,6 +38,7 @@ import { LastThreadTitleRegeneration, ThreadTitleRegeneration } from "./threadTi
 import { PeerLinkOrigin, TailnetDeviceAccess, TailnetDeviceStatus } from "./tailnetDevices.ts";
 import {
   OrchestrationV2Actor,
+  OrchestrationV2ChildAttention,
   OrchestrationV2CreationSource,
   OrchestrationV2DelegatedFrom,
   OrchestrationV2RunStatus,
@@ -439,6 +440,8 @@ export const OrchestratorMcpThreadListItem = Schema.Struct({
   blockedOnThreadWait: Schema.optional(Schema.Boolean),
   /** Absent from linked environments that predate it. */
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
+  /** For a child chat: what it needs from its parent now. Absent for top-level threads and older environments. */
+  childAttention: Schema.optional(OrchestrationV2ChildAttention),
   /**
    * The chat this one belongs to. `relationshipToParent` says how: `"child"` is
    * a separate agent chat with its own context that a parent launched or nested
@@ -546,6 +549,8 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   blockedOnThreadWait: Schema.optional(Schema.Boolean),
   /** Absent from linked environments that predate it. */
   pendingBackgroundTasks: Schema.optional(Schema.Array(OrchestratorMcpThreadBackgroundTask)),
+  /** For a child chat: what it needs from its parent now. Absent for top-level threads and older environments. */
+  childAttention: Schema.optional(OrchestrationV2ChildAttention),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -700,6 +705,15 @@ export const OrchestratorMcpThreadSendResult = Schema.Union([
 ]);
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
 
+export const OrchestratorMcpChildAttentionItem = Schema.Struct({
+  threadId: ThreadId,
+  environmentId: Schema.optional(EnvironmentId),
+  attention: OrchestrationV2ChildAttention,
+  /** When the child's latest run ended; absent from older servers. */
+  completedAt: Schema.optional(IsoDateTime),
+});
+export type OrchestratorMcpChildAttentionItem = typeof OrchestratorMcpChildAttentionItem.Type;
+
 export const OrchestratorMcpThreadWaitInput = Schema.Struct({
   environmentId: OrchestratorMcpThreadEnvironment,
   threadId: ThreadId,
@@ -726,6 +740,12 @@ export const OrchestratorMcpThreadWaitInput = Schema.Struct({
     Schema.Boolean.annotate({
       description:
         "Also wait for the `output` the run was asked for, which a later turn may submit.",
+    }),
+  ),
+  cursor: Schema.optional(
+    Schema.String.annotate({
+      description:
+        "A child's `cursor` from an earlier wait: return when it next needs you, not when a run ends. Ignores runId and until*.",
     }),
   ),
 });
@@ -764,6 +784,12 @@ export const OrchestratorMcpThreadWaitResult = Schema.Struct({
   pendingApproval: Schema.optional(
     Schema.Struct({ requestId: RuntimeRequestId, kind: ProviderRequestKind }),
   ).annotate({ description: "Oldest pending approval. Grants no approval rights." }),
+  /** For a child chat: pass to the next wait to return on its next change. Absent from older servers. */
+  cursor: Schema.optional(Schema.String),
+  /** With `cursor`: the child's changes since it, empty on timeout. */
+  items: Schema.optional(Schema.Array(OrchestratorMcpChildAttentionItem)),
+  /** With `cursor`: it could not be read, so `items` holds the current state instead. */
+  resync: Schema.optional(Schema.Boolean),
   /** What the run returned against the `outputSchema` it was sent with. Absent until submitted. */
   output: Schema.optional(Schema.Json),
 });

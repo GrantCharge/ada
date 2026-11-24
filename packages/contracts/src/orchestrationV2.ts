@@ -508,6 +508,50 @@ const OrchestrationV2LastTitleRegeneration = Schema.Struct({
   completedAt: Schema.DateTimeUtc,
 });
 
+export const OrchestrationV2ProviderFailureClass = Schema.Literals([
+  "usage_limit",
+  "provider_error",
+  "transport_error",
+  "permission_error",
+  "validation_error",
+  "unknown",
+]);
+export type OrchestrationV2ProviderFailureClass = typeof OrchestrationV2ProviderFailureClass.Type;
+
+/** What a child chat needs from its parent now. Derived by `childAttention` in shared. */
+export const OrchestrationV2ChildAttentionState = Schema.Literals([
+  "working",
+  "idle",
+  "finished",
+  "needs-input",
+  "needs-approval",
+  "stopped",
+  "failed",
+  "limited",
+  /** A child on another environment that stopped answering its parent's reads. */
+  "unreachable",
+]);
+export type OrchestrationV2ChildAttentionState = typeof OrchestrationV2ChildAttentionState.Type;
+
+export const OrchestrationV2ChildAttention = Schema.Struct({
+  state: OrchestrationV2ChildAttentionState,
+  runId: Schema.NullOr(RunId),
+  requestId: Schema.optional(RuntimeRequestId),
+  errorClass: Schema.optional(OrchestrationV2ProviderFailureClass),
+  resetAt: Schema.optional(IsoDateTime),
+  /** Ada resumes the child itself at `resetAt`. */
+  autoResume: Schema.optional(Schema.Boolean),
+});
+export type OrchestrationV2ChildAttention = typeof OrchestrationV2ChildAttention.Type;
+
+/** Wakes per child are capped per window, so a parent and child cannot ping-pong. */
+export const OrchestrationV2ChildAttentionReport = Schema.Struct({
+  key: Schema.String,
+  windowStartedAt: IsoDateTime,
+  wakes: NonNegativeInt,
+});
+export type OrchestrationV2ChildAttentionReport = typeof OrchestrationV2ChildAttentionReport.Type;
+
 export const OrchestrationV2AppThread = Schema.Struct({
   profileSnapshot: Schema.optional(ThreadProfileSnapshot),
   /**
@@ -578,6 +622,21 @@ export const OrchestrationV2AppThread = Schema.Struct({
   guestShare: Schema.optional(Schema.NullOr(ThreadGuestShare)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** The user turned off messages about this thread's children. */
+  childWakeMutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  /** What this thread was last told about each child, by child thread id. */
+  childAttentionReported: Schema.optional(
+    Schema.Record(Schema.String, OrchestrationV2ChildAttentionReport),
+  ),
+  /** A digest sent but not yet started; its reports count once its run starts. */
+  childAttentionPending: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        messageId: MessageId,
+        reported: Schema.Record(Schema.String, OrchestrationV2ChildAttentionReport),
+      }),
+    ),
+  ),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
@@ -1797,16 +1856,6 @@ export const OrchestrationV2FileChangeDetail = Schema.Struct({
 });
 export type OrchestrationV2FileChangeDetail = typeof OrchestrationV2FileChangeDetail.Type;
 
-export const OrchestrationV2ProviderFailureClass = Schema.Literals([
-  "usage_limit",
-  "provider_error",
-  "transport_error",
-  "permission_error",
-  "validation_error",
-  "unknown",
-]);
-export type OrchestrationV2ProviderFailureClass = typeof OrchestrationV2ProviderFailureClass.Type;
-
 const OrchestrationV2ProviderFailureMessage = TrimmedNonEmptyString.check(
   Schema.isMaxLength(4_096),
 );
@@ -2559,6 +2608,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   limitRecovery: Schema.optional(Schema.NullOr(OrchestrationV2LimitRecovery)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+  childWakeMutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
@@ -2732,6 +2782,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   lastSnoozeWakeAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  childWakeMutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -3194,6 +3245,7 @@ export const OrchestrationV2ThreadShellJson = OrchestrationV2ThreadShell.mapFiel
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  childWakeMutedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   titleRegeneration: Schema.optional(
     Schema.NullOr(
@@ -3525,6 +3577,13 @@ export const OrchestrationV2Command = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("thread.auto-settle.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    enabled: Schema.Boolean,
+  }),
+  /** Whether the thread hears from its children when they finish or need it. */
+  Schema.Struct({
+    type: Schema.Literal("thread.child-wake.set"),
     commandId: CommandId,
     threadId: ThreadId,
     enabled: Schema.Boolean,
@@ -3952,6 +4011,25 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     runId: RunId,
     value: Schema.Json,
+  }),
+  /**
+   * Records what the parent was told about its children, with the one digest message that tells
+   * it. The orchestrator drops a wake while the parent has a run, so at most one is queued.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.child-attention.sync"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    reported: Schema.Record(Schema.String, OrchestrationV2ChildAttentionReport),
+    wake: Schema.optional(
+      Schema.Struct({
+        messageId: MessageId,
+        text: Schema.String,
+        notification: OrchestrationV2Notification,
+      }),
+    ),
+    /** Settles the pending digest: its reports count only if its run started. */
+    resolve: Schema.optional(Schema.Struct({ messageId: MessageId, started: Schema.Boolean })),
   }),
   /**
    * The settlement sweep archives a thread that stayed settled for the configured period.

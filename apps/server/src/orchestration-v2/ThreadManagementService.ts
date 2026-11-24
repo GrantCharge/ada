@@ -2,7 +2,9 @@ import { labelledProviders, resolveThreadCreateProfile } from "./AgentProfile.ts
 import { ServerSettingsService } from "../serverSettings.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import type {
+  OrchestrationV2ChildAttention,
   OrchestrationV2SearchThreadInput,
+  OrchestrationV2ThreadShell,
   RuntimeRequestId,
   OrchestrationV2SearchThreadResult,
   ServerProvider,
@@ -52,6 +54,11 @@ import {
 import { delegatedTaskProgress } from "@t3tools/provider-core/server/subagentProjection";
 import { turnItemUpdateCanEndBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
+import {
+  childAttention,
+  childAttentionIsActionable,
+  childAttentionKey,
+} from "@t3tools/shared/childAttention";
 import { AgentScope } from "@t3tools/shared/AgentScope";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -193,6 +200,11 @@ export interface ThreadManagementSendResult {
   readonly run: OrchestrationV2Run;
   readonly turnItem: Extract<OrchestrationV2TurnItem, { readonly type: "user_message" }> | null;
   readonly delivery: "started" | "queued" | "steered" | "restarted";
+}
+
+export interface ThreadChildAttentionReading {
+  readonly shell: OrchestrationV2ThreadShell;
+  readonly attention: OrchestrationV2ChildAttention;
 }
 
 export interface ThreadManagementWaitInput {
@@ -547,6 +559,24 @@ export interface ThreadManagementServiceShape {
   readonly waitForThread: (
     input: ThreadManagementWaitInput,
   ) => Effect.Effect<ThreadManagementWaitResult, ThreadManagementError>;
+  /** What the thread needs from its parent now; null once it is gone. */
+  readonly readChildAttention: (input: {
+    readonly projectId: ProjectId;
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<ThreadChildAttentionReading | null, ThreadManagementProjectionLoadError>;
+  /**
+   * Waits until the thread's attention is actionable and differs from the reading keyed
+   * `afterKey`. Compares current state, not events, so replayed runs cannot end it.
+   */
+  readonly waitForChildAttention: (input: {
+    readonly projectId: ProjectId;
+    readonly threadId: ThreadId;
+    readonly afterKey: string;
+    readonly timeoutMs: number;
+  }) => Effect.Effect<
+    { readonly reading: ThreadChildAttentionReading | null; readonly changed: boolean },
+    ThreadManagementProjectionLoadError
+  >;
   /** Waits for the agent's run and automatic follow-ups before settling.
    * A new user turn or an unsuccessful ending leaves the thread active. */
   readonly settleAfterRun: (input: {
@@ -1525,6 +1555,77 @@ const make = Effect.gen(function* () {
     return settledResult(yield* evaluate((yield* getProjectThreadRecords(input, ["runs"])).runs));
   });
 
+  const readChildAttention: ThreadManagementServiceShape["readChildAttention"] = Effect.fn(
+    "ThreadManagementService.readChildAttention",
+  )(function* ({ projectId, threadId }) {
+    const loadError = (cause: unknown) =>
+      new ThreadManagementProjectionLoadError({ projectId, threadId, cause });
+    const shell = yield* orchestrator.getThreadShell(threadId).pipe(Effect.mapError(loadError));
+    if (shell === null || shell.deletedAt !== null) return null;
+    const activeDescendants = yield* projectionStore
+      .hasActiveDescendants(threadId)
+      .pipe(Effect.mapError(loadError));
+    return { shell, attention: childAttention(shell, { activeDescendants }) };
+  });
+
+  const waitForChildAttention: ThreadManagementServiceShape["waitForChildAttention"] = Effect.fn(
+    "ThreadManagementService.waitForChildAttention",
+  )(function* (input) {
+    const loadError = (cause: unknown) =>
+      new ThreadManagementProjectionLoadError({
+        projectId: input.projectId,
+        threadId: input.threadId,
+        cause,
+      });
+    const afterSequence = yield* orchestrator
+      .getThreadEventSequence(input.threadId)
+      .pipe(Effect.mapError(loadError));
+    const read = readChildAttention(input);
+    const due = (reading: ThreadChildAttentionReading | null) =>
+      reading === null ||
+      (childAttentionIsActionable(reading.attention) &&
+        childAttentionKey(reading.attention) !== input.afterKey);
+    const settled = (reading: ThreadChildAttentionReading | null) => ({
+      reading,
+      changed: due(reading),
+    });
+    const initial = yield* read;
+    if (due(initial)) return settled(initial);
+    const waited = yield* Stream.mergeAll(
+      (
+        [
+          "run.updated",
+          "runtime-request.updated",
+          "provider-thread.updated",
+          "subagent.updated",
+          "turn-item.updated",
+          "thread.deleted",
+        ] as const
+      ).map((eventType) =>
+        orchestrator.streamStoredEventsFrom({
+          threadId: input.threadId,
+          afterSequence,
+          eventType,
+        }),
+      ),
+      { concurrency: "unbounded" },
+    ).pipe(
+      Stream.mapError(loadError),
+      Stream.filter(
+        (stored) =>
+          stored.event.type !== "turn-item.updated" ||
+          turnItemUpdateCanEndBackgroundWork(stored.event.payload),
+      ),
+      Stream.mapEffect(() => read),
+      Stream.filter(due),
+      Stream.runHead,
+      Effect.timeoutOption(Duration.millis(Math.max(1, input.timeoutMs))),
+    );
+    const reading = Option.flatten(waited);
+    // Descendants report on their own threads, so the deadline reads once more.
+    return settled(Option.isSome(reading) ? reading.value : yield* read);
+  });
+
   const settleAfterRun: ThreadManagementServiceShape["settleAfterRun"] = Effect.fn(
     "orchestrationV2.threadManagement.settleAfterRun",
   )(function* (input) {
@@ -2189,6 +2290,8 @@ const make = Effect.gen(function* () {
     isProviderInstanceEnabledForProject,
     hasReceipt,
     waitForThread,
+    readChildAttention,
+    waitForChildAttention,
     settleAfterRun,
     settleThread,
     interruptThread,
