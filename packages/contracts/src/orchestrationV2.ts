@@ -601,6 +601,15 @@ export const OrchestrationV2AppThread = Schema.Struct({
   childAttentionReported: Schema.optional(
     Schema.Record(Schema.String, OrchestrationV2ChildAttentionReport),
   ),
+  /** A digest sent but not yet started; its reports count once its run starts. */
+  childAttentionPending: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        messageId: MessageId,
+        reported: Schema.Record(Schema.String, OrchestrationV2ChildAttentionReport),
+      }),
+    ),
+  ),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
@@ -3830,6 +3839,8 @@ const OrchestrationV2InternalCommand = Schema.Union([
         notification: OrchestrationV2Notification,
       }),
     ),
+    /** Settles the pending digest: its reports count only if its run started. */
+    resolve: Schema.optional(Schema.Struct({ messageId: MessageId, started: Schema.Boolean })),
   }),
   /**
    * The settlement sweep archives a thread that stayed settled for the configured period.

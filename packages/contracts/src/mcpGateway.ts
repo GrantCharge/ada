@@ -242,6 +242,12 @@ export const McpGatewayRelayThreadList = Schema.Struct({
       parentEnvironmentId: Schema.optional(Schema.NullOr(EnvironmentId)),
       settledAt: RelaySettledAt,
       activeRunId: Schema.optional(Schema.NullOr(RunId)),
+      latestRunId: Schema.optional(Schema.NullOr(RunId)),
+      hasPendingApprovals: Schema.optional(Schema.Boolean),
+      hasPendingUserInput: Schema.optional(Schema.Boolean),
+      pendingRequestId: Schema.optional(Schema.NullOr(Schema.String)),
+      /** A run, background task or monitor still going; absent from older apps. */
+      hasActiveWork: Schema.optional(Schema.Boolean),
     }),
   ),
 });

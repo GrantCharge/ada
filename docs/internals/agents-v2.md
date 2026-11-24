@@ -156,10 +156,12 @@ record (`apps/server/src/threadTask/`). Three distinctions are easy to collapse 
   async questions, so a late answer cannot start an empty run.
 - **Child chats report by level, not by event.** `childAttention` derives one state per child from
   its shell, and `ChildAttentionService` sends an idle parent at most one digest of the states it
-  has not yet reported, recorded on the parent (`childAttentionReported`) so replays and restarts
-  stay quiet. The send is refused atomically if the parent became busy, so one digest is ever
-  queued. Children on other environments are read by `RemoteChildFollower` on the parent's
-  environment.
+  has not yet reported. The digest's reports stay pending on the parent until its run starts, so
+  a run cancelled before it started (a restart) leaves the news to be told again, and replays stay
+  quiet. The send is refused atomically if the parent became busy; a refused send is retried with
+  a new command id. Runs that ended before the first start with this feature
+  (`child_attention_baseline`) are never news. Children on other environments are read by
+  `RemoteChildFollower` on the parent's environment.
 - **Consent is not acceptance.** `settleWhenAccepted` is the owner's standing permission to settle;
   the owner's `accept` names one DONE revision after its gates pass. Any content change bumps the
   revision and drops acceptance. Settlement waits for both, then for the worker's turn and every

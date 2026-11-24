@@ -15,8 +15,11 @@ import {
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -39,7 +42,30 @@ const adapter = {
   openSession: () => Effect.die("No provider process needed"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 const layerDatabase = SqlitePersistence.layerMemory;
+// Runs a test's step just before the service's next digest reaches the orchestrator.
+class BeforeSync extends Context.Service<BeforeSync, Ref.Ref<Effect.Effect<void>>>()(
+  "t3/orchestration-v2/ChildAttentionService.test/BeforeSync",
+) {}
+const layerRacingOrchestrator = Layer.effect(
+  Orchestrator.OrchestratorV2,
+  Effect.gen(function* () {
+    const inner = yield* Orchestrator.OrchestratorV2;
+    const before = yield* BeforeSync;
+    return {
+      ...inner,
+      dispatch: (command) =>
+        command.type === "thread.child-attention.sync" && command.wake !== undefined
+          ? Ref.getAndSet(before, Effect.void).pipe(
+              Effect.flatten,
+              Effect.andThen(inner.dispatch(command)),
+            )
+          : inner.dispatch(command),
+    };
+  }),
+);
 const layerTest = ChildAttentionService.layer.pipe(
+  Layer.provide(layerRacingOrchestrator),
+  Layer.provideMerge(Layer.effect(BeforeSync, Ref.make(Effect.void))),
   Layer.provideMerge(
     Layer.mergeAll(
       layerDatabase,
@@ -59,6 +85,7 @@ const fixture = Effect.gen(function* () {
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const eventSink = yield* EventSink.EventSinkV2;
   const service = yield* ChildAttentionService.ChildAttentionService;
+  const beforeSync = yield* BeforeSync;
   const parentThreadId = ThreadId.make("thread:attention-parent");
   const createThread = (threadId: ThreadId, title: string) =>
     orchestrator.dispatch({
@@ -150,6 +177,7 @@ const fixture = Effect.gen(function* () {
     projections,
     eventSink,
     service,
+    beforeSync,
     parentThreadId,
     createThread,
     createChild,
@@ -182,6 +210,82 @@ it.effect("tells an idle parent once when its child finishes", () =>
     // A replayed or rewritten run, or a restart, is not news again.
     yield* t.setRun(run, "completed", true, ":replayed");
     yield* t.reconcileAfterDebounce;
+    assert.lengthOf(yield* t.digests, 1);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("stays quiet about settled children and runs that ended before it was enabled", () =>
+  Effect.gen(function* () {
+    const t = yield* fixture;
+    const old = ThreadId.make("thread:attention-old");
+    yield* t.createChild(old, "Old");
+    yield* t.setRun(yield* t.startRun(old, "first"), "completed");
+    yield* TestClock.adjust(Duration.minutes(1));
+    yield* t.service.start();
+    yield* t.service.reconcile(t.parentThreadId);
+    assert.lengthOf(yield* t.digests, 0);
+
+    // The parent read and settled this one in its own turn.
+    const handled = ThreadId.make("thread:attention-handled");
+    yield* t.createChild(handled, "Handled");
+    yield* t.setRun(yield* t.startRun(handled, "first"), "completed");
+    yield* t.orchestrator.dispatch({
+      type: "thread.settle",
+      commandId: CommandId.make("settle-handled"),
+      threadId: handled,
+    });
+    yield* t.reconcileAfterDebounce;
+    assert.lengthOf(yield* t.digests, 0);
+
+    yield* t.setRun(yield* t.startRun(old, "second"), "completed");
+    yield* t.reconcileAfterDebounce;
+    assert.lengthOf(yield* t.digests, 1);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("tells the parent again when its digest run was cancelled before it started", () =>
+  Effect.gen(function* () {
+    const t = yield* fixture;
+    const childId = ThreadId.make("thread:attention-restart");
+    yield* t.createChild(childId, "Survivor");
+    yield* t.setRun(yield* t.startRun(childId, "first"), "completed");
+    yield* t.reconcileAfterDebounce;
+    const [first] = yield* t.digests;
+    const digestRun = (yield* t.projections.getThreadRecords(t.parentThreadId, ["runs"])).runs.find(
+      (run) => run.userMessageId === first!.id,
+    )!;
+    // Start-up recovery cancels a run that never reached its provider.
+    yield* t.setRun(digestRun, "cancelled", false);
+    yield* t.service.reconcile(t.parentThreadId);
+    const digests = yield* t.digests;
+    assert.lengthOf(digests, 2);
+    assert.include(digests[1]!.text, `(threadId ${childId}) finished.`);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("retries a digest the parent refused while it started a run", () =>
+  Effect.gen(function* () {
+    const t = yield* fixture;
+    const childId = ThreadId.make("thread:attention-refused");
+    yield* t.createChild(childId, "Patient");
+    yield* t.setRun(yield* t.startRun(childId, "first"), "completed");
+    yield* TestClock.adjust(ChildAttentionService.DEBOUNCE);
+    // The parent starts a run between the service's read and its dispatch.
+    const busy = yield* Deferred.make<OrchestrationV2Run>();
+    yield* Ref.set(
+      t.beforeSync,
+      t.startRun(t.parentThreadId, "busy").pipe(
+        Effect.tap((run) => t.setRun(run, "running")),
+        Effect.flatMap((run) => Deferred.succeed(busy, run)),
+        Effect.asVoid,
+        Effect.orDie,
+      ),
+    );
+    yield* t.service.reconcile(t.parentThreadId);
+    assert.lengthOf(yield* t.digests, 0);
+
+    yield* t.setRun(yield* Deferred.await(busy), "completed");
+    yield* t.service.reconcile(t.parentThreadId);
     assert.lengthOf(yield* t.digests, 1);
   }).pipe(Effect.provide(layerTest)),
 );
@@ -295,7 +399,7 @@ it.effect("stays quiet while muted and reports once unmuted", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-it("caps wakes per child within the window", () => {
+it("caps wakes per child within the window, except for a blocked child", () => {
   const nowMs = Date.parse("2026-11-24T00:00:00.000Z");
   const reading = (runId: string): ChildAttentionService.ChildReading => ({
     threadId: ThreadId.make("thread:cap"),
@@ -308,7 +412,19 @@ it("caps wakes per child within the window", () => {
     windowStartedAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs - 1_000)),
     wakes: ChildAttentionService.MAX_WAKES_PER_WINDOW,
   };
-  assert.isNull(ChildAttentionService.dueReport(reading("run:2"), full, nowMs));
+  assert.equal(ChildAttentionService.dueReport(reading("run:2"), full, nowMs), "capped");
+  const approval: ChildAttentionService.ChildReading = {
+    ...reading("run:2"),
+    attention: {
+      state: "needs-approval",
+      runId: "run:2" as never,
+      requestId: RuntimeRequestId.make("request:seventh"),
+    },
+  };
+  assert.deepInclude(ChildAttentionService.dueReport(approval, full, nowMs), {
+    key: "needs-approval:run:2:request:seventh",
+    wakes: ChildAttentionService.MAX_WAKES_PER_WINDOW + 1,
+  });
   const later = nowMs + Duration.toMillis(ChildAttentionService.WAKE_WINDOW);
   assert.deepInclude(ChildAttentionService.dueReport(reading("run:2"), full, later), {
     key: "finished:run:2:",

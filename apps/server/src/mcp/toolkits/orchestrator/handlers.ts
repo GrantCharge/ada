@@ -1,8 +1,15 @@
 import * as RemoteThreads from "../../agents/remoteThreads.ts";
-import { type EnvironmentId, OrchestratorMcpFailure } from "@t3tools/contracts";
+import {
+  type EnvironmentId,
+  type OrchestrationV2ChildAttention,
+  OrchestratorMcpFailure,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
+import * as ChildAttentionService from "../../../orchestration-v2/ChildAttentionService.ts";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
 import * as PeerLinkRequests from "../../../peer/PeerLinkRequests.ts";
 import * as PeerLinks from "../../../peer/PeerLinks.ts";
@@ -40,6 +47,22 @@ export const layer = McpToolAccess.toLayer(
   OrchestratorToolkit,
   Effect.gen(function* () {
     const gateway = yield* RemoteThreads.gatewayToolContext;
+    const childAttention = yield* Effect.serviceOption(ChildAttentionService.ChildAttentionService);
+    // A parent that read or waited on a child it follows elsewhere and saw its news needs no digest.
+    const acknowledgeRemoteChild = Effect.fn("mcp.acknowledgeRemoteChild")(function* (
+      childThreadId: ThreadId,
+      attention: OrchestrationV2ChildAttention | undefined,
+    ) {
+      const scope = yield* McpInvocationContext.McpInvocationContext;
+      if (attention === undefined || scope.thread === undefined || Option.isNone(childAttention)) {
+        return;
+      }
+      yield* childAttention.value.acknowledgeRemote(
+        scope.thread.threadId,
+        childThreadId,
+        attention,
+      );
+    });
     const remoteTarget = (environmentId: Parameters<typeof RemoteThreads.resolveEnvironment>[2]) =>
       McpInvocationContext.McpInvocationContext.pipe(
         Effect.flatMap((scope) => RemoteThreads.resolveEnvironment(gateway, scope, environmentId)),
@@ -203,24 +226,31 @@ export const layer = McpToolAccess.toLayer(
           return yield* service.listThreads(scope, input);
         }),
       ),
-      t3_thread_read: McpToolAccess.reads((input) =>
-        Effect.gen(function* () {
-          if (
-            input.tail === true &&
-            (input.beforePosition !== undefined || input.afterPosition !== undefined)
-          ) {
-            return yield* new OrchestratorMcpFailure({
-              code: "invalid_request",
-              message:
-                "tail reads the newest items, so it cannot be combined with beforePosition or afterPosition. Omit tail.",
-            });
-          }
-          const remote = yield* remoteTarget(input.environmentId);
-          if (remote !== undefined) return yield* RemoteThreads.readThread(remote, input);
-          const scope = yield* McpInvocationContext.McpInvocationContext;
-          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-          return yield* service.readThread(scope, input);
-        }),
+      t3_thread_read: McpToolAccess.afterForwarding(
+        McpToolAccess.reads((input) =>
+          Effect.gen(function* () {
+            if (
+              input.tail === true &&
+              (input.beforePosition !== undefined || input.afterPosition !== undefined)
+            ) {
+              return yield* new OrchestratorMcpFailure({
+                code: "invalid_request",
+                message:
+                  "tail reads the newest items, so it cannot be combined with beforePosition or afterPosition. Omit tail.",
+              });
+            }
+            const remote = yield* remoteTarget(input.environmentId);
+            if (remote !== undefined) return yield* RemoteThreads.readThread(remote, input);
+            const scope = yield* McpInvocationContext.McpInvocationContext;
+            const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+            return yield* service.readThread(scope, input);
+          }),
+        ),
+        (input, _environmentId, read) =>
+          acknowledgeRemoteChild(
+            input.threadId,
+            "childAttention" in read.thread ? read.thread.childAttention : undefined,
+          ).pipe(Effect.as(read)),
       ),
       t3_thread_update: McpToolAccess.writesThreads(
         (input) => [input.threadId],
@@ -252,14 +282,20 @@ export const layer = McpToolAccess.toLayer(
             return yield* remote.followUp(scope, environmentId, input, sent);
           }),
       ),
-      t3_thread_wait: McpToolAccess.reads((input) =>
-        Effect.gen(function* () {
-          const remote = yield* remoteTarget(input.environmentId);
-          if (remote !== undefined) return yield* RemoteThreads.waitForThread(remote, input);
-          const scope = yield* McpInvocationContext.McpInvocationContext;
-          const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-          return yield* service.waitForThread(scope, input);
-        }),
+      t3_thread_wait: McpToolAccess.afterForwarding(
+        McpToolAccess.reads((input) =>
+          Effect.gen(function* () {
+            const remote = yield* remoteTarget(input.environmentId);
+            if (remote !== undefined) return yield* RemoteThreads.waitForThread(remote, input);
+            const scope = yield* McpInvocationContext.McpInvocationContext;
+            const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+            return yield* service.waitForThread(scope, input);
+          }),
+        ),
+        (input, _environmentId, waited) =>
+          acknowledgeRemoteChild(input.threadId, waited.items?.[0]?.attention).pipe(
+            Effect.as(waited),
+          ),
       ),
       t3_environment_links: McpToolAccess.reads(() =>
         Effect.gen(function* () {
