@@ -147,6 +147,7 @@ interface HarnessOptions {
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly getLaunchSettings?: ServerSettings.ServerSettingsService["Service"]["getSettings"];
   readonly providers?: ReadonlyArray<ServerProvider>;
+  readonly refreshedProviders?: ReadonlyArray<ServerProvider>;
   readonly git?: Partial<GitWorkflow.GitWorkflowService["Service"]>;
   readonly dispatch?: (
     command: Parameters<ThreadManagement.ThreadManagementService["Service"]["dispatch"]>[0],
@@ -164,7 +165,7 @@ function makeHarness(options: HarnessOptions = {}) {
     { databaseLayer: layerDatabase, runEffectWorker: false },
   );
   const layerSettings = ServerSettings.layerTest(options.serverSettings);
-  const layerProviders = ProviderRegistryMock.layer(options.providers);
+  const layerProviders = ProviderRegistryMock.layer(options.providers, options.refreshedProviders);
   const layerReceipts = CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase));
   const layerThreadManagement = ThreadManagement.layer.pipe(
     Layer.provide(
@@ -1647,6 +1648,53 @@ it.effect("launches an agent thread whose first run keeps the agent's model", ()
       assert.equal(launched.projection.thread.profileSnapshot?.profileId, "doug");
       assert.deepEqual(launched.projection.thread.modelSelection, agentModel);
       assert.deepEqual(launched.projection.runs[0]?.modelSelection, agentModel);
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+it.effect("launches a labelled agent whose model only a provider refresh lists", () =>
+  Effect.gen(function* () {
+    const catalog = (slugs: ReadonlyArray<string>) =>
+      ({
+        instanceId: modelSelection.instanceId,
+        driver: "codex",
+        displayName: "Codex",
+        enabled: true,
+        models: slugs.map((slug) => ({ slug, name: slug, isCustom: false })),
+      }) as unknown as ServerProvider;
+    const harness = makeHarness({
+      providers: [catalog([modelSelection.model])],
+      refreshedProviders: [catalog([modelSelection.model, "provider/new-model"])],
+      serverSettings: {
+        mcpGatewayProfiles: [
+          {
+            profileId: "danny",
+            name: "Danny",
+            revision: 1,
+            createdAt: "2026-10-03T00:00:00.000Z",
+            updatedAt: "2026-10-03T00:00:00.000Z",
+            providerLabel: "Codex",
+            modelLabel: "provider/new-model",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+        ],
+      },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const launched = yield* launches.launch({
+        ...launchInput({
+          command: "command:launch:refreshed-agent",
+          thread: "thread:launch:refreshed-agent",
+          message: "Iterate",
+        }),
+        profileSelection: { profileId: "danny", revision: 1, overrideFields: [] },
+      });
+      assert.deepEqual(launched.projection.thread.modelSelection, {
+        instanceId: modelSelection.instanceId,
+        model: "provider/new-model",
+      });
     }).pipe(Effect.provide(harness.layer));
   }),
 );

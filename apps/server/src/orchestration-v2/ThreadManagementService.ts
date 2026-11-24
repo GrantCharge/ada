@@ -1,10 +1,11 @@
-import { resolveThreadCreateProfile } from "./AgentProfile.ts";
+import { labelledProviders, resolveThreadCreateProfile } from "./AgentProfile.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { ProviderRegistry } from "../provider/ProviderRegistry.ts";
 import type {
   OrchestrationV2SearchThreadInput,
   RuntimeRequestId,
   OrchestrationV2SearchThreadResult,
+  ServerProvider,
 } from "@t3tools/contracts";
 import type {
   ActiveThreadListEntry,
@@ -965,17 +966,36 @@ const make = Effect.gen(function* () {
     }
     const resolved = yield* Effect.gen(function* () {
       const library = yield* Option.getOrThrow(settings).getSettings;
-      const catalog = yield* Option.getOrThrow(providers).getProviders;
-      return yield* Effect.try({
-        try: () =>
-          resolveThreadCreateProfile(
-            trusted,
-            library.mcpGatewayProfiles,
-            catalog,
-            library.agentSkills,
-          ),
-        catch: (cause) => new Cause.UnknownError(cause),
-      });
+      const registry = Option.getOrThrow(providers);
+      const resolve = (catalog: ReadonlyArray<ServerProvider>) =>
+        Effect.try({
+          try: () =>
+            resolveThreadCreateProfile(
+              trusted,
+              library.mcpGatewayProfiles,
+              catalog,
+              library.agentSkills,
+            ),
+          catch: (cause) => new Cause.UnknownError(cause),
+        });
+      const catalog = yield* registry.getProviders;
+      const profile = library.mcpGatewayProfiles.find(
+        (candidate) => candidate.profileId === trusted.profileSelection?.profileId,
+      );
+      // The machine catalog can predate a model the provider now lists, so a label miss refreshes it once.
+      const stale =
+        profile === undefined || profile.modelSelection !== undefined
+          ? []
+          : labelledProviders(profile, catalog).map((provider) => provider.instanceId);
+      return yield* resolve(catalog).pipe(
+        Effect.catch((error) =>
+          stale.length === 0
+            ? Effect.fail(error)
+            : Effect.forEach(stale, registry.refreshInstance).pipe(
+                Effect.flatMap((refreshed) => resolve(refreshed.at(-1) ?? catalog)),
+              ),
+        ),
+      );
     }).pipe(
       Effect.mapError(
         (cause) =>
