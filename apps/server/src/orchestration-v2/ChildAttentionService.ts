@@ -111,6 +111,8 @@ function digestLine(reading: ChildReading): string {
       return `${subject} failed${attention.errorClass === undefined ? "" : ` (${attention.errorClass})`}. Read it with t3_thread_read, then retry or reassign the work.`;
     case "limited":
       return `${subject} hit a usage limit${attention.resetAt === undefined ? "" : ` that resets at ${attention.resetAt}`}.${attention.autoResume === true ? " Ada resumes it then." : ""} Wait if the reset is near; otherwise reassign the work or tell the user.`;
+    case "unreachable":
+      return `${subject} stopped answering reads on its environment. Carry on with other work; tell the user if this blocks you. You hear again once it answers.`;
     case "working":
     case "idle":
       return subject;

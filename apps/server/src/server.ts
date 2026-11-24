@@ -10,6 +10,8 @@ import * as HeadlessGatewayHost from "./mcp/agents/HeadlessGatewayHost.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
 import * as ChildAttentionService from "./orchestration-v2/ChildAttentionService.ts";
+import * as RemoteChildFollower from "./orchestration-v2/RemoteChildFollower.ts";
+import * as ThreadTaskStore from "./threadTask/ThreadTaskStore.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 // @effect-diagnostics nodeBuiltinImport:off
@@ -717,12 +719,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* service.start();
     }),
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
-  Layer.effectDiscard(
-    Effect.gen(function* () {
-      const service = yield* ChildAttentionService.ChildAttentionService;
-      yield* service.start();
-    }),
-  ).pipe(Layer.provide(ChildAttentionService.layer), Layer.provide(ProjectionStoreV2.layer)),
   AgentTempDirLive.layerSettledCleanup.pipe(Layer.provide(ProjectionStoreV2.layer)),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
@@ -866,6 +862,19 @@ const layerMakeRoutes = Layer.mergeAll(
   // Follows delegated tasks running in linked environments, including after a restart.
   Layer.effectDiscard(
     RemoteDelegation.RemoteDelegation.pipe(Effect.flatMap((remote) => remote.start())),
+  ),
+  // Tells parents about their child chats, here and on other environments.
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      yield* (yield* ChildAttentionService.ChildAttentionService).start();
+      yield* (yield* RemoteChildFollower.RemoteChildFollower).start();
+    }),
+  ).pipe(
+    Layer.provide(RemoteChildFollower.layer),
+    Layer.provideMerge(ChildAttentionService.layer),
+    Layer.provide(ProjectionStoreV2.layer),
+    Layer.provide(ThreadTaskStore.layer),
+    Layer.provide(LocalGatewayPort.layer),
   ),
   // Finds and links this user's other T3 servers on the tailnet.
   Layer.effectDiscard(

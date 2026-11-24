@@ -502,6 +502,8 @@ export const OrchestrationV2ChildAttentionState = Schema.Literals([
   "stopped",
   "failed",
   "limited",
+  /** A child on another environment that stopped answering its parent's reads. */
+  "unreachable",
 ]);
 export type OrchestrationV2ChildAttentionState = typeof OrchestrationV2ChildAttentionState.Type;
 
