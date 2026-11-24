@@ -160,8 +160,9 @@ record (`apps/server/src/threadTask/`). Three distinctions are easy to collapse 
   a run cancelled before it started (a restart) leaves the news to be told again, and replays stay
   quiet. The send is refused atomically if the parent became busy; a refused send is retried with
   a new command id. Runs that ended before the first start with this feature
-  (`child_attention_baseline`) are never news. Children on other environments are read by
-  `RemoteChildFollower` on the parent's environment.
+  (`child_attention_baseline`) are never news. A child its parent settled was handled; one that
+  settled itself after its turn still reports once. Children on other environments are read by
+  `RemoteChildFollower` on the parent's environment, only while the parent can hear them.
 - **Consent is not acceptance.** `settleWhenAccepted` is the owner's standing permission to settle;
   the owner's `accept` names one DONE revision after its gates pass. Any content change bumps the
   revision and drops acceptance. Settlement waits for both, then for the worker's turn and every

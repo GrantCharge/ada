@@ -23,6 +23,7 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import { ThreadTaskStore, layer as ThreadTaskStoreLayer } from "../threadTask/ThreadTaskStore.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as ChildAttentionService from "./ChildAttentionService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -71,6 +72,7 @@ const layerTest = ChildAttentionService.layer.pipe(
       layerDatabase,
       ProjectionStore.layer.pipe(Layer.provide(layerDatabase)),
       EffectOutbox.layer.pipe(Layer.provide(layerDatabase)),
+      ThreadTaskStoreLayer.pipe(Layer.provide(layerDatabase)),
       ProviderReplayHarness.layerWithRegistry(
         { name: "child-attention" },
         ProviderAdapterRegistry.layerFromAdapters([adapter]),
@@ -86,6 +88,7 @@ const fixture = Effect.gen(function* () {
   const eventSink = yield* EventSink.EventSinkV2;
   const service = yield* ChildAttentionService.ChildAttentionService;
   const beforeSync = yield* BeforeSync;
+  const tasks = yield* ThreadTaskStore;
   const parentThreadId = ThreadId.make("thread:attention-parent");
   const createThread = (threadId: ThreadId, title: string) =>
     orchestrator.dispatch({
@@ -178,6 +181,7 @@ const fixture = Effect.gen(function* () {
     eventSink,
     service,
     beforeSync,
+    tasks,
     parentThreadId,
     createThread,
     createChild,
@@ -214,33 +218,66 @@ it.effect("tells an idle parent once when its child finishes", () =>
   }).pipe(Effect.provide(layerTest)),
 );
 
-it.effect("stays quiet about settled children and runs that ended before it was enabled", () =>
-  Effect.gen(function* () {
-    const t = yield* fixture;
-    const old = ThreadId.make("thread:attention-old");
-    yield* t.createChild(old, "Old");
-    yield* t.setRun(yield* t.startRun(old, "first"), "completed");
-    yield* TestClock.adjust(Duration.minutes(1));
-    yield* t.service.start();
-    yield* t.service.reconcile(t.parentThreadId);
-    assert.lengthOf(yield* t.digests, 0);
+it.effect(
+  "stays quiet about children the parent settled and runs that ended before it was enabled",
+  () =>
+    Effect.gen(function* () {
+      const t = yield* fixture;
+      const old = ThreadId.make("thread:attention-old");
+      yield* t.createChild(old, "Old");
+      yield* t.setRun(yield* t.startRun(old, "first"), "completed");
+      yield* TestClock.adjust(Duration.minutes(1));
+      yield* t.service.start();
+      yield* t.service.reconcile(t.parentThreadId);
+      assert.lengthOf(yield* t.digests, 0);
 
-    // The parent read and settled this one in its own turn.
-    const handled = ThreadId.make("thread:attention-handled");
-    yield* t.createChild(handled, "Handled");
-    yield* t.setRun(yield* t.startRun(handled, "first"), "completed");
-    yield* t.orchestrator.dispatch({
-      type: "thread.settle",
-      commandId: CommandId.make("settle-handled"),
-      threadId: handled,
-    });
-    yield* t.reconcileAfterDebounce;
-    assert.lengthOf(yield* t.digests, 0);
+      // The parent read and settled this one in its own turn.
+      const handled = ThreadId.make("thread:attention-handled");
+      yield* t.createChild(handled, "Handled");
+      yield* t.setRun(yield* t.startRun(handled, "first"), "completed");
+      yield* t.orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle-handled"),
+        threadId: handled,
+      });
+      yield* t.reconcileAfterDebounce;
+      assert.lengthOf(yield* t.digests, 0);
 
-    yield* t.setRun(yield* t.startRun(old, "second"), "completed");
-    yield* t.reconcileAfterDebounce;
-    assert.lengthOf(yield* t.digests, 1);
-  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+      // This one settled itself after its turn, before its parent heard it finished.
+      const selfSettled = ThreadId.make("thread:attention-self-settled");
+      yield* t.createChild(selfSettled, "Tidy");
+      const run = yield* t.startRun(selfSettled, "first");
+      const requestedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* t.tasks.putSettleRequest({
+        threadId: selfSettled,
+        requestedBy: "self",
+        requestedAt,
+        afterRunId: run.id,
+        state: "settled",
+        blockedBy: null,
+        updatedAt: requestedAt,
+      });
+      yield* t.setRun(run, "completed");
+      yield* t.orchestrator.dispatch({
+        type: "thread.settle",
+        commandId: CommandId.make("settle-self"),
+        threadId: selfSettled,
+      });
+      yield* t.reconcileAfterDebounce;
+      const [digest] = yield* t.digests;
+      assert.include(digest!.text, `(threadId ${selfSettled}) finished.`);
+      assert.notInclude(digest!.text, handled);
+      const digestRun = (yield* t.projections.getThreadRecords(t.parentThreadId, [
+        "runs",
+      ])).runs.find((candidate) => candidate.userMessageId === digest!.id)!;
+      yield* t.setRun(digestRun, "completed");
+      yield* t.reconcileAfterDebounce;
+      assert.lengthOf(yield* t.digests, 1);
+
+      yield* t.setRun(yield* t.startRun(old, "second"), "completed");
+      yield* t.reconcileAfterDebounce;
+      assert.lengthOf(yield* t.digests, 2);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
 
 it.effect("tells the parent again when its digest run was cancelled before it started", () =>

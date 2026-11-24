@@ -6,6 +6,7 @@ import {
   type OrchestrationV2ChildAttentionReport,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Notification,
+  type OrchestrationV2ThreadShell,
   type ThreadId,
   threadParentRelationship,
 } from "@t3tools/contracts";
@@ -22,6 +23,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
+import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
@@ -29,6 +31,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import { forkParked } from "../serverActivation.ts";
+import { ThreadTaskStore } from "../threadTask/ThreadTaskStore.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -70,6 +73,8 @@ export class ChildAttentionService extends Context.Service<
       parentThreadId: ThreadId,
       readings: ReadonlyArray<ChildReading>,
     ) => Effect.Effect<void>;
+    /** Whether news about children could reach this parent: it exists and is not silenced. */
+    readonly listening: (parentThreadId: ThreadId) => Effect.Effect<boolean>;
     /** The parent read or waited on a child it follows on another environment and saw this. */
     readonly acknowledgeRemote: (
       parentThreadId: ThreadId,
@@ -221,9 +226,16 @@ const ACTION_ITEM_TYPES = [
 const ended = (state: OrchestrationV2ChildAttention["state"]) =>
   debounced(state) || state === "limited";
 
+// Unmute, unsettle and unarchive reconcile again.
+const silenced = (parent: OrchestrationV2AppThread) =>
+  parent.childWakeMutedAt != null ||
+  parent.archivedAt !== null ||
+  parent.settledOverride === "settled";
+
 const make = Effect.gen(function* () {
   const engine = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const tasks = yield* ThreadTaskStore;
   const sql = yield* SqlClient.SqlClient;
   // Runs that ended before parents first heard about children are never news.
   const baseline = yield* Ref.make<number | null>(null);
@@ -254,14 +266,19 @@ const make = Effect.gen(function* () {
   // Children with an app-owned delegated task hear back through that task's own delivery.
   const readLocalChildren = Effect.fn("ChildAttentionService.readLocalChildren")(function* (
     parentThreadId: ThreadId,
+    baselineMs: number | null,
   ) {
-    // A settled child was handled; telling the parent it finished would be stale news.
+    // A child settled by its parent or with it was handled. One that settled itself after its
+    // turn may still be news, unless it settled before parents heard about children.
     const children = (yield* projections.getChildThreads(parentThreadId)).filter(
       (child) =>
         isLocalChildOf(child, parentThreadId) &&
-        child.settledAt === null &&
         child.archivedAt === null &&
-        child.deletedAt === null,
+        child.deletedAt === null &&
+        (child.settledAt === null ||
+          (child.settledBy == null &&
+            baselineMs !== null &&
+            DateTime.toEpochMillis(child.settledAt) >= baselineMs)),
     );
     if (children.length === 0) return [];
     const delegated = new Set(yield* projections.listAppOwnedChildThreadIds(parentThreadId));
@@ -270,6 +287,7 @@ const make = Effect.gen(function* () {
       Effect.fnUntraced(function* (child) {
         const shell = yield* engine.getThreadShell(child.id);
         if (shell === null) return [];
+        if (child.settledAt !== null && !(yield* settledItself(shell))) return [];
         const activeDescendants = yield* projections.hasActiveDescendants(child.id);
         const attention = childAttention(shell, { activeDescendants });
         const lastMessage =
@@ -294,6 +312,21 @@ const make = Effect.gen(function* () {
       }),
     ).pipe(Effect.map((rows) => rows.flat()));
   });
+
+  // A settle-after-turn the child asked for during or after the run it ended with.
+  const settledItself = (shell: OrchestrationV2ThreadShell) =>
+    tasks.getSettleRequest(shell.id).pipe(
+      Effect.map(
+        Option.exists(
+          (request) =>
+            request.requestedBy === "self" &&
+            request.state === "settled" &&
+            shell.latestRunStartedAt != null &&
+            request.requestedAt >= DateTime.formatIso(shell.latestRunStartedAt),
+        ),
+      ),
+      Effect.orElseSucceed(() => false),
+    );
 
   const markUnreported = (parentThreadId: ThreadId, pending: boolean) =>
     Ref.update(unreported, (current) => {
@@ -346,20 +379,14 @@ const make = Effect.gen(function* () {
       if (parent === null) return;
     }
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-    // Unmute, unsettle and unarchive reconcile again; a snooze can end without an event.
-    if (
-      parent.childWakeMutedAt != null ||
-      parent.archivedAt !== null ||
-      parent.settledOverride === "settled"
-    ) {
-      return yield* markUnreported(parentThreadId, false);
-    }
+    if (silenced(parent)) return yield* markUnreported(parentThreadId, false);
+    // A snooze can end without an event.
     if (parent.snoozedUntil != null && DateTime.toEpochMillis(parent.snoozedUntil) > nowMs) {
       return yield* markUnreported(parentThreadId, true);
     }
     const baselineMs = yield* Ref.get(baseline);
     const readings = [
-      ...(yield* readLocalChildren(parentThreadId)),
+      ...(yield* readLocalChildren(parentThreadId, baselineMs)),
       ...((yield* Ref.get(remoteReadings)).get(parentThreadId) ?? []),
     ].filter(
       (reading) =>
@@ -480,6 +507,12 @@ const make = Effect.gen(function* () {
   ) =>
     Ref.update(remoteReadings, (current) => new Map(current).set(parentThreadId, readings)).pipe(
       Effect.andThen(reconcile(parentThreadId)),
+    );
+
+  const listening: ChildAttentionService["Service"]["listening"] = (parentThreadId) =>
+    projections.findThread(parentThreadId).pipe(
+      Effect.map((parent) => parent !== null && parent.deletedAt === null && !silenced(parent)),
+      Effect.orElseSucceed(() => true),
     );
 
   const acknowledgeRemote: ChildAttentionService["Service"]["acknowledgeRemote"] = Effect.fn(
@@ -639,6 +672,7 @@ const make = Effect.gen(function* () {
     start,
     reconcile,
     setRemoteReadings,
+    listening,
     acknowledgeRemote,
   } satisfies ChildAttentionService["Service"];
 });

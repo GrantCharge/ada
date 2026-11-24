@@ -4005,7 +4005,17 @@ const make = Effect.gen(function* () {
           status: listedThreadStatus(reading.shell),
           timedOut: !changed,
           cursor: changed ? childAttentionCursor(reading.attention) : input.cursor,
-          items: changed ? [{ threadId: input.threadId, attention: reading.attention }] : [],
+          items: changed
+            ? [
+                {
+                  threadId: input.threadId,
+                  attention: reading.attention,
+                  ...(reading.shell.latestRunCompletedAt == null
+                    ? {}
+                    : { completedAt: DateTime.formatIso(reading.shell.latestRunCompletedAt) }),
+                },
+              ]
+            : [],
           ...(afterKey === null ? { resync: true } : {}),
         } satisfies OrchestratorMcpThreadWaitResult;
       }

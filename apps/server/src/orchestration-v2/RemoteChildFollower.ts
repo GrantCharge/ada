@@ -12,6 +12,7 @@ import {
   type ThreadTask,
 } from "@t3tools/contracts";
 import { childAttentionCursor, childAttentionKey } from "@t3tools/shared/childAttention";
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -28,7 +29,7 @@ import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import {
   gatewayToolContext,
   getRemoteThread,
-  getRemoteThreadSummary,
+  listRemoteThreadSummaries,
 } from "../mcp/agents/remoteThreads.ts";
 import * as PeerLinks from "../peer/PeerLinks.ts";
 import * as PeerMcpClient from "../peer/PeerMcpClient.ts";
@@ -40,20 +41,36 @@ const FAILURES_BEFORE_UNREACHABLE = 3;
 const POLL_INTERVAL = Duration.seconds(15);
 const DISCOVERY_INTERVAL = Duration.minutes(1);
 const LONG_POLL_MS = 25_000;
+// Shorter than a poll, so each round of polls reads an environment's list once.
+const RELAY_LIST_TTL = Duration.seconds(10);
 // Any actionable reading differs from this key, so a first wait returns the child's news at once.
 const FIRST_CURSOR = "attention1:";
 
+const LIVE_STATUSES: ReadonlySet<OrchestratorMcpThreadWaitResult["status"]> = new Set([
+  "queued",
+  "preparing",
+  "starting",
+  "running",
+  "waiting",
+]);
+
 /**
- * The child's state from a wait. A cursor wait that timed out carries no items: nothing changed,
- * so null keeps the last reading rather than guessing from the run status. A server without
- * cursor waits reports a run's end, read the way childAttention reads a shell.
+ * The child's state from a wait, or null to keep `previous`. A cursor wait returns only
+ * actionable news, so one that timed out says the child is working or went quiet without any.
+ * A server without cursor waits reports a run's end, read the way childAttention reads a shell.
  */
 export function attentionFromWaitResult(
   result: OrchestratorMcpThreadWaitResult,
+  previous?: OrchestrationV2ChildAttention,
 ): OrchestrationV2ChildAttention | null {
   const item = result.items?.[0];
   if (item !== undefined) return item.attention;
-  if (result.cursor !== undefined) return null;
+  if (result.cursor !== undefined) {
+    if (LIVE_STATUSES.has(result.status)) {
+      return outstanding(previous) ? null : { state: "working", runId: result.runId };
+    }
+    return previous?.state === "working" ? { state: "idle", runId: result.runId } : null;
+  }
   const runId = result.runId;
   if (result.pendingApproval !== undefined) {
     return { state: "needs-approval", runId, requestId: result.pendingApproval.requestId };
@@ -119,11 +136,16 @@ export function attentionFromRelayThread(
 }
 
 /** Whether losing touch with a child in this state could leave its parent waiting on it. */
-const outstanding = (attention: OrchestrationV2ChildAttention | undefined) =>
-  attention !== undefined &&
-  (attention.state === "working" ||
-    attention.state === "needs-input" ||
-    attention.state === "needs-approval");
+function outstanding(attention: OrchestrationV2ChildAttention | undefined) {
+  return (
+    attention !== undefined &&
+    (attention.state === "working" ||
+      attention.state === "needs-input" ||
+      attention.state === "needs-approval")
+  );
+}
+
+const epochMillis = (iso: string) => DateTime.toEpochMillis(DateTime.makeUnsafe(iso));
 
 export class RemoteChildFollower extends Context.Service<
   RemoteChildFollower,
@@ -153,6 +175,14 @@ const make = Effect.gen(function* () {
   const local = (yield* (yield* ServerEnvironment.ServerEnvironment).getDescriptor).environmentId;
   const gateway = yield* gatewayToolContext;
   const followed = yield* Ref.make(new Map<ThreadId, Map<ThreadId, ChildReading>>());
+  const relayLists = yield* Cache.make({
+    capacity: Infinity,
+    timeToLive: RELAY_LIST_TTL,
+    lookup: (environmentId: EnvironmentId) =>
+      gateway === undefined
+        ? Effect.succeed([])
+        : listRemoteThreadSummaries({ gateway, environmentId, caller: undefined }),
+  });
 
   const publish = Effect.fn("RemoteChildFollower.publish")(function* (
     task: ThreadTask,
@@ -200,10 +230,11 @@ const make = Effect.gen(function* () {
           message: result.unreachable,
         });
       }
+      const completedAt = result.items?.[0]?.completedAt;
       return {
-        attention: attentionFromWaitResult(result),
+        attention: attentionFromWaitResult(result, before.reading?.attention),
         longPolled: true,
-        settledAtMs: null,
+        settledAtMs: completedAt === undefined ? null : epochMillis(completedAt),
         summary: null,
       };
     }
@@ -218,8 +249,11 @@ const make = Effect.gen(function* () {
       environmentId,
       caller: { environmentId: local, threadId: task.ownerThreadId },
     };
-    // The small list each poll; the thread itself only when its entry changed.
-    const summary = yield* getRemoteThreadSummary(remote, task.workerThreadId);
+    // The environment's small list each poll, shared by its children; a thread only when its
+    // entry changed.
+    const summary = (yield* Cache.get(relayLists, environmentId)).find(
+      (item) => item.id === task.workerThreadId,
+    );
     if (summary === undefined) {
       return yield* new OrchestratorMcpFailure({
         code: "thread_not_found",
@@ -243,8 +277,7 @@ const make = Effect.gen(function* () {
     return {
       attention: attentionFromRelayThread(thread, summary),
       longPolled: false,
-      settledAtMs:
-        completedAt == null ? null : DateTime.toEpochMillis(DateTime.makeUnsafe(completedAt)),
+      settledAtMs: completedAt == null ? null : epochMillis(completedAt),
       summary: signature,
     };
   });
@@ -309,7 +342,11 @@ const make = Effect.gen(function* () {
     function* () {
       const fibers = yield* FiberMap.make<ThreadId>();
       const discover = Effect.gen(function* () {
-        const remote = yield* tasks.listRemoteWorkers();
+        // A parent that is archived, settled, deleted or muted cannot be woken, so its children
+        // are left until it can.
+        const remote = yield* Effect.filter(yield* tasks.listRemoteWorkers(), (task) =>
+          attention.listening(task.ownerThreadId),
+        );
         const live = new Set(remote.map((task) => task.workerThreadId));
         const gone: Array<ThreadId> = [];
         for (const [key] of fibers) if (!live.has(key)) gone.push(key);

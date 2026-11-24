@@ -703,6 +703,8 @@ export const OrchestratorMcpChildAttentionItem = Schema.Struct({
   threadId: ThreadId,
   environmentId: Schema.optional(EnvironmentId),
   attention: OrchestrationV2ChildAttention,
+  /** When the child's latest run ended; absent from older servers. */
+  completedAt: Schema.optional(IsoDateTime),
 });
 export type OrchestratorMcpChildAttentionItem = typeof OrchestratorMcpChildAttentionItem.Type;
 
