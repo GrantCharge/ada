@@ -33,6 +33,7 @@ import {
   type RepeatForm,
 } from "@t3tools/client-runtime/scheduled-task-cron";
 import { resolveScheduledTaskProfileRouting } from "@t3tools/client-runtime/gateway";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 
 import {
   resolveProjectSettings,
@@ -40,6 +41,7 @@ import {
 } from "@t3tools/shared/projectSettings";
 import { getActiveLocale, m, type MessageResolver } from "../../i18n/messages";
 import type { ProviderInstanceEntry } from "../../providerInstances";
+import { formatDateTimeTimestamp, formatTimeOfDay } from "../../timestampFormat";
 
 import type { ResolvedSettingsScope } from "./settingsScope";
 
@@ -51,23 +53,23 @@ export function weekdayShortLabel(day: number, locale: string = getActiveLocale(
   );
 }
 
-const ONCE_FORMATTER = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
 const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
 
 export function scheduleLabel(
   schedule: ScheduledTaskSchedule,
+  timestampFormat: TimestampFormat,
   timeZone?: string,
   runAt?: string | null,
   resolve: MessageResolver = m,
   locale: string = getActiveLocale(),
 ): string {
   if (schedule.type === "cron") return describeSchedule(schedule, (iso) => iso);
-  if (schedule.type === "webhook") return "On webhook";
-  if (schedule.type === "once") return `Once, ${ONCE_FORMATTER.format(new Date(schedule.runAt))}`;
+  if (schedule.type === "webhook") return resolve(msg("On webhook"));
+  if (schedule.type === "once") {
+    return resolve(
+      msg("Once, {time}", { time: formatDateTimeTimestamp(schedule.runAt, timestampFormat) }),
+    );
+  }
   if (schedule.type === "interval") {
     const minutes = schedule.everyMs / 60_000;
     return Number.isInteger(minutes)
@@ -75,7 +77,7 @@ export function scheduleLabel(
       : resolve(msg("Every {seconds} sec", { seconds: Math.round(schedule.everyMs / 1000) }));
   }
   const weekdays = schedule.weekdays ?? [];
-  const time = schedule.timeOfDay;
+  const time = formatTimeOfDay(schedule.timeOfDay, timestampFormat);
   const zone = scheduleTimeZoneLabel(timeZone, runAt);
   if (weekdays.length === 0) {
     return zone === undefined
@@ -174,11 +176,9 @@ export interface DraftState {
   readonly baseRef: string;
   readonly startFromOrigin: boolean;
   readonly existingWorktreePath: string;
-  readonly modelKey: string;
+  readonly modelSelection: ModelSelection | null;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  /** Retain the source selection's provider options when the picker leaves instanceId:model unchanged. */
-  readonly baseModelSelection: ModelSelection | null;
   readonly signatureEnabled: boolean;
   readonly signatureHeader: string;
   readonly signatureEncoding: "hex" | "base64";
@@ -390,10 +390,9 @@ export function taskToDraft(task: ScheduledTask): DraftState {
       task.workspaceStrategy.type === "existing_worktree"
         ? task.workspaceStrategy.worktreePath
         : "",
-    modelKey: `${task.modelSelection.instanceId}:${task.modelSelection.model}`,
+    modelSelection: task.modelSelection,
     runtimeMode: task.runtimeMode,
     interactionMode: task.interactionMode,
-    baseModelSelection: task.modelSelection,
     ...(schedule.type === "webhook" && schedule.signature !== null
       ? {
           signatureEnabled: true,

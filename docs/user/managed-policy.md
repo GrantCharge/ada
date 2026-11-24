@@ -15,7 +15,7 @@ the desktop app, a browser, or the mobile app.
 5. Run `ada policy show` on the machine to
    [check what the server loaded](#check-what-the-server-loaded).
 
-The desktop app includes the `ada` command; see [The `ada` command](./install.md#the-t3-command).
+The desktop app includes the `ada` command; see [The `ada` command](./install.md#the-ada-command).
 
 ## Write a policy
 
@@ -126,8 +126,8 @@ cannot enforce, so upgrade Ada before you deploy a policy that uses them.
 ## Settings
 
 Each key under `settings` is a setting's path in the server's `settings.json`, such as
-`storageCleanup.logsAfterDays`. To find a path, change the setting in Ada and look in
-`settings.json` under `~/.t3/userdata`.
+`storageCleanup.logsAfterDays`. Run `ada policy settings` to list every path a policy can manage,
+with its default.
 
 - `"locked": false` sets a default. It applies wherever the user has not chosen a value of their
   own, and users can change it.
@@ -245,6 +245,7 @@ so restart Ada after that.
 
 - `webhookTasks: false`: scheduled tasks cannot use webhook triggers. Existing webhook tasks stay
   but do not run, and cannot be turned back on. Users can still edit or delete them.
+  Workflow webhooks are refused too.
 - `browserCookieImport: false`: users cannot import cookies from another browser into Ada's
   browser.
 - `previewTunnel: false`: other devices cannot load this machine's `localhost` pages themselves.

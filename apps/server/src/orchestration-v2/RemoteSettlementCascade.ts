@@ -316,7 +316,10 @@ export const layer = Layer.effect(
       Effect.forkScoped,
     );
     // A machine that comes back on its own, with nothing here changing.
-    yield* cascade.sweep.pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.forkScoped);
+    yield* cascade.sweep.pipe(
+      Effect.repeat(Schedule.spaced("1 minute")),
+      Effect.forkScoped({ startImmediately: true }),
+    );
     return { run: cascade.run };
   }),
 );

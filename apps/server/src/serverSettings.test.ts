@@ -1508,6 +1508,21 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
     }).pipe(Effect.provide(layerServerSettings())),
   );
 
+  it.effect("loads a file that still carries T3 Code's agentFeedback setting", () =>
+    Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const raw = '{"agentFeedback":{"mode":"auto"},"continueThreadsAfterServerUpdate":false}';
+      yield* fileSystem.writeFileString(serverConfig.settingsPath, raw);
+
+      const settings = yield* serverSettings.getSettings;
+
+      assert.isFalse(settings.continueThreadsAfterServerUpdate);
+      assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), raw);
+    }).pipe(Effect.provide(layerServerSettings())),
+  );
+
   it.effect("keeps a default-off provider's new instance disabled and sparse on disk", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
@@ -2853,6 +2868,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))("server settings"
       assert.isFalse(settings.projectSettingsFolded);
       assert.isFalse(settings.continueThreadsAfterServerUpdate);
       assert.equal(settings.usageHistoryRetentionDays, "unlimited");
+      assert.isFalse(settings.enablePreviewTunnel);
+      assert.isFalse(settings.enableAgentBrowserAccess);
+      assert.equal(settings.defaultRuntimeMode, "approval-required");
       assert.deepEqual(settings.projectSettingsOverrides, {});
 
       assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), broken);

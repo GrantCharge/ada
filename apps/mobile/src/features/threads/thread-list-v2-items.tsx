@@ -1142,7 +1142,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         },
         m,
       ),
-      { id: "mark-unread", title: gt("Mark unread"), image: "envelope.badge" },
+      ...(thread.latestRun?.completedAt != null && threadCanArchive(thread.runtime)
+        ? [{ id: "mark-unread", title: gt("Mark unread"), image: "envelope.badge" }]
+        : []),
       ...(canTurnIntoProject
         ? [
             {
@@ -1159,6 +1161,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       gt,
       m,
       props.titleRegenerationSupported,
+      thread.latestRun,
       thread.runtime,
       isRegeneratingTitle,
     ],

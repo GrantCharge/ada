@@ -530,24 +530,27 @@ describe("tailscale executable lookup", () => {
     (command: string) =>
       onPath[command] ?? (installed.includes(command) ? command : undefined);
 
-  it("prefers PATH, then the platform's install locations", () => {
+  it("prefers PATH, then the platform's install locations", async () => {
     const appBinary = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
     const darwin = (resolve: ReturnType<typeof resolverFor>) =>
       findTailscaleExecutable({ platform: "darwin", env: {}, resolve });
     assert.equal(
-      darwin(resolverFor([appBinary], { tailscale: "/opt/homebrew/bin/tailscale" })),
+      await darwin(resolverFor([appBinary], { tailscale: "/opt/homebrew/bin/tailscale" })),
       "/opt/homebrew/bin/tailscale",
     );
-    assert.equal(darwin(resolverFor([appBinary, "/usr/local/bin/tailscale"])), appBinary);
+    assert.equal(await darwin(resolverFor([appBinary, "/usr/local/bin/tailscale"])), appBinary);
     assert.equal(
-      darwin(resolverFor(["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"])),
+      await darwin(resolverFor(["/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"])),
       "/opt/homebrew/bin/tailscale",
     );
-    assert.equal(darwin(resolverFor(["/usr/local/bin/tailscale"])), "/usr/local/bin/tailscale");
-    assert.equal(darwin(resolverFor([])), "tailscale");
+    assert.equal(
+      await darwin(resolverFor(["/usr/local/bin/tailscale"])),
+      "/usr/local/bin/tailscale",
+    );
+    assert.equal(await darwin(resolverFor([])), "tailscale");
 
     assert.equal(
-      findTailscaleExecutable({
+      await findTailscaleExecutable({
         platform: "win32",
         env: { ProgramFiles: "D:\\Apps" },
         resolve: resolverFor(["D:\\Apps\\Tailscale\\tailscale.exe"]),
@@ -555,7 +558,11 @@ describe("tailscale executable lookup", () => {
       "D:\\Apps\\Tailscale\\tailscale.exe",
     );
     assert.equal(
-      findTailscaleExecutable({ platform: "linux", env: {}, resolve: resolverFor([appBinary]) }),
+      await findTailscaleExecutable({
+        platform: "linux",
+        env: {},
+        resolve: resolverFor([appBinary]),
+      }),
       "tailscale",
     );
   });

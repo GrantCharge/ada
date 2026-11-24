@@ -1,3 +1,4 @@
+import { resolveProjectScripts, settleProjectScript } from "@t3tools/shared/projectScripts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { CommandId, type ThreadId, type OrchestrationV2DomainEvent } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -9,6 +10,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -19,6 +21,7 @@ import { forkParked } from "../serverActivation.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import {
   isAutoArchiveDue,
   resolveAutoSettlementAt,
@@ -62,6 +65,7 @@ function autoSettlementSettingsKey(settings: import("@t3tools/contracts").Server
 export const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const projectStore = yield* ProjectStore.ProjectStoreV2;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const random = yield* SecureRandom.SecureRandom;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -159,6 +163,8 @@ export const make = Effect.gen(function* () {
               autoSettleKeepPullRequests: current.sidebarAutoSettleKeepPullRequests,
             });
           if (settledAt === null || (yield* projections.hasActiveDescendants(thread.id))) return;
+          // A terminal still running a program keeps its thread open; a later sweep settles it.
+          if (yield* terminals.hasActiveSubprocess({ threadId: thread.id })) return;
           // Age settlement belongs to this card alone: child chats and subagents
           // retain their own clocks. A finished child settles like a manual settle,
           // taking its sub-runs along; its parent is never touched.
@@ -203,7 +209,21 @@ export const make = Effect.gen(function* () {
       if (settled.deletedAt !== null || settled.settledOverride !== "settled") return;
       yield* terminals.closeOnSettle({ threadId });
       const worktreePath = settled.worktreePath;
-      if (worktreePath === null || !(yield* fileSystem.exists(worktreePath))) return;
+      if (worktreePath === null) return;
+      if (!(yield* fileSystem.exists(worktreePath))) {
+        // A settle script that tears something down would otherwise be skipped with no trace.
+        const project = Option.getOrUndefined(yield* projectStore.getShell(settled.projectId));
+        if (
+          project !== undefined &&
+          settleProjectScript(resolveProjectScripts(yield* settingsService.getSettings, project))
+        ) {
+          yield* Effect.logWarning(
+            "settle script skipped: the thread's worktree no longer exists",
+            { threadId, worktreePath },
+          );
+        }
+        return;
+      }
       // Closing and the worktree check wait on I/O. A thread re-engaged or deleted
       // meanwhile is no place for cleanup.
       const thread = yield* projections.getThread(threadId);

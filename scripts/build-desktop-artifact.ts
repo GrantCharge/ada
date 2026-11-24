@@ -372,7 +372,7 @@ export class LinuxDesktopBuildPrerequisitesMissingError extends Schema.TaggedErr
         ? ["Add the requested Rust target with:", `  rustup target add ${this.rustTarget}`]
         : []),
       "",
-      "For other distributions, see docs/operations/development.md#linux-appimage-prerequisites.",
+      "For other distributions, see docs/operations/00_development.md#linux-appimage-prerequisites.",
       "Then rerun `vp run dist:desktop:linux`.",
     ].join("\n");
   }
@@ -444,7 +444,7 @@ export class WindowsDesktopBuildPrerequisitesMissingError extends Schema.TaggedE
       "Install Rust from https://rustup.rs and add the requested target:",
       `  rustup target add ${this.rustTarget}`,
       "Install Python 3 and the Visual Studio Build Tools components listed in",
-      "docs/operations/development.md#windows-installer-prerequisites.",
+      "docs/operations/00_development.md#windows-installer-prerequisites.",
       "",
       "Then rerun the desktop artifact command.",
     ].join("\n");
@@ -989,6 +989,8 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/browser-secret",
   "!apps/desktop/prod-resources/browser-secret/**/*",
   "!packages/mcp-gateway/dist/t3-mcp-gateway.mjs",
+  "!apps/desktop/prod-resources/apple-speech",
+  "!apps/desktop/prod-resources/apple-speech/**/*",
   // Windows stages the server sidecar below prod-resources so electron-builder
   // can copy it using project-relative extraResources matchers. Keep those
   // staging inputs out of app.asar; they are emitted once at resources/.
@@ -1117,6 +1119,9 @@ export const LINUX_CAPTURE_EXTRA_RESOURCES = [
 ] as const;
 export const LINUX_BROWSER_SECRET_EXTRA_RESOURCES = [
   { from: "apps/desktop/prod-resources/browser-secret", to: "browser-secret" },
+] as const;
+export const MAC_APPLE_SPEECH_EXTRA_RESOURCES = [
+  { from: "apps/desktop/prod-resources/apple-speech", to: "apple-speech" },
 ] as const;
 
 export interface MacPasskeySigningConfiguration {
@@ -2303,6 +2308,31 @@ export const stageBrowserSecret = Effect.fn("stageBrowserSecret")(function* (inp
   );
 });
 
+export const stageAppleSpeech = Effect.fn("stageAppleSpeech")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly platform: typeof BuildPlatform.Type;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  if (input.platform !== "mac") return;
+  const path = yield* Path.Path;
+  yield* runCommand(
+    ChildProcess.make(
+      "node",
+      [
+        path.join(input.repoRoot, "apps/desktop/scripts/build-apple-speech.mjs"),
+        "--arch",
+        input.arch,
+        "--output",
+        path.join(input.stageResourcesDir, "apple-speech", "t3-apple-speech"),
+      ],
+      { cwd: input.repoRoot },
+    ),
+    { label: "build macOS Apple Speech helper", verbose: input.verbose },
+  );
+});
+
 const generateMacIconSet = Effect.fn("build-desktop-artifact.generateMacIconSet")(function* (
   sourcePng: string,
   targetIcns: string,
@@ -2685,6 +2715,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       MCP_GATEWAY_EXTRA_RESOURCE,
       ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "linux" ? LINUX_BROWSER_SECRET_EXTRA_RESOURCES : []),
+      ...(platform === "mac" ? MAC_APPLE_SPEECH_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
@@ -2724,6 +2755,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         NSAppleEventsUsageDescription: `${APP_NAME} uses Apple Events to control other apps when you ask an agent to use this computer.`,
         NSCameraUsageDescription: `${APP_NAME} lets commands run by terminals and coding agents use the camera.`,
         NSMicrophoneUsageDescription: `${APP_NAME} lets commands run by terminals and coding agents use the microphone.`,
+        NSSpeechRecognitionUsageDescription: `${APP_NAME} transcribes your dictation on this Mac when you choose Apple Speech.`,
         // macOS lists an app under Default web browser only when it opens web
         // pages as documents as well as http and https links (see protocols).
         CFBundleDocumentTypes: [
@@ -3726,6 +3758,13 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       });
   }
   yield* stageBrowserSecret({
+    repoRoot,
+    stageResourcesDir,
+    platform: options.platform,
+    arch: options.arch,
+    verbose: options.verbose,
+  });
+  yield* stageAppleSpeech({
     repoRoot,
     stageResourcesDir,
     platform: options.platform,

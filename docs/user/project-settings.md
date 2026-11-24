@@ -48,6 +48,11 @@ Settings that are environment-wide stay read-only while a project is selected. W
 targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.
 
+## Projects with several repositories
+
+A project covers every repository inside its folder, and any folder you add under **Settings →
+Projects → Repositories**; see [Projects with several repositories](multi-repo-projects.md).
+
 ## Pin and archive projects
 
 Pinned projects come first in the project pickers: the project picker on a new thread, the
@@ -98,6 +103,9 @@ project starts a new thread there on its next run.
 
 Deleting a thread also deletes tasks that post into that thread. Tasks that start
 a new thread on each run survive deletion of their previous threads.
+An archived thread refuses messages, so a task that posts into one stays on and fails
+each run until you unarchive the thread or pick another destination. To set a task's thread
+aside without breaking it, settle the thread; see [Settle or archive](thread-sidebar.md#settle-or-archive).
 
 You can edit, pause, resume, run immediately, or delete a task from the list.
 Webhook tasks only run when their URL is called, so they can't be run
@@ -240,7 +248,7 @@ reports an unknown command, that `ada` is too old.
 
 - **Desktop app:** the app keeps its own launcher at `~/.t3/bin/t3`, or
   `%USERPROFILE%\.t3\bin\t3.cmd` on Windows (under your Ada home if you changed
-  it). [The `ada` command](./install.md#the-t3-command) explains how to put it on
+  it). [The `ada` command](./install.md#the-ada-command) explains how to put it on
   your `PATH`.
 - **Server without the desktop app:** use the standalone `ada` CLI built with
   the same release, not one installed from npm.

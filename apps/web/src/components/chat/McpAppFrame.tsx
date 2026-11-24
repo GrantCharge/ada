@@ -40,6 +40,7 @@ import { mcpAppEnvironment } from "~/state/mcpApps";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { observeResize } from "~/lib/observeResize";
 import { APP_NAME } from "@t3tools/shared/branding";
+import { attachMcpAppDocumentLink } from "./mcpAppDocumentLink";
 
 const commandFailure = (result: {
   readonly cause: Parameters<typeof squashAtomCommandFailure>[0]["cause"];
@@ -270,16 +271,15 @@ export function McpAppFrame(props: {
       }
       return approved;
     };
-    const target = () => frameRef.current?.contentWindow ?? null;
     const scope = () => {
       const { environmentId, threadId, itemId } = readLive().props;
       return { environmentId, input: { threadId, itemId } };
     };
+    const documentLink = attachMcpAppDocumentLink(frame, (data) => host.receive(data));
     const host = makeMcpAppHost({
       app,
       hostVersion: APP_VERSION,
-      // Opaque origins require "*"; the window reference scopes delivery to this frame.
-      post: (message) => target()?.postMessage(message, "*"),
+      post: documentLink.post,
       hostContext,
       callTool: async ({ name, arguments: args }) => {
         const { environmentId, input } = scope();
@@ -402,12 +402,9 @@ export function McpAppFrame(props: {
       },
     });
     hostRef.current = host;
-    const receive = (event: MessageEvent) => {
-      if (event.source !== null && event.source === target()) host.receive(event.data);
-    };
-    window.addEventListener("message", receive);
+    window.addEventListener("message", documentLink.receive);
     return () => {
-      window.removeEventListener("message", receive);
+      window.removeEventListener("message", documentLink.receive);
       void host.teardown();
       hostRef.current = null;
       frameRef.current = null;

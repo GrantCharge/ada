@@ -56,7 +56,7 @@ export function threadHasQueuedTurnStart(
 
 /** Reject busy and explicitly parked cards before applying their idle period. */
 export function isAutoSettlementCandidate(
-  thread: Omit<ProjectionStore.ProjectionSettlementCandidate, "latestUserAuthoredMessageAt">,
+  thread: Omit<ProjectionStore.ProjectionSettlementCandidate, "latestResumingMessageAt">,
   nowMs: number,
 ): boolean {
   if (thread.archivedAt !== null || thread.settledOverride === "settled") return false;

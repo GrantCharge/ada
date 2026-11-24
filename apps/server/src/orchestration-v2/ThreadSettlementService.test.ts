@@ -30,6 +30,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as ProjectStore from "./ProjectStore.ts";
 import * as ThreadSettlementService from "./ThreadSettlementService.ts";
 import * as AutoSettlement from "./autoSettlement.ts";
 
@@ -43,10 +44,10 @@ function at(offsetMs: number): DateTime.Utc {
 
 type SettlementShell = OrchestrationV2ThreadShell &
   OrchestrationV2AppThread &
-  Pick<ProjectionStore.ProjectionSettlementCandidate, "latestUserAuthoredMessageAt">;
+  Pick<ProjectionStore.ProjectionSettlementCandidate, "latestResumingMessageAt">;
 
 // A fixture's user message is one the user wrote unless the test sets
-// latestUserAuthoredMessageAt on its own.
+// latestResumingMessageAt on its own.
 function shell(overrides: Partial<SettlementShell> = {}): SettlementShell {
   return {
     id: ThreadId.make("thread-1"),
@@ -84,7 +85,7 @@ function shell(overrides: Partial<SettlementShell> = {}): SettlementShell {
     latestRunStartedAt: null,
     latestRunCompletedAt: null,
     latestUserMessageAt: null,
-    latestUserAuthoredMessageAt: overrides.latestUserMessageAt ?? null,
+    latestResumingMessageAt: overrides.latestUserMessageAt ?? null,
     createdAt: at(-30 * DAY_MS),
     updatedAt: at(-10 * DAY_MS),
     archivedAt: null,
@@ -557,6 +558,10 @@ const makeHarness = Effect.fn(function* (input: {
     Layer.mock(TerminalManager.TerminalManager)({
       closeOnSettle: ({ threadId }) =>
         Queue.offer(closedIdle, ThreadId.make(threadId)).pipe(Effect.asVoid),
+      hasActiveSubprocess: () => Effect.succeed(false),
+    }),
+    Layer.mock(ProjectStore.ProjectStoreV2)({
+      getShell: () => Effect.succeedNone,
     }),
     Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
       runForThread: (runInput) =>
