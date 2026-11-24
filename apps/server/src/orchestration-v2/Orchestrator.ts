@@ -665,6 +665,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.unsettle":
     case "thread.snooze":
     case "thread.unsnooze":
+    case "thread.child-wake.set":
+    case "thread.child-attention.sync":
     case "thread.auto-settle.set":
     case "thread.pin":
     case "thread.unpin":
@@ -4321,6 +4323,60 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     },
   );
 
+  // Rechecked under the lock: a run that started, a mute, or an archive since the read drops the
+  // whole sync, so nothing is recorded as told that was not.
+  const dispatchChildAttentionSync = Effect.fn("orchestrationV2.dispatch.childAttentionSync")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.child-attention.sync" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      const parent = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs"])
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const { wake, ...sync } = command;
+      if (
+        wake !== undefined &&
+        (hasLiveRun(parent) ||
+          parent.thread.childWakeMutedAt != null ||
+          parent.thread.archivedAt !== null ||
+          parent.thread.deletedAt !== null)
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause:
+            "The parent started a run, was muted or was archived while its children were read.",
+        });
+      }
+      yield* dispatchThreadMutation(sync, events, effects);
+      if (wake === undefined) return;
+      yield* dispatchMessage(
+        {
+          type: "message.dispatch",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          messageId: wake.messageId,
+          text: wake.text,
+          notification: wake.notification,
+          attachments: [],
+          dispatchMode: { type: "queue_after_active" },
+          createdBy: "agent",
+          creationSource: "server",
+        },
+        events,
+        effects,
+      );
+    },
+  );
+
   // Deleted after the share change commits: the files of waiting messages it dismissed or dropped.
   const releaseGuestAttachments = (
     command: { readonly commandId: CommandId; readonly threadId: ThreadId },
@@ -4447,6 +4503,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.runtime-mode.set"
           | "thread.interaction-mode.set"
           | "thread.model-selection.set"
+          | "thread.child-wake.set"
+          | "thread.child-attention.sync"
           | "provider.switch";
       }
     >,
@@ -4619,6 +4677,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.type === "thread.snooze" ||
         command.type === "thread.unsnooze" ||
         command.type === "thread.auto-settle.set" ||
+        command.type === "thread.child-wake.set" ||
         command.type === "thread.pin" ||
         command.type === "thread.unpin" ||
         command.type === "thread.pin.reorder" ||
@@ -5097,6 +5156,15 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: alreadyAwake ? thread.updatedAt : now,
           };
         }
+        case "thread.child-wake.set":
+          return command.enabled === (thread.childWakeMutedAt == null)
+            ? thread
+            : { ...thread, childWakeMutedAt: command.enabled ? null : now };
+        case "thread.child-attention.sync":
+          return {
+            ...thread,
+            childAttentionReported: { ...thread.childAttentionReported, ...command.reported },
+          };
         case "thread.auto-settle.set": {
           const unchanged = command.enabled === (thread.autoSettleDisabledAt == null);
           return {
@@ -5641,6 +5709,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
+        case "thread.child-wake.set":
+        case "thread.child-attention.sync":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
@@ -16128,6 +16198,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.pull-request-watch.sync":
         yield* dispatchPullRequestWatchSync(command, events, effects);
+        break;
+      case "thread.child-wake.set":
+        yield* dispatchThreadMutation(command, events, effects);
+        break;
+      case "thread.child-attention.sync":
+        yield* dispatchChildAttentionSync(command, events, effects);
         break;
       case "thread.guest-share.close":
       case "thread.guest-message.dismiss":

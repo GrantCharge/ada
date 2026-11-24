@@ -169,6 +169,7 @@ function ThreadNavigationSidebarPane(
     pinThread,
     unpinThread,
     setThreadAutoSettle,
+    setThreadChildWake,
     moveThread,
     renameThread,
     regenerateThreadTitle,
@@ -289,6 +290,7 @@ function ThreadNavigationSidebarPane(
     snoozePresetsByEnvironmentId,
     pinningEnvironmentIds,
     autoSettleOptOutEnvironmentIds,
+    childWakeEnvironmentIds,
     pinReorderEnvironmentIds,
     activeReorderEnvironmentIds,
     titleRegenerationEnvironmentIds,
@@ -497,6 +499,7 @@ function ThreadNavigationSidebarPane(
             snoozePresets={snoozePresetsByEnvironmentId.get(thread.environmentId)}
             pinningSupported={pinningEnvironmentIds.has(thread.environmentId)}
             autoSettleOptOutSupported={autoSettleOptOutEnvironmentIds.has(thread.environmentId)}
+            childWakeSupported={childWakeEnvironmentIds.has(thread.environmentId)}
             reorderSupported={
               // A child chat's place follows its parent's.
               item.item.depth === 0 &&
@@ -512,6 +515,7 @@ function ThreadNavigationSidebarPane(
             onPinThread={pinThread}
             onUnpinThread={unpinThread}
             onSetThreadAutoSettle={setThreadAutoSettle}
+            onSetThreadChildWake={setThreadChildWake}
             onMoveThread={moveThread}
             onSwipeableClose={handleSwipeableClose}
             onSwipeableWillOpen={handleSwipeableWillOpen}

@@ -9,6 +9,7 @@ import * as McpGatewayBroker from "./mcp/McpGatewayBroker.ts";
 import * as HeadlessGatewayHost from "./mcp/agents/HeadlessGatewayHost.ts";
 import * as LocalGatewayPort from "./mcp/agents/LocalGatewayPort.ts";
 import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
+import * as ChildAttentionService from "./orchestration-v2/ChildAttentionService.ts";
 import * as DelegatedTaskQuestionReactor from "./orchestration-v2/DelegatedTaskQuestionReactor.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 // @effect-diagnostics nodeBuiltinImport:off
@@ -716,6 +717,12 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
       yield* service.start();
     }),
   ).pipe(Layer.provide(DelegatedTaskQuestionReactor.layer), Layer.provide(ProjectionStoreV2.layer)),
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* ChildAttentionService.ChildAttentionService;
+      yield* service.start();
+    }),
+  ).pipe(Layer.provide(ChildAttentionService.layer), Layer.provide(ProjectionStoreV2.layer)),
   AgentTempDirLive.layerSettledCleanup.pipe(Layer.provide(ProjectionStoreV2.layer)),
   ProviderUsageLimitsIngestion.layer,
   layerProviderInstallationRefresh,
