@@ -624,7 +624,9 @@ export const assignRemoteChild = Effect.fn("remoteThreads.assignRemoteChild")(fu
   readonly summary: string;
 }): Effect.fn.Return<string | undefined> {
   const tasks = yield* Effect.serviceOption(ThreadTaskService.ThreadTaskService);
-  if (Option.isNone(tasks)) return undefined;
+  const unregistered = (detail: string) =>
+    `The child is running, but it is not registered as your task, so t3_task_read will not list it and you will not hear when it finishes: ${detail} Assign it with t3_task_assign and its environmentId.`;
+  if (Option.isNone(tasks)) return unregistered("this server keeps no tasks.");
   return yield* tasks.value
     .assign(
       { kind: "thread", threadId: input.ownerThreadId },
@@ -643,11 +645,7 @@ export const assignRemoteChild = Effect.fn("remoteThreads.assignRemoteChild")(fu
           workerThreadId: input.workerThreadId,
           workerEnvironmentId: input.workerEnvironmentId,
           detail: error.detail,
-        }).pipe(
-          Effect.as(
-            `The child is running, but it is not registered as your task, so t3_task_read will not list it until it reports: ${error.detail} Assign it with t3_task_assign and its environmentId.`,
-          ),
-        ),
+        }).pipe(Effect.as(unregistered(error.detail))),
       ),
     );
 });

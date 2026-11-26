@@ -194,11 +194,13 @@ A child on another machine keeps its task on its own environment, the single wri
 environment holds a read-only mirror. At assignment the owner's server mints a capability that only
 the two servers store, and every later call between them (`threadTasks.remoteDeliver`,
 `remoteOwnerAction`) presents it, so the receiver acts as that task's peer and never as the
-relaying app's user. Calls travel through a connected app (`McpGatewayBroker`), which is live only:
-the worker side keeps a delivery cursor per task, retries when an app connects or the server
-starts, and the owner side ignores a cursor it has already applied. Task changes update the
-owner's readable mirror without dispatching chat messages. With no app
-connected, owner actions fail and the mirror's `sync` shows the last delivery.
+relaying app's user. Calls go over this server's stored link to that environment when it has one
+(`t3_peer_thread_task`, never listed to agents, which accepts only the link's own environment as
+owner or worker), else through a connected app (`McpGatewayBroker`); a peer too old for the link
+tool falls back to the app. Both routes are live only: the worker side keeps a delivery cursor per
+task, retries when an app connects or the server starts, and the owner side ignores a cursor it has
+already applied. Task changes update the owner's readable mirror without dispatching chat messages.
+With neither route, owner actions fail and the mirror's `sync` shows the last delivery.
 
 Peers and the relaying app may run older contracts, and Schema drops unknown keys but rejects an
 unknown literal. So the task view grows only by optional fields: a new continuation or wake reason

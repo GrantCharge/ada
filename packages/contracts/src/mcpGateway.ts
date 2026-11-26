@@ -265,6 +265,9 @@ export const McpGatewayRelayThreadTaskRequest = Schema.Struct({
 });
 export type McpGatewayRelayThreadTaskRequest = typeof McpGatewayRelayThreadTaskRequest.Type;
 
+/** The MCP tool a linked server calls with a thread task request; never listed to agents. */
+export const PEER_THREAD_TASK_TOOL = "t3_peer_thread_task";
+
 /**
  * The runtime port calls a server makes through a connected app for itself, each with the
  * schema of its arguments and of its answer. The first argument is always the environment the
