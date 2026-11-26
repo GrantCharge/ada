@@ -74,6 +74,9 @@ it("reports upstream analytics, crash reporting and hosted-app defaults in shipp
     "apps/server/src/f.test.ts": 'const host = "https://ingest.t3.codes";\n',
     "apps/marketing/src/g.astro": '<a href="https://posthog.com/privacy">PostHog</a>\n',
     "apps/web/vercel.ts": 'const ROUTER_HOST = "app.t3.codes";\n',
+    "apps/server/src/h.ts": 'const host = process.env.T3CODE_TELEMETRY_HOST;\n',
+    "packages/shared/src/i.ts": "export const isRelayTracingEnabled = () => true;\n",
+    "apps/mobile/src/j.ts": 'const ANALYTICS_DEVICE_ID_KEY = "id";\n',
   });
   assert.deepStrictEqual(findRemovedConnectProblems(repo.root, [], repo.files), [
     "apps/server/src/a.ts:1 names a PostHog project key (phc_fakeFixtureKey0123456789abcdef). Shipped code must not reach it.",
@@ -83,6 +86,9 @@ it("reports upstream analytics, crash reporting and hosted-app defaults in shipp
     "apps/mobile/modules/e/E.swift:1 names a Sentry host (sentry.io). Shipped code must not reach it.",
     "apps/web/package.json depends on posthog-js; the fork sends no product analytics.",
     "apps/mobile/package.json depends on expo-observe; the fork sends no crash reports.",
+    "apps/server/src/h.ts:1 names upstream's renamed analytics settings (T3CODE_TELEMETRY_HOST). Shipped code must not reach it.",
+    "packages/shared/src/i.ts:1 names upstream's relay tracing (isRelayTracingEnabled). Shipped code must not reach it.",
+    "apps/mobile/src/j.ts:1 names an analytics device id (ANALYTICS_DEVICE_ID). Shipped code must not reach it.",
   ]);
 });
 

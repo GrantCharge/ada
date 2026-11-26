@@ -1,5 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { msg } from "gt-i18n";
 import type { RemoteEnvironmentAuthError } from "../authorization/remote.ts";
+import { translatableDetail } from "../errors/translatable.ts";
 import {
   ConnectionBlockedError,
   type ConnectionAttemptError,
@@ -37,7 +39,12 @@ export function environmentMismatchError(input: {
 }): ConnectionBlockedError {
   return new ConnectionBlockedError({
     reason: "configuration",
-    detail: `Connected environment ${input.actual} does not match ${input.expected}.`,
+    ...translatableDetail(
+      msg(
+        "This address now runs a different Ada install ({actual}, not {expected}). Remove this connection and add it again.",
+        { actual: input.actual, expected: input.expected },
+      ),
+    ),
   });
 }
 

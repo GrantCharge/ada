@@ -1,145 +1,48 @@
 # Outside agents
 
-Agents that Ada did not start can work with an environment through its MCP
-server. They can read projects and threads, start and message threads, and
-check which providers and models are available. This covers Claude Code or
-Codex in your own terminal, and other MCP agents running on your own devices. Each agent signs
-in once, and you choose what it may do.
+Connect external agents (Claude Code or Codex in your terminal, or other OAuth-capable MCP clients on your own devices) to your Ada environment over MCP to read projects/threads, launch and message threads, and monitor events.
 
-## Add Ada to an assistant app
+## Quick setup
 
-Open the command palette (`Cmd/Ctrl+K`) and choose **Use Ada in another
-app (MCP)**, or use the button in **Settings → Sharing & access**. Pick the
-app, choose what it may do, and follow the step for that app. The dialog shows
-the environment's Tailscale `/mcp` address, which only devices on your tailnet can
-reach. Assistants that run in the cloud, such as ChatGPT, claude.ai, or Poke,
-cannot reach it. To reach your other machines through the same connection, keep its agent links on (not paused from the machine's **…** menu in Settings → Environments → Machines) and
-[link them](./remote-access.md#link-another-environment).
+Open the command palette (`Cmd/Ctrl+K`) and run **Use Ada in another app (MCP)** (or open **Settings → Sharing & access**), pick your app, and follow the prompts.
 
-When the app opens the sign-in page, choose **Get code** in the wizard and paste
-the code there. A code works once, for 5 minutes, and approves only the level
-you chose.
+- The dialog shows the environment's Tailscale `/mcp` address, which only devices on your tailnet can reach. Assistants that run in the cloud, such as ChatGPT, claude.ai, or Poke, cannot reach it.
+- To also reach other machines through the same connection, keep its agent links on (not paused from the machine's **…** menu in **Settings → Environments → Machines**) and [link them](./remote-access.md#link-another-environment).
+- To copy the raw MCP endpoint (`https://<environment-address>/mcp`), open an environment's menu in **Settings → Environments → Copy MCP URL**. OAuth requires `https://` or `localhost` (plain `http://` LAN/Tailscale addresses cannot complete OAuth).
 
-For an app that is not listed, choose **Something else…**, add a remote MCP
-server with OAuth in that app, and paste the URL. Apps that require their own
-client ID cannot connect.
+### CLI clients
 
-## Get the MCP URL
+- **Claude Code**:
+  ```sh
+  claude mcp add --transport http t3 https://<environment-address>/mcp
+  claude mcp login t3   # add --no-browser on headless hosts
+  ```
+- **Codex**:
+  ```sh
+  codex mcp add t3 --url https://<environment-address>/mcp
+  codex mcp login t3    # add --no-browser on headless hosts
+  ```
+- **Other OAuth MCP clients on a device that can reach the environment**: Add a custom remote MCP server pointing to `https://<environment-address>/mcp` with **OAuth** authentication (no client ID or secret needed).
 
-In **Settings → Environments**, open a saved environment's menu and choose
-**Copy MCP URL**. The URL is the environment's address followed by `/mcp`, for
-example:
+## Approve access and permissions
 
-```text
-https://<environment-address>/mcp
-```
+The first time an outside agent connects, approve its sign-in page with a code from **Use Ada in another app (MCP)**, **Settings → Environments**, or `ada auth pairing create` on the host, or from a browser already signed in with permission to manage access. Cloud-hosted agents cannot reach the environment; a Tailscale address works only from devices on your own tailnet.
 
-The copied URL uses the route this device is connected over, so an agent on the
-same device can reach it.
+- **Read only**: Inspect projects, threads, providers, and models.
+- **Supervised → Full access**: Also launch, message, and stop threads up to the granted permission mode. Managing [workflow runs](./workflows.md) or using approval-skipping agent modes requires **Full access** (or your policy's maximum mode).
+- Sign-ins last **30 days**; revoke anytime in **Settings → Environments**.
 
-- **An agent on your own computers** can use `localhost` on the host, or any
-  `https` address, such as
-  [Tailscale HTTPS](./remote-access.md#tailscale-https). Signing in sends the
-  agent's credentials to the environment, and agents only do that over `https`
-  or to `localhost`. A plain-`http` LAN or Tailscale address, like
-  `http://100.x.y.z:3773`, lets an agent find the environment but not finish
-  signing in.
-- **A hosted agent**, such as ChatGPT or a bot running in the cloud, cannot reach
-  the environment. A Tailscale address works only from devices on your own
-  tailnet. Exposing it to the internet, for example with Tailscale Funnel, is
-  your own setup and is not supported by Ada.
+## Available tools and limits
 
-## Approve a sign-in
+Tools that act as a running Ada thread (`delegate_task`, `create_threads`, `request_secret`, `html_render`, `preview_*`, `device_*`, `t3_worktree_handoff`) only work for agents running **inside** Ada.
 
-The first time an agent connects, it opens a sign-in page on the environment.
-The page names the agent and where its access goes:
+- Use `t3_thread_launch` + `t3_thread_wait` / `t3_thread_read` to run and follow work.
+- Pass `projectId` or `threadId` explicitly (or `allProjects: true` on `t3_thread_list`).
+- **MCP Events (`io.modelcontextprotocol/events`)**: Bots can poll, stream, or subscribe via HTTPS webhooks (up to 1-hour leases; latest 1,000 milestones buffered in memory) for turn, approval, PR watch, and workflow events. For local webhook testing, set `T3CODE_MCP_WEBHOOK_ALLOWED_HOSTS=localhost,127.0.0.1` on the server.
 
-- For an agent on your computer, approval returns to a `localhost` address on
-  the computer that opened the page.
-- For a hosted agent, approval goes to that service, such as `chatgpt.com`.
-  Anyone who runs that service gets the access.
+## Host scripts (`ada thread`)
 
-Only approve a sign-in you just started. To approve, enter a code from
-**Use Ada in another app (MCP)**, **Settings → Environments**, or
-`ada auth pairing create` on the host. A browser already signed in to the
-environment with permission to manage access can approve without a code.
-
-A code from **Use Ada in another app (MCP)** already carries the level you
-picked there. With another code, choose what the agent may do here: **Auto** is
-selected by default, or the closest lower mode allowed by your organization’s
-policy. Approving without a code starts at **Read only**:
-
-- **Read only** lets the agent read projects and threads and see
-  the available providers and models. It cannot change anything.
-- **Supervised** through **Full access** also let it start, message and stop
-  threads in every project. A thread it starts or steers cannot run with more
-  permissions than the mode you chose.
-
-## What outside agents can call
-
-Some tools only work for an agent running inside an Ada thread, because they act
-as that thread: subagents, secret requests, rendered HTML, the browser preview,
-devices, and worktree handoff. They still appear in an outside agent's tool
-list, but calling one returns an error saying it needs an agent running inside
-Ada.
-
-- To hand off work, start a thread with `t3_thread_launch`, then follow it with
-  `t3_thread_wait` or `t3_thread_read`, instead of `create_threads` or
-  `delegate_task`.
-- Tools that default to the caller's own project or thread need an explicit
-  `projectId` or `threadId`.
-- To list threads across projects, call `t3_thread_list` with
-  `allProjects: true`, or use `t3_thread_search`.
-
-## Claude Code
-
-```sh
-claude mcp add --transport http t3 https://<environment-address>/mcp
-claude mcp login t3
-```
-
-`claude mcp login` opens the sign-in page in your browser. On a machine
-without a browser, add `--no-browser`, open the printed URL elsewhere, and
-paste the final URL back when asked. `claude mcp list` shows `t3` as connected
-once you approve.
-
-## Codex
-
-```sh
-codex mcp add t3 --url https://<environment-address>/mcp
-codex mcp login t3
-```
-
-`codex mcp login --no-browser` prints the sign-in URL instead of opening it.
-`codex mcp list` shows `t3` with OAuth once you approve.
-
-## Other agents and bots
-
-Any agent on a device that can reach the environment and supports remote MCP
-servers over HTTP with OAuth can connect. Give it the MCP URL and choose OAuth, and the agent finds the sign-in settings itself.
-Agents without OAuth support cannot connect.
-
-A bot that supports MCP Events (`io.modelcontextprotocol/events`) can learn
-when something happens without reading threads over and over: a turn ended, an
-agent waits on a person, a watched pull request woke
-its thread. [Workflow runs](workflows.md) are events too: a run started, paused,
-resumed or ended, or waits on a person. A bot can poll, stream, or receive each
-event type by webhook, narrowed to projects and threads or to workflows and
-runs; runs another run started are left out unless asked for, as subagent
-threads are, and narrowing thread events to a run picks out its agent steps.
-The environment keeps its latest 1,000 milestones in memory, so a bot that was
-away longer, or reconnects after a restart, is told some may be missing and
-should reread what it cares about. Webhooks go only to public `https` addresses,
-a subscription lasts at most an hour before the bot must renew it, and signing
-the bot out ends its subscriptions. To test with a receiver on your own machine
-or network, start the environment with `T3CODE_MCP_WEBHOOK_ALLOWED_HOSTS` set to
-its host names, for example `localhost,127.0.0.1`; those hosts may also use
-plain `http`.
-
-## Scripts on the host
-
-On the machine that runs the environment, `ada thread` uses the same tools
-without a sign-in:
+On the server machine itself, drive threads directly without OAuth:
 
 ```sh
 id=$(ada thread start . "Find why the tests are slow")
@@ -148,26 +51,5 @@ ada thread show "$id"
 ada thread list
 ```
 
-`.` means the project that contains the current folder, or a git worktree of
-its repository; a project id also works. A new thread uses the project's
-default model and permission mode, and runs in the project folder unless you
-pass `--worktree <base-branch>`. Its title is the message's first line, or
-`--title`; add `--generate-title` to have it named from the message, as threads
-started in the app are. `send` never interrupts: a busy thread gets the message
-as its next turn. Pass `-` as the message to read it from stdin.
-
-To choose the model, pass `--provider <instance-id> --model <slug>`. Add
-`--option id=value` for each model option. For reasoning effort, Codex uses
-`--option reasoningEffort=high`, while Claude uses `--option effort=high`.
-Option ids and allowed values depend on the provider and model; use those
-reported by `orchestrator_capabilities`. `true` and `false` set on/off options.
-
-`--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
-2 when the agent waits for an answer you give in the app. Add `--json` for a
-result that always includes the thread id.
-
-## Remove an agent
-
-Approved agents appear under **Settings → Environments** like other clients.
-Revoke one there to cut off its access immediately. A sign-in lasts 30 days;
-after that the agent asks you to approve it again.
+- Pass `--worktree <base-branch>`, `--title` / `--generate-title`, `--provider <id> --model <slug>`, `--option id=value` (e.g. `reasoningEffort=high` for Codex, `effort=high` for Claude), or `-` to read the prompt from stdin.
+- `--wait` prints the reply and exits `1` on failure/stop or `2` when waiting for user input. Add `--json` for structured output including the thread ID.

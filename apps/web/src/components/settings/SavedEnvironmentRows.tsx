@@ -30,6 +30,7 @@ import { MenuItem, MenuSeparator } from "../ui/menu";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import {
   resolveServerConfigVersionMismatch,
@@ -278,7 +279,11 @@ export function SavedBackendListRow({
             onClick={() => setRoutesOpen((open) => !open)}
             className="inline-flex shrink-0 items-center gap-0.5 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           >
-            {routeCount === 1 ? gt("Routes") : `${routeCount} routes`}
+            {routeCount === 1
+              ? gt("Routes")
+              : gt("{count, plural, one {{count} route} other {{count} routes}}", {
+                  count: routeCount,
+                })}
             <ChevronRightIcon
               aria-hidden
               className={cn(
@@ -389,22 +394,18 @@ export function SavedBackendListRow({
           appearance="icon"
         />
       ) : null}
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Switch
-              size="sm"
-              checked={enabled}
-              disabled={isRemoving || blocked}
-              aria-label={`Show ${environment.label} in this app`}
-              onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
-            />
-          }
-        />
-        <TooltipPopup side="top">
-          {blocked ? "Client not supported" : "Show in this app"}
-        </TooltipPopup>
-      </Tooltip>
+      <SharedTooltipTrigger
+        render={
+          <Switch
+            size="sm"
+            checked={enabled}
+            disabled={isRemoving || blocked}
+            aria-label={`Show ${environment.label} in this app`}
+            onCheckedChange={(checked) => onSetEnabled(environmentId, checked)}
+          />
+        }
+        label={blocked ? gt("Client not supported") : "Show in this app"}
+      />
       <EnvironmentActionsMenu
         environmentId={environmentId}
         label={environment.label}
@@ -413,20 +414,24 @@ export function SavedBackendListRow({
       >
         <MenuItem onClick={() => setRoutesOpen((open) => !open)}>
           <RouteIcon />
-          {routesOpen ? "Hide routes" : "Routes"}
+          {routesOpen ? gt("Hide routes") : gt("Routes")}
         </MenuItem>
         {mcpUrl ? (
-          <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>Copy MCP URL</MenuItem>
+          <MenuItem onClick={() => copyMcpUrl(mcpUrl, { url: mcpUrl })}>
+            <T>Copy MCP URL</T>
+          </MenuItem>
         ) : null}
         {errorTraceId ? (
-          <MenuItem onClick={() => copyTraceId(errorTraceId)}>Copy trace ID</MenuItem>
+          <MenuItem onClick={() => copyTraceId(errorTraceId)}>
+            <T>Copy trace ID</T>
+          </MenuItem>
         ) : null}
         {network?.menuItems}
         {network?.member === true ? null : (
           <>
             <MenuSeparator />
             <MenuItem variant="destructive" onClick={() => onRemove(environment)}>
-              {isRemoving ? "Removing…" : "Remove from this device…"}
+              {isRemoving ? gt("Removing…") : gt("Remove from this device…")}
             </MenuItem>
           </>
         )}

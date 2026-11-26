@@ -81,7 +81,7 @@ import {
   mapSettingsSecrets,
   mapSettingsSecretValues,
   withoutRemovedSecretProviderReferences,
-  withoutRedirectedSimlockTokens,
+  withoutRedirectedSecrets,
   SECRET_REDACTED,
   type SettingsSecret,
 } from "./settingsSecrets.ts";
@@ -184,9 +184,15 @@ function skillStubsForClient(skills: ReadonlyArray<AgentSkill>) {
   return skills.map((skill) => toAgentSkillStub(skill, cachedSkillDigest(skill)));
 }
 
+export interface SettingsClient {
+  readonly secretReferences: boolean;
+  readonly httpUsageLimitSources?: boolean;
+  readonly agentSkillBodiesOnDemand?: boolean;
+}
+
 export function redactServerSettingsForClient(
   settings: ServerSettings,
-  client: { readonly secretReferences: boolean; readonly agentSkillBodiesOnDemand?: boolean },
+  client: SettingsClient,
 ): ServerSettings {
   const shaped = redactSecretsForClient(settings, client);
   return client.agentSkillBodiesOnDemand === true
@@ -205,7 +211,7 @@ export function selectAgentSkills(settings: ServerSettings, skillIds: ReadonlyAr
 
 function redactSecretsForClient(
   settings: ServerSettings,
-  client: { readonly secretReferences: boolean },
+  client: SettingsClient,
 ): ServerSettings {
   const redacted = mapSettingsSecrets(settings, (secret) =>
     secret.sensitive
@@ -218,7 +224,18 @@ function redactSecretsForClient(
     : mapSettingsSecretValues(redacted, (value) =>
         isSecretReference(value) ? SECRET_REDACTED : value,
       );
-  return { ...shaped, secretProviders: withoutUnknownSecretProviderConfigs(shaped) };
+  return {
+    ...shaped,
+    secretProviders: withoutUnknownSecretProviderConfigs(shaped),
+    // Older clients decode only "cliproxy" sources and reject the whole settings payload otherwise.
+    usageLimitSources: client.httpUsageLimitSources
+      ? shaped.usageLimitSources
+      : Object.fromEntries(
+          Object.entries(shaped.usageLimitSources).filter(
+            ([, source]) => source.kind === "cliproxy",
+          ),
+        ),
+  };
 }
 
 /** A client shown a reference as a saved secret sends that marker back; it keeps the reference. */
@@ -1001,7 +1018,6 @@ function resolveTextGenerationProvider(
 ): ServerSettings {
   const selection = settings.textGenerationModelSelection;
   return isModelSelectionProviderEnabled(settings, selection) &&
-    selectionSupportsTextGeneration(settings, selection) &&
     isDriverAllowed(
       settings.providerInstances[selection.instanceId]?.driver ??
         ProviderDriverKind.make(selection.instanceId),
@@ -1673,7 +1689,7 @@ const make = Effect.gen(function* () {
         }
         // An older client echoes a reference as the redacted marker; restore it before vetting so
         // a removed provider's reference is cleared below rather than restored by persistence.
-        const updated = withoutRedirectedSimlockTokens(
+        const updated = withoutRedirectedSecrets(
           current,
           withEchoedSecretReferences(current, yield* update(current)),
         );

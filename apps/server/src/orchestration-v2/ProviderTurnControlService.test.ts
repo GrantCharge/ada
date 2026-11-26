@@ -151,6 +151,7 @@ function layerProjectionStore(
       listOlderSettledThreads: () => Effect.die("unused listOlderSettledThreads"),
       readShellSnapshot: () => Effect.die("unused readShellSnapshot"),
       getThreadShell: () => Effect.die("unused getThreadShell"),
+      getForkSourceRunIds: () => Effect.die("unused getForkSourceRunIds"),
       getThreadTitles: () => Effect.die("unused getThreadTitles"),
       getThreadLinkMetadata: () => Effect.die("unused getThreadLinkMetadata"),
       getThread: () => Effect.die("unused getThread"),
@@ -524,6 +525,7 @@ it.effect("steers a running turn with its sender and the thread's MCP app model 
                   server: "tools",
                   tool: "picker",
                   text: "Pressed: blue",
+                  updatedAt: "2026-11-23T14:02:17.000Z",
                 },
               ]),
           }),
@@ -548,7 +550,11 @@ it.effect("steers a running turn with its sender and the thread's MCP app model 
       '[Ada: the agent in Ada thread "thread:steer-sender" sent this message, not the user.]\n\nWhat did the app report?',
     );
     assert.deepEqual("appContext" in steered[0]! ? steered[0].appContext : undefined, [
-      { key: "mcp_app_turn-item_call-1", text: "Pressed: blue" },
+      {
+        key: "mcp_app_turn-item_call-1",
+        text: "Pressed: blue",
+        updatedAt: "2026-11-23T14:02:17.000Z",
+      },
     ]);
   }),
 );

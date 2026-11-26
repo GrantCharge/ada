@@ -39,6 +39,7 @@ export const GET_MCP_GATEWAY_LAUNCH_CONFIG_CHANNEL = "desktop:get-mcp-gateway-la
 export const GET_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL = "desktop:get-mcp-gateway-bridge-token";
 export const ENSURE_MCP_GATEWAY_BRIDGE_TOKEN_CHANNEL = "desktop:ensure-mcp-gateway-bridge-token";
 export const GET_CLIENT_DEVICE_NAME_CHANNEL = "desktop:get-client-device-name";
+export const GET_DATABASE_MIGRATION_PROGRESS_CHANNEL = "desktop:get-database-migration-progress";
 export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_PREFERRED_SYSTEM_LANGUAGES_CHANNEL = "desktop:get-preferred-system-languages";
 export const GET_PRIMARY_PASTE_ENABLED_CHANNEL = "desktop:get-primary-paste-enabled";

@@ -1,5 +1,5 @@
 import { RegistryContext } from "@effect/atom-react";
-import { Atom, AtomRegistry } from "effect/reactivity";
+import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   EnvironmentId,
@@ -91,6 +91,16 @@ const state = vi.hoisted(() => ({
 }));
 const secondaryId = EnvironmentId.make("secondary");
 const permissions = new Map<string, Atom.Writable<boolean>>();
+type TaskList = { readonly tasks: ReadonlyArray<ScheduledTask>; readonly timeZone: string };
+// The list each machine streams when several are in scope; unset machines are still loading.
+const taskLists = new Map<string, Atom.Writable<AsyncResult.AsyncResult<TaskList>>>();
+function taskList(id: string) {
+  const existing = taskLists.get(id);
+  if (existing) return existing;
+  const created = Atom.make<AsyncResult.AsyncResult<TaskList>>(AsyncResult.initial());
+  taskLists.set(id, created);
+  return created;
+}
 
 function setup() {
   state.connected = true;
@@ -104,6 +114,7 @@ function setup() {
   state.settings = DEFAULT_UNIFIED_SETTINGS;
   state.upsert.mockReset();
   permissions.clear();
+  taskLists.clear();
   permissions.set(environmentId, Atom.make(true));
   permissions.set(secondaryId, Atom.make(true));
   permissions.set("", Atom.make(false));
@@ -122,6 +133,7 @@ function environment() {
   return {
     environmentId,
     label: "Laptop",
+    entry: { target: { _tag: "PrimaryConnectionTarget" } },
     connection: { phase: state.connected ? "connected" : "disconnected" },
     serverConfig: state.connected
       ? { environment: { platform: "linux", capabilities: { oneTimeSchedules: true } } }
@@ -158,6 +170,8 @@ vi.mock(import("../../state/server"), async (original) => {
     serverEnvironment: {
       ...actual.serverEnvironment,
       providersValueAtom: (() => state.providers) as never,
+      scheduledTasksLive: (({ environmentId }: { environmentId: string }) =>
+        taskList(environmentId)) as never,
       upsertScheduledTask: {
         ...actual.serverEnvironment.upsertScheduledTask,
         run: state.upsert,
@@ -387,6 +401,35 @@ describe("ScheduledTasksSettings", () => {
     await expect.element(create).toBeEnabled();
     await create.click();
     await expect.element(page.getByLabelText("Runs on")).toHaveTextContent("Secondary");
+  });
+
+  it("waits for every machine before saying there are no tasks", async () => {
+    setup();
+    state.secondary = true;
+    const registry = AtomRegistry.make();
+    using _registry = { [Symbol.dispose]: () => registry.dispose() };
+    registry.set(taskList(secondaryId), AsyncResult.success({ tasks: [], timeZone: "UTC" }));
+    await using screen = await render(
+      <RegistryContext.Provider value={registry}>
+        <ScheduledTasksSettings />
+      </RegistryContext.Provider>,
+    );
+    await expect
+      .element(screen.getByRole("status", { name: "Loading scheduled tasks…" }))
+      .toBeVisible();
+    await expect.element(screen.getByText("No scheduled tasks")).not.toBeInTheDocument();
+
+    await act(() =>
+      registry.set(
+        taskList(environmentId),
+        AsyncResult.success({ tasks: [task], timeZone: "UTC" }),
+      ),
+    );
+    await expect.element(screen.getByText("Review issues")).toBeVisible();
+    await expect.element(screen.getByText("No scheduled tasks")).not.toBeInTheDocument();
+    await expect
+      .element(screen.getByRole("status", { name: "Loading scheduled tasks…" }))
+      .not.toBeInTheDocument();
   });
 
   it("keeps the permitted representative as the creation target", async () => {

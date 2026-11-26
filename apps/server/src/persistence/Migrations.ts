@@ -1,6 +1,9 @@
 import * as Migrator from "effect/sql/Migrator";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as DatabaseMigrationProgress from "./DatabaseMigrationProgress.ts";
 import {
   DATABASE_MIGRATION_PROGRESS_MESSAGE,
   DATABASE_MIGRATIONS_FINISHED_MESSAGE,
@@ -121,6 +124,14 @@ import Migration0108 from "./Migrations/108_AgentFeedback.ts";
 import Migration0109 from "./Migrations/109_IssueTrackerAccounts.ts";
 import Migration0110 from "./Migrations/110_Workflows.ts";
 import Migration0111 from "./Migrations/111_SupersededRunAttemptIndex.ts";
+import Migration0112 from "./Migrations/112_LayoutCommandApprovals.ts";
+import Migration0113 from "./Migrations/113_WorkflowSkippedRuns.ts";
+import Migration0114 from "./Migrations/114_WorkflowRunIndexes.ts";
+import Migration0115 from "./Migrations/115_WorkflowRunTags.ts";
+import Migration0116 from "./Migrations/116_ForkHistoryMembership.ts";
+import Migration0117 from "./Migrations/117_WorkflowMailSender.ts";
+import Migration0118 from "./Migrations/118_WorkflowPools.ts";
+import Migration0119 from "./Migrations/119_WorkflowRunSubject.ts";
 
 import ForkMigration001 from "./Migrations/fork/001_AgentProfileAndPullRequestCompatibility.ts";
 import ForkMigration002 from "./Migrations/fork/002_RepairAgentUpgradeSchema.ts";
@@ -260,6 +271,14 @@ const migrationEntries = [
   [109, "IssueTrackerAccounts", Migration0109],
   [110, "Workflows", Migration0110],
   [111, "SupersededRunAttemptIndex", Migration0111],
+  [112, "LayoutCommandApprovals", Migration0112],
+  [113, "WorkflowSkippedRuns", Migration0113],
+  [114, "WorkflowRunIndexes", Migration0114],
+  [115, "WorkflowRunTags", Migration0115],
+  [116, "ForkHistoryMembership", Migration0116],
+  [117, "WorkflowMailSender", Migration0117],
+  [118, "WorkflowPools", Migration0118],
+  [119, "WorkflowRunSubject", Migration0119],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
@@ -470,6 +489,7 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
   toForkMigrationInclusive,
 }: RunMigrationsOptions = {}) {
+  const progress = yield* Effect.serviceOption(DatabaseMigrationProgress.DatabaseMigrationProgress);
   // The desktop waits past its readiness budget until the finished line follows this one.
   const hasPending = yield* hasPendingMigrations();
   if (hasPending) yield* Effect.log(DATABASE_MIGRATIONS_STARTED_MESSAGE);
@@ -524,19 +544,28 @@ export const runMigrations = Effect.fn("runMigrations")(function* ({
   }
   // One transaction per migration: an index build on a large database can take minutes, and a
   // restart then resumes after the last finished migration instead of rolling all of them back.
-  for (const [index, [ledger, id, name]] of pending.entries()) {
-    if (existingDatabase) {
-      yield* Effect.log(DATABASE_MIGRATION_PROGRESS_MESSAGE).pipe(
-        Effect.annotateLogs({
-          migration: `${ledger === "fork" ? "fork/" : ""}${id}_${name}`,
-          progress: `${index + 1} of ${pending.length}`,
-        }),
+  yield* Effect.gen(function* () {
+    for (const [index, [ledger, id, name]] of pending.entries()) {
+      if (Option.isSome(progress)) {
+        yield* Ref.set(progress.value.current, { current: index + 1, total: pending.length });
+      }
+      if (existingDatabase) {
+        yield* Effect.log(
+          `${DATABASE_MIGRATION_PROGRESS_MESSAGE} (${index + 1} of ${pending.length})`,
+        ).pipe(
+          Effect.annotateLogs({
+            migration: `${ledger === "fork" ? "fork/" : ""}${id}_${name}`,
+            progress: `${index + 1} of ${pending.length}`,
+          }),
+        );
+      }
+      executed[ledger].push(
+        ...(yield* run({ loader: makeMigrationLoader(ledger, id), table: ledgers[ledger].table })),
       );
     }
-    executed[ledger].push(
-      ...(yield* run({ loader: makeMigrationLoader(ledger, id), table: ledgers[ledger].table })),
-    );
-  }
+  }).pipe(
+    Effect.ensuring(Option.isSome(progress) ? Ref.set(progress.value.current, null) : Effect.void),
+  );
 
   const migrations = [
     ...executed.upstream.map(([id, name]) => `${id}_${name}`),

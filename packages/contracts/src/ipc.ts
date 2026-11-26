@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import type { DatabaseMigrationProgress } from "./server.ts";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
 
 import { SnapShotSource } from "./chatAttachment.ts";
@@ -1251,6 +1252,7 @@ export interface DesktopBridge {
   getMcpGatewayBridgeToken?: () => string | null;
   /** The bridge token, creating a durable one when none is configured; null if it cannot. */
   ensureMcpGatewayBridgeToken?: () => string | null;
+  getDatabaseMigrationProgress?: () => Promise<DatabaseMigrationProgress | null>;
   getPathForFile: (file: File) => string;
   getClientPlatform: () => string;
   restartAudioService?: () => Promise<boolean>;

@@ -13,7 +13,9 @@ import {
   describeUpdateCapsule,
   formatUpdateElapsed,
   RUN_STATUS_LABELS,
+  resolveRestoredRetry,
   resolveUpdateRunMachineStatus,
+  type UpdateEverythingMachine,
   type UpdateEverythingRun,
   type UpdateRunLocalState,
   type UpdateRunMachineView,
@@ -35,7 +37,10 @@ function useNow(intervalMs: number | null): number {
   return useSyncExternalStore(subscribe, () => Math.floor(Date.now() / step) * step);
 }
 
-function useUpdateRunMachineViews(run: UpdateEverythingRun): ReadonlyArray<UpdateRunMachineView> {
+function useUpdateRunMachineViews(
+  run: UpdateEverythingRun,
+  current: ReadonlyArray<UpdateEverythingMachine>,
+): ReadonlyArray<UpdateRunMachineView> {
   const updateStates = useAtomValue(
     environmentUpdateStatesAtom(
       environmentIdsKey(run.machines.map(({ environmentId }) => environmentId)),
@@ -44,6 +49,7 @@ function useUpdateRunMachineViews(run: UpdateEverythingRun): ReadonlyArray<Updat
   return run.machines.map((machine, index) => ({
     machine,
     status: resolveUpdateRunMachineStatus(machine, run.phase, updateStates[index]!),
+    restoredRetry: resolveRestoredRetry(machine, current),
   }));
 }
 
@@ -72,12 +78,18 @@ function localStatusLabel(
 
 interface UpdateRunProps {
   readonly run: UpdateEverythingRun;
+  /** Every server as it is now, to rebuild the retry of a row restored after a relaunch. */
+  readonly current: ReadonlyArray<UpdateEverythingMachine>;
   readonly local: UpdateRunLocalState;
   readonly onRestart?: (() => Promise<void>) | undefined;
 }
 
-function useUpdateRun(run: UpdateEverythingRun, local: UpdateRunLocalState) {
-  const machines = useUpdateRunMachineViews(run);
+function useUpdateRun(
+  run: UpdateEverythingRun,
+  current: ReadonlyArray<UpdateEverythingMachine>,
+  local: UpdateRunLocalState,
+) {
+  const machines = useUpdateRunMachineViews(run, current);
   const hasActiveMachine = machines.some(
     ({ status }) => status !== "done" && status !== "failed" && status !== "waiting",
   );
@@ -87,8 +99,16 @@ function useUpdateRun(run: UpdateEverythingRun, local: UpdateRunLocalState) {
   const updateServer = useServerUpdate();
   const runAction = () => {
     if (view.action === "later") postponeUpdateRestart();
-    else if (view.action === "retry") retryFailedUpdateRunServers(updateServer);
-    else dismissSettledUpdateRunMachines();
+    else if (view.action === "retry") {
+      retryFailedUpdateRunServers(
+        updateServer,
+        new Map(
+          machines.flatMap(({ machine, restoredRetry }) =>
+            restoredRetry === null ? [] : [[machine.environmentId, restoredRetry] as const],
+          ),
+        ),
+      );
+    } else dismissSettledUpdateRunMachines();
   };
   return {
     machines,
@@ -112,6 +132,7 @@ function useUpdateRun(run: UpdateEverythingRun, local: UpdateRunLocalState) {
 /** The update control where the capsule does not fit: its icon opens the run's details. */
 export function UpdateRunButton({
   run,
+  current,
   local,
   onRestart,
   icon,
@@ -122,7 +143,7 @@ export function UpdateRunButton({
   readonly className: string;
   readonly updateState: string;
 }) {
-  const runView = useUpdateRun(run, local);
+  const runView = useUpdateRun(run, current, local);
   return (
     <Popover>
       <PopoverTrigger
@@ -146,11 +167,12 @@ export function UpdateRunButton({
 
 export function SidebarUpdateCapsule({
   run,
+  current,
   local,
   icon,
   onRestart,
 }: UpdateRunProps & { readonly icon: ReactNode }) {
-  const runView = useUpdateRun(run, local);
+  const runView = useUpdateRun(run, current, local);
   const { view, runAction, restartSeconds } = runView;
   const m = useMessages();
   const gt = useGT();
@@ -231,7 +253,7 @@ function UpdateRunDetails({
   local,
   onRestart,
   runView: { machines, now, view, runAction, failed, settled, waitsOnHandoff },
-}: UpdateRunProps & { readonly runView: ReturnType<typeof useUpdateRun> }) {
+}: Omit<UpdateRunProps, "current"> & { readonly runView: ReturnType<typeof useUpdateRun> }) {
   const m = useMessages();
   return (
     <div className="flex flex-col gap-1 text-xs">

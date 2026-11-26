@@ -1,5 +1,6 @@
 import { APP_NAME } from "@t3tools/shared/branding";
 import * as NetService from "@t3tools/shared/Net";
+import { isWildcardHost, normalizeHostname } from "@t3tools/shared/hostClassification";
 import {
   OtlpHeadersFromString,
   OtlpProtocol,
@@ -381,6 +382,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   );
   const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
   const desktopBootstrapSecret = bootstrap?.desktopBootstrapSecret;
+  const desktopReadinessSecret = bootstrap?.desktopReadinessSecret;
   const shellEnvironmentPrepared = bootstrap?.shellEnvironmentPrepared;
   const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
   const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
@@ -430,8 +432,8 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     normalizedFlags.host,
     Option.fromUndefinedOr(env.host),
     Option.fromUndefinedOr(bootstrap?.host),
-  );
-  // Private networks only, so clients learn a LAN address. `t3 service install`
+  ).pipe(Option.map((host) => (isWildcardHost(host) ? normalizeHostname(host) : host)));
+  // Private networks only, so clients learn a LAN address. `ada service install`
   // writes T3CODE_LAN=false for a new service; one installed before T3CODE_LAN
   // existed keeps listening.
   const lan = resolveOptionPrecedence(normalizedFlags.lan, Option.fromUndefinedOr(env.lan));
@@ -538,6 +540,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     startupPresentation,
     desktopBootstrapToken,
     ...(desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret }),
+    ...(desktopReadinessSecret === undefined ? {} : { desktopReadinessSecret }),
     ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
     desktopTelemetryFd,
     desktopTelemetryControlFd,
