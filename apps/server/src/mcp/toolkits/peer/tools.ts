@@ -1,8 +1,10 @@
 import {
+  McpGatewayRelayThreadTaskRequest,
   OrchestrationV2ParentSettlement,
   OrchestrationV2ParentSettlementResult,
   OrchestratorMcpFailure,
   PEER_FOLLOW_PARENT_SETTLEMENT_TOOL,
+  PEER_THREAD_TASK_TOOL,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
@@ -30,4 +32,19 @@ const PeerFollowParentSettlementTool = Tool.make(PEER_FOLLOW_PARENT_SETTLEMENT_T
   .annotate(Tool.Strict, true)
   .annotate(Tool.Destructive, true);
 
-export const PeerToolkit = Toolkit.make(PeerFollowParentSettlementTool);
+const PeerThreadTaskTool = Tool.make(PEER_THREAD_TASK_TOOL, {
+  description: "A task split between this environment and the calling one, by its capability.",
+  parameters: McpGatewayRelayThreadTaskRequest,
+  success: Schema.Unknown,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+  ],
+})
+  .annotate(Tool.Title, "Relay a thread task")
+  .annotate(Tool.Strict, true)
+  .annotate(Tool.Destructive, true);
+
+export const PeerToolkit = Toolkit.make(PeerFollowParentSettlementTool, PeerThreadTaskTool);

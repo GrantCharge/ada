@@ -16,6 +16,8 @@ import {
   type ModelSelection,
   type ProjectScript,
   type RuntimeMode,
+  type PeerLink,
+  ThreadTaskError,
 } from "@t3tools/contracts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -42,6 +44,8 @@ import * as Project from "../../../project/ProjectService.ts";
 import * as ProjectCloneTracker from "../../../project/ProjectCloneTracker.ts";
 import * as ManagedProjectFolders from "../../../project/ManagedProjectFolders.ts";
 import * as PeerForwarding from "../../../peer/PeerForwarding.ts";
+import * as PeerLinks from "../../../peer/PeerLinks.ts";
+import * as ThreadTaskService from "../../../threadTask/ThreadTaskService.ts";
 import * as SourceControlProviderRegistry from "../../../sourceControl/SourceControlProviderRegistry.ts";
 import * as Repositories from "../../../sourceControl/SourceControlRepositoryService.ts";
 import * as GitVcsDriver from "../../../vcs/GitVcsDriver.ts";
@@ -221,6 +225,132 @@ it.effect("launches an agent thread from profileId and rejects unknown agents", 
     const unknown = yield* handle({ title: "Review", profileId: "nobody", message: "Go" });
     expect(unknown.at(-1)?.result).toMatchObject({ code: "invalid_request" });
     expect(launched).toHaveLength(1);
+  }),
+);
+
+it.effect("an agent launched over a peer link becomes the calling thread's task", () =>
+  Effect.gen(function* () {
+    const sourceThreadId = ThreadId.make("source-thread");
+    const linkedEnvironmentId = EnvironmentId.make("linked-environment");
+    const providerInstanceId = ProviderInstanceId.make("codex");
+    const modelSelection = { instanceId: providerInstanceId, model: "gpt-5" };
+    const caller = {
+      id: sourceThreadId,
+      projectId: ProjectId.make("project"),
+      providerInstanceId,
+      modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      activeRunId: "active-run",
+      archivedAt: null,
+      deletedAt: null,
+    } as OrchestrationV2ThreadShell;
+    const assigned: Array<{
+      readonly caller: unknown;
+      readonly input: unknown;
+      readonly workerEnvironmentId: EnvironmentId | undefined;
+    }> = [];
+    let refuseAssign = false;
+    const layerDependencies = Layer.mergeAll(
+      Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) }),
+      NodeCrypto.layer,
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId: EnvironmentId.make("environment"),
+        requestNamespace: "session",
+        thread: { threadId: sourceThreadId, providerSessionId: "session", providerInstanceId },
+        client: undefined,
+        issuedAt: 0,
+        capabilities: new Set(["orchestration" as const]),
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: () => Effect.succeed(caller),
+      }),
+      Layer.mock(ThreadLaunch.ThreadLaunchService)({}),
+      Layer.mock(Project.ProjectService)({}),
+      Layer.mock(PeerLinks.PeerLinks)({
+        get: (environmentId) =>
+          Effect.succeed(
+            environmentId === linkedEnvironmentId ? Option.some({} as PeerLink) : Option.none(),
+          ),
+      }),
+      Layer.mock(PeerForwarding.PeerForwarding)({
+        call: (_scope, _tool, environmentId, params) =>
+          Effect.succeed({
+            environmentId,
+            threadId: ThreadId.make(`there:${(params as { title: string }).title}`),
+            projectId: ProjectId.make("project:there"),
+            modelSelection,
+            runId: null,
+            status: null,
+          } as never),
+      }),
+      Layer.mock(ThreadTaskService.ThreadTaskService)({
+        assign: (taskCaller, input, workerEnvironmentId) => {
+          assigned.push({ caller: taskCaller, input, workerEnvironmentId });
+          return refuseAssign
+            ? Effect.fail(
+                new ThreadTaskError({
+                  code: "unreachable",
+                  detail: "The worker's environment did not answer.",
+                }),
+              )
+            : Effect.succeed({} as never);
+        },
+      }),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
+      Layer.mock(GitVcsDriver.GitVcsDriver)({}),
+      Layer.mock(DocumentText.DocumentText)({}),
+      NodeServices.layer,
+      ServerSettings.layerTest(),
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-linked-launch-" }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    );
+    const toolkit = yield* ProjectToolkit.pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(ProjectHandlers.layer).pipe(
+          Layer.provide(layerDependencies),
+        ),
+      ),
+    );
+    const launch = (params: Parameters<typeof toolkit.handle<"t3_thread_launch">>[1]) =>
+      toolkit.handle("t3_thread_launch", params).pipe(
+        Stream.unwrap,
+        Stream.runCollect,
+        Effect.map((results) => results.at(-1)?.result),
+        Effect.provide(layerDependencies),
+      );
+    const there = {
+      environmentId: linkedEnvironmentId,
+      projectId: ProjectId.make("project:there"),
+      message: "Go",
+    };
+
+    const named = yield* launch({ ...there, title: "Review", profileId: "doug" });
+    expect(named).toMatchObject({ threadId: "there:Review" });
+    expect(named).not.toHaveProperty("warnings");
+    expect(assigned).toEqual([
+      {
+        caller: { kind: "thread", threadId: sourceThreadId },
+        input: {
+          threadId: "there:Review",
+          summary: "Review",
+          clientRequestId: "launch:there:Review",
+        },
+        workerEnvironmentId: linkedEnvironmentId,
+      },
+    ]);
+
+    // A plain chat is not a task, as for a launch here.
+    yield* launch({ ...there, title: "Chat" });
+    expect(assigned).toHaveLength(1);
+
+    refuseAssign = true;
+    const unregistered = yield* launch({ ...there, title: "Audit", profileId: "doug" });
+    expect(unregistered).toMatchObject({
+      threadId: "there:Audit",
+      warnings: [expect.stringContaining("The worker's environment did not answer.")],
+    });
   }),
 );
 

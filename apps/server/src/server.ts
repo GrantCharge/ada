@@ -610,9 +610,13 @@ const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
       Layer.provide(RuntimeLayer.layerProjectService),
     ),
   ),
-  // Tasks split across machines reach the other environment through the same
-  // broker the WebSocket routes serve (one memoized instance).
-  Layer.provide(ThreadTaskTransport.layerFromBroker.pipe(Layer.provide(layerMcpGatewayBroker))),
+  // Tasks split across machines reach the other environment over this server's own link,
+  // else through the same broker the WebSocket routes serve (one memoized instance).
+  Layer.provide(
+    ThreadTaskTransport.layerFromBroker.pipe(
+      Layer.provide(Layer.merge(layerMcpGatewayBroker, layerPeerLinks)),
+    ),
+  ),
   // RemoteParentSettlement asks other environments through the same broker.
   Layer.provide(layerMcpGatewayBroker),
   // Remote settlement settles children over this server's own links first.
