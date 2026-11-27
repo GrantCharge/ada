@@ -209,7 +209,15 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         ProviderEventLoggers.NoOpProviderEventLoggers,
       ),
     ),
-    Layer.provideMerge(ProviderLatestVersions.layer),
+    // A real lookup runs `npm view` with its cache in the temp state dir, still writing there
+    // when the scope removes that dir.
+    Layer.provideMerge(
+      Layer.mock(ProviderLatestVersions.ProviderLatestVersions)({
+        cached: () => Effect.succeed(null),
+        invalidate: () => Effect.void,
+        invalidateAll: Effect.void,
+      }),
+    ),
     Layer.provideMerge(McpProviderSessions.layer),
     Layer.provideMerge(ProviderInstallationGate.layer),
     Layer.provideMerge(ModelManifest.layerTest),
