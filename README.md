@@ -32,19 +32,9 @@ to it from anywhere.
 
 Download Ada from [GitHub Releases](https://github.com/jayleaton/ada/releases): the `.dmg` on macOS, the `.exe` on Windows, or the `.AppImage` or `.deb` on Linux. Its updater then follows nightly releases; there is no Stable track yet.
 
-`winget`, Homebrew, the AUR, Nix and `npx t3` install T3 Code, not Ada.
-
 ### Command line
 
 The desktop app includes the `ada` command (**Settings → About → ada command**). `ada update` and `ada service install` download Ada's releases. For a Linux machine without a desktop, see [Headless Linux host](./docs/operations/headless-linux.md).
-
-### Switching from T3 Code
-
-Ada uses the same data directory (`~/.t3`), so your projects, threads, settings, provider sign-ins and paired devices carry over, and phones and other machines still recognise this one. Your database is upgraded the first time Ada starts.
-
-- Quit T3 Code first. The two apps share one profile, so only one of them can run at a time.
-- If you installed T3 Code's background service, run `t3 service uninstall` before opening Ada. Otherwise that service keeps using your data directory and Ada cannot start its own server.
-- Ada does not include T3 Connect. Devices you paired through T3 Connect need to pair again over your local network or tailnet ([remote access](./docs/user/remote-access.md)).
 
 ## Some notes
 
