@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import { Button } from "../../components/ui/Button";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import * as Dialog from "../../components/ui/Dialog";
@@ -50,7 +51,6 @@ import { mcpAppRelayDocument } from "./mcpAppRelayDocument";
 import { MCP_APP_INLINE_MAX_HEIGHT, mcpAppInlineHeight } from "./mcpAppSizing";
 
 const ROW_BOTTOM_MARGIN = 8;
-const PRODUCT_NAME = "T3 Code";
 
 const commandFailure = (result: {
   readonly cause: Parameters<typeof squashAtomCommandFailure>[0]["cause"];
@@ -550,7 +550,7 @@ export function ThreadMcpApp(props: {
         <View className="flex-1 items-center justify-center rounded-lg border border-border px-4">
           <Text className="text-center text-sm text-foreground-muted">
             <T>
-              The <Var>{app.server}</Var> app needs a newer <Var>{PRODUCT_NAME}</Var> server on this
+              The <Var>{app.server}</Var> app needs a newer <Var>{APP_NAME}</Var> server on this
               environment. Update the server to use it.
             </T>
           </Text>

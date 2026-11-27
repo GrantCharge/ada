@@ -510,7 +510,7 @@ export class IssueOperationError extends Schema.TaggedError<IssueOperationError>
     retryAt: Schema.optional(Schema.Number),
     cause: Schema.optional(Schema.Defect()),
   },
-  // Not 502: Cloudflare, in front of T3 Connect, swaps an origin 502 for its own page.
+  // Not 502: a proxy such as Cloudflare in front of the server swaps an origin 502 for its own page.
   { httpApiStatus: 503 },
 ) {
   [HttpServerRespondable.symbol]() {
@@ -700,7 +700,7 @@ export class IssueTrackerConnectionError extends Schema.TaggedError<IssueTracker
     detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-  // Not 502: Cloudflare, in front of T3 Connect, swaps an origin 502 for its own page.
+  // Not 502: a proxy such as Cloudflare in front of the server swaps an origin 502 for its own page.
   { httpApiStatus: 503 },
 ) {
   [HttpServerRespondable.symbol]() {
