@@ -37,6 +37,12 @@ const BANNED_DEPENDENCIES: ReadonlyArray<{ readonly prefix: string; readonly why
 export const BANNED_CONTENT: ReadonlyArray<{ readonly pattern: RegExp; readonly why: string }> = [
   { pattern: /\bphc_[A-Za-z0-9]{20,}/, why: "a PostHog project key" },
   { pattern: /T3CODE_POSTHOG_/, why: "upstream's PostHog settings" },
+  { pattern: /T3CODE_TELEMETRY_(?:KEY|HOST)\b/, why: "upstream's renamed analytics settings" },
+  {
+    pattern: /\b(?:isRelayTracingEnabled|getRelayTelemetryEnabled|relayTracing)\b/,
+    why: "upstream's relay tracing",
+  },
+  { pattern: /AnalyticsDeviceId|ANALYTICS_DEVICE_ID/, why: "an analytics device id" },
   { pattern: /posthog\.com/, why: "a PostHog host" },
   { pattern: /ingest\.t3\.codes/, why: "upstream's analytics endpoint" },
   { pattern: /sentry\.io/, why: "a Sentry host" },

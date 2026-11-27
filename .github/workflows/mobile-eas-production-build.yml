@@ -29,6 +29,9 @@ on:
       EXPO_PRODUCTION_TOKEN:
         required: true
 
+permissions:
+  contents: read
+
 jobs:
   # ARM-only, without release lint (see the production profile in eas.json),
   # with Gradle, ccache, and pnpm state on a sticky disk.

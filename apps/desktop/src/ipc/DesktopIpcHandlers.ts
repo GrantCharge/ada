@@ -46,6 +46,7 @@ import {
   getMcpGatewayBridgeToken,
   ensureMcpGatewayBridgeToken,
   getMcpGatewayLaunchConfig,
+  getDatabaseMigrationProgress,
   getLocalEnvironmentBootstraps,
   getLocalEnvironmentBearerToken,
   getSystemLocale,
@@ -115,6 +116,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(ensureMcpGatewayBridgeToken);
   yield* ipc.handleSync(getMcpGatewayLaunchConfig);
   yield* ipc.handle(McpGatewayIpc.configureManagedMcpGateway);
+  yield* ipc.handle(getDatabaseMigrationProgress);
   yield* ipc.handleSync(getSystemLocale);
   yield* ipc.handleSync(getPreferredSystemLanguages);
   yield* ipc.handleSync(getPrimaryPasteEnabled);

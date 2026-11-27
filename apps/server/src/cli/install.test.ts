@@ -80,15 +80,43 @@ it.layer(NodeServices.layer)("t3 install", (it) => {
       const onPath = yield* provide(installCli(), { PATH: `/usr/bin:${path.join(root, "bin")}/` });
       assert.isTrue(onPath.onPath);
       // Another ada earlier on PATH still runs first, so `ada` would not run this one.
+      const binDir = path.join(root, "bin");
       const otherBin = path.join(root, "other-bin");
       yield* fs.makeDirectory(otherBin);
       yield* fs.writeFileString(path.join(otherBin, "ada"), "#!/bin/sh\n", { mode: 0o755 });
-      const shadowed = yield* provide(installCli(), {
+      const installIn = (cwd: string, PATH: string) =>
+        provide(installCli().pipe(Effect.provideService(HostProcess.WorkingDirectory, cwd)), {
+          PATH,
+        });
+      const assertShadowed = (result: Effect.Success<ReturnType<typeof installCli>>) => {
+        assert.isFalse(result.onPath);
+        assert.equal(result.shadowedBy, path.join(otherBin, "ada"));
+        assert.isUndefined(result.pathCommand);
+      };
+      assertShadowed(yield* provide(installCli(), { PATH: `${otherBin}:${binDir}` }));
+      // Relative and empty entries resolve against the working directory.
+      assertShadowed(yield* installIn(root, `other-bin:${binDir}`));
+      assertShadowed(yield* installIn(otherBin, `:${binDir}`));
+      // An empty PATH is not the working directory.
+      const offPath = yield* installIn(otherBin, "");
+      assert.isUndefined(offPath.shadowedBy);
+      assert.isDefined(offPath.pathCommand);
+      // A symlink to binDir, or a relative entry to it that wins first, is this install.
+      yield* fs.remove(alias);
+      yield* fs.symlink(binDir, alias);
+      for (const pathEnv of [`${alias}:${otherBin}`, `bin:other-bin:${binDir}`]) {
+        const installedOnPath = yield* installIn(root, pathEnv);
+        assert.isTrue(installedOnPath.onPath);
+        assert.isUndefined(installedOnPath.shadowedBy);
+      }
+      yield* fs.remove(alias);
+      yield* fs.remove(path.join(otherBin, "ada"));
+      yield* fs.makeDirectory(path.join(otherBin, "ada"));
+      const directory = yield* provide(installCli(), {
         PATH: `${otherBin}:${path.join(root, "bin")}`,
       });
-      assert.isFalse(shadowed.onPath);
-      assert.equal(shadowed.shadowedBy, path.join(otherBin, "ada"));
-      assert.isUndefined(shadowed.pathCommand);
+      assert.isTrue(directory.onPath);
+      assert.isUndefined(directory.shadowedBy);
       const realBin = yield* fs.realPath(path.join(root, "bin"));
       const recorded = yield* fs.readFileString(path.join(runtimeDir, "launchers"));
       assert.deepEqual(recorded.split("\n").filter(Boolean), [`${realBin}/t3`, `${realBin}/ada`]);

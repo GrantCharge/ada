@@ -79,6 +79,7 @@ vi.mock("../layout/workspace/workspace-selection-store", () => ({
 vi.mock("./devAutoConnect", () => ({
   autoConnectReport: () => ({ connecting: false, error: null }),
   devAutoConnectAttemptAtom: {},
+  pairingLinksAllowed: () => __DEV__,
 }));
 vi.mock("../../state/use-remote-environment-registry", () => ({
   setPendingConnectionError: (message: string | null) => {

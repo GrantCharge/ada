@@ -9,6 +9,7 @@ import * as SharedObservability from "@t3tools/shared/observability";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as LogLevel from "effect/LogLevel";
 import * as References from "effect/References";
 import * as Tracer from "effect/Tracer";
 import * as OtlpExporter from "effect/observability/OtlpExporter";
@@ -85,6 +86,9 @@ export const layer = Layer.unwrap(
           batchWindowMs: config.traceBatchWindowMs,
           sink,
           sampling,
+          sampleRoutineSpans:
+            config.traceTimingEnabled &&
+            LogLevel.isGreaterThanOrEqualTo(config.traceMinLevel, "Info"),
           ...(delegate ? { delegate } : {}),
         });
 

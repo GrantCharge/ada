@@ -160,9 +160,9 @@ export const resolveTailscaleAdvertisedEndpoints = Effect.fn("resolveTailscaleAd
       input.serveEnabled === true && status?.magicDnsName
         ? yield* (
             input.readServePort ??
-              findTailscaleServePortFor({ localPort: input.port }).pipe(
-                Effect.orElseSucceed(() => null),
-              )
+            findTailscaleServePortFor({ localPort: input.port }).pipe(
+              Effect.orElseSucceed(() => null),
+            )
           )
         : null;
     const servePort = servedPort ?? input.servePort;

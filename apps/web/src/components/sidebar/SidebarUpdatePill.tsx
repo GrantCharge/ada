@@ -469,12 +469,19 @@ function UpdateControl({
         : undefined;
     return inSidebar ? (
       <SidebarMenuItem className="@container/sidebar-update ml-auto flex min-w-8 flex-1">
-        <SidebarUpdateCapsule run={run} local={local} icon={statusIcon} onRestart={onRestart} />
+        <SidebarUpdateCapsule
+          run={run}
+          current={everything.machines}
+          local={local}
+          icon={statusIcon}
+          onRestart={onRestart}
+        />
         {confirmDialog}
       </SidebarMenuItem>
     ) : (
       <UpdateRunButton
         run={run}
+        current={everything.machines}
         local={local}
         icon={statusIcon}
         onRestart={onRestart}

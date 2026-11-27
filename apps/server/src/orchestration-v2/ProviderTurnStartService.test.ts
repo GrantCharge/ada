@@ -88,6 +88,7 @@ import * as SettlementCascade from "./SettlementCascade.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as ProjectionMaintenance from "./ProjectionMaintenance.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProfileSnapshotContent } from "./ProfileSnapshotContent.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -222,6 +223,7 @@ function startWithMissingWorktree(
             Effect.succeedSome({ workspaceRoot: "/tmp/provider-turn-start-project" } as never),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getForkSourceRunIds: () => Effect.succeed(projection.runs.map((run) => run.id)),
           getThreadRecords: () => {
             projectionReadCount += 1;
             return Effect.succeed(projection);
@@ -1448,6 +1450,7 @@ function makeLocalCommandHarness(input: {
             } as never),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getForkSourceRunIds: () => Effect.succeed(parentRecords.runs.map((run) => run.id)),
           getThreadRecords,
           getTurnStartContext,
           getProfileSnapshotContent: () =>
@@ -1694,6 +1697,7 @@ function layerStartEffectWorker(
         Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
         Layer.mock(SettlementCascade.SettlementCascade)({}),
         Layer.mock(ComputerService.ComputerService)({ stopForThread: () => Effect.void }),
+        Layer.mock(ProjectionMaintenance.ProjectionMaintenanceV2)({}),
         ServerSettings.layerTest(),
       ),
     ),

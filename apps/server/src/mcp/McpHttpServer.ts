@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -44,6 +45,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
 import * as PullRequestWatchService from "../pullRequest/PullRequestWatchService.ts";
 import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
+import * as McpClientInput from "./McpClientInput.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { leanToolResult, wantsLeanResults } from "./McpResultShape.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
@@ -114,6 +116,7 @@ import { MCP_HTTP_PATH } from "../httpCors.ts";
 import { requestUrl } from "../requestUrl.ts";
 import type { ThreadId } from "@t3tools/contracts";
 import { APP_NAME } from "@t3tools/shared/branding";
+import { routineSpan } from "@t3tools/shared/observability";
 
 const mcpResourceMetadataUrl = (request: HttpServerRequest.HttpServerRequest) =>
   requestUrl(request).pipe(
@@ -1092,7 +1095,7 @@ const withToolResultCapture = Effect.fn("McpHttpServer.withToolResultCapture")(f
   }
   const capturingServer = McpServer.McpServer.of({
     ...server,
-    addTool: Effect.fn("McpServer.addTool")(function (options) {
+    addTool: Effect.fn("McpServer.addTool", { attributes: routineSpan })(function (options) {
       const toolName = options.tool.name;
       // html_render tracks its own path/hash recovery with publish cleanup in HtmlRender.
       if (toolName === HTML_RENDER_TOOL_NAME) {
@@ -1145,7 +1148,7 @@ const withToolSpans = Effect.fn("McpHttpServer.withToolSpans")(function* <A, E, 
   const server = yield* McpServer.McpServer;
   const tracingServer = McpServer.McpServer.of({
     ...server,
-    addTool: Effect.fn("McpServer.addTool")(function (options) {
+    addTool: Effect.fn("McpServer.addTool", { attributes: routineSpan })(function (options) {
       const name = options.tool.name;
       return server.addTool({
         ...options,
@@ -1186,7 +1189,7 @@ const withResultShape = Effect.fn("McpHttpServer.withResultShape")(function* <A,
       McpServer.McpServer,
       McpServer.McpServer.of({
         ...server,
-        addTool: Effect.fn("McpServer.addTool")((options) =>
+        addTool: Effect.fn("McpServer.addTool", { attributes: routineSpan })((options) =>
           server.addTool({
             ...options,
             handle: (payload) =>
@@ -1321,7 +1324,7 @@ const withCompactResults = Effect.fn("McpHttpServer.withCompactResults")(functio
       McpServer.McpServer,
       McpServer.McpServer.of({
         ...server,
-        addTool: Effect.fn("McpServer.addTool")((options) =>
+        addTool: Effect.fn("McpServer.addTool", { attributes: routineSpan })((options) =>
           server.addTool({
             ...options,
             handle: (payload) => options.handle(payload).pipe(Effect.map(compactToolResult)),
@@ -1330,6 +1333,38 @@ const withCompactResults = Effect.fn("McpHttpServer.withCompactResults")(functio
       }),
     ),
   );
+});
+
+/**
+ * A toolkit handler returns its tool's result type, so it cannot answer with a request for the
+ * client's input. It leaves one in `McpClientInput` and ends, and that request is the answer.
+ */
+const withClientInput = Effect.fn("McpHttpServer.withClientInput")(function* <A, E, R>(
+  registration: Effect.Effect<A, E, R>,
+) {
+  const server = yield* McpServer.McpServer;
+  const sessions = Option.getOrUndefined(
+    yield* Effect.serviceOption(McpProviderSessions.McpProviderSessions),
+  );
+  const askingServer = McpServer.McpServer.of({
+    ...server,
+    addTool: Effect.fn("McpServer.addTool", { attributes: routineSpan })(function (options) {
+      return server.addTool({
+        ...options,
+        handle: Effect.fnUntraced(function* (payload) {
+          const request = yield* Ref.make<McpSchema.InputRequired | undefined>(undefined);
+          const exit = yield* options
+            .handle(payload)
+            .pipe(
+              Effect.provideService(McpClientInput.McpClientInput, { request, sessions }),
+              Effect.exit,
+            );
+          return (yield* Ref.get(request)) ?? (yield* exit);
+        }),
+      });
+    }),
+  });
+  return yield* registration.pipe(Effect.provideService(McpServer.McpServer, askingServer));
 });
 
 /** `McpServer.registerToolkit` advertises the full codec schema; agents get the compact one. */
@@ -1343,7 +1378,7 @@ const withAdvertisedSchemas = Effect.fn("McpHttpServer.withAdvertisedSchemas")(f
   const tools: Record<string, Tool.Any> = toolkit.tools;
   const advertisingServer = McpServer.McpServer.of({
     ...server,
-    addTool: Effect.fn("McpServer.addTool")(function (options) {
+    addTool: Effect.fn("McpServer.addTool", { attributes: routineSpan })(function (options) {
       const tool = tools[options.tool.name];
       return server.addTool(
         tool === undefined
@@ -1388,9 +1423,11 @@ export const toolkitRegistration = <Tools extends Record<string, Tool.Any>, EX, 
         withResultShape(
           withCompactResults(
             withToolResultCapture(
-              withAdvertisedSchemas(
-                toolkit,
-                McpServer.registerToolkit(decodeAsAdvertised(toolkit)),
+              withClientInput(
+                withAdvertisedSchemas(
+                  toolkit,
+                  McpServer.registerToolkit(decodeAsAdvertised(toolkit)),
+                ),
               ),
             ),
           ),

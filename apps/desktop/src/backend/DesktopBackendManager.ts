@@ -30,8 +30,12 @@ import {
   DesktopTelemetryControlMessage,
   type DesktopTelemetryControlMessage as DesktopTelemetryControlMessageValue,
   type DesktopTelemetryRunsPausedForUpdate,
+  type DatabaseMigrationProgress,
 } from "@t3tools/contracts";
-import { isRunningDatabaseMigrations } from "@t3tools/shared/databaseMigrationLog";
+import {
+  databaseMigrationProgress,
+  isRunningDatabaseMigrations,
+} from "@t3tools/shared/databaseMigrationLog";
 import { waitForHttpReady as waitForHttpReadyShared } from "@t3tools/shared/httpReadiness";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -81,6 +85,12 @@ export interface BackendProcessContext {
 
 export type DesktopBackendBootstrapDelivery = "fd3" | "stdin";
 
+/** One readiness request and the test its answer must pass to count as this launch's backend. */
+export interface BackendReadinessProbe {
+  readonly path: string;
+  readonly accept: (body: string) => Effect.Effect<boolean>;
+}
+
 export interface DesktopBackendStartConfig extends BackendProcessContext {
   readonly args: ReadonlyArray<string>;
   readonly env: Record<string, string | undefined>;
@@ -91,6 +101,8 @@ export interface DesktopBackendStartConfig extends BackendProcessContext {
   readonly httpBaseUrl: URL;
   readonly captureOutput: boolean;
   readonly preflightFailure: Option.Option<PreflightFailure>;
+  /** Set for a backend without a control channel; each evaluation yields a fresh probe. */
+  readonly readinessProbe?: Effect.Effect<BackendReadinessProbe>;
   readonly runningDistro?: string;
   readonly wslRuntimeId?: string;
   readonly wslT3Home?: string | null;
@@ -288,6 +300,9 @@ export interface BackendInstanceSpec {
   readonly onDatabaseRefused?: () => Effect.Effect<void>;
   /** Fires on each repeated crash or readiness timeout until the backend becomes ready. */
   readonly onStartupFailure?: (failure: BackendStartupFailure) => Effect.Effect<void>;
+  readonly onMigrationProgress?: (
+    progress: DatabaseMigrationProgress | null,
+  ) => Effect.Effect<void>;
 }
 
 interface ActiveBackendRun {
@@ -378,8 +393,13 @@ const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const STAGGERED_READINESS_POLLERS = 4;
 const READINESS_POLLER_STAGGER = Duration.millis(250);
 
+interface HttpReadinessOptions extends BackendProcessContext {
+  readonly timeout: Duration.Duration;
+  readonly readinessProbe?: Effect.Effect<BackendReadinessProbe>;
+}
+
 const waitForHttpReady = (
-  options: BackendProcessContext & { readonly timeout: Duration.Duration },
+  options: HttpReadinessOptions,
 ): Effect.Effect<void, BackendReadinessTimeoutError, HttpClient.HttpClient> => {
   const poll = pollHttpReady(options);
   if (LOOPBACK_HOSTNAMES.has(options.httpBaseUrl.hostname)) return poll;
@@ -390,13 +410,16 @@ const waitForHttpReady = (
   );
 };
 
-const pollHttpReady = (
-  options: BackendProcessContext & { readonly timeout: Duration.Duration },
-): Effect.Effect<void, BackendReadinessTimeoutError, HttpClient.HttpClient> => {
-  const readinessUrl = new URL(BACKEND_READINESS_PATH, options.httpBaseUrl);
-  return waitForHttpReadyShared({
+const pollHttpReady = Effect.fnUntraced(function* (
+  options: HttpReadinessOptions,
+): Effect.fn.Return<void, BackendReadinessTimeoutError, HttpClient.HttpClient> {
+  const probe = options.readinessProbe === undefined ? undefined : yield* options.readinessProbe;
+  const path = probe?.path ?? BACKEND_READINESS_PATH;
+  const readinessUrl = new URL(path, options.httpBaseUrl);
+  return yield* waitForHttpReadyShared({
     baseUrl: options.httpBaseUrl.href,
-    path: BACKEND_READINESS_PATH,
+    path,
+    ...(probe === undefined ? {} : { accept: probe.accept }),
     timeoutMs: Duration.toMillis(options.timeout),
     intervalMs: Duration.toMillis(DEFAULT_BACKEND_READINESS_INTERVAL),
     probeTimeoutMs: Duration.toMillis(DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT),
@@ -411,7 +434,7 @@ const pollHttpReady = (
         cause,
       }),
   });
-};
+});
 
 function drainBackendOutput(
   context: BackendProcessContext & { readonly pid: number },
@@ -634,10 +657,16 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   };
   const readinessTimeout = options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT;
   // A backend with a control fd reports readiness there itself, after its HTTP server is up.
-  // Backends without the fd, such as WSL, are polled over HTTP.
+  // Backends without the fd, such as WSL, are polled over HTTP and must pass their readiness probe.
   const awaitReady =
     options.bootstrap.desktopTelemetryControlFd === undefined
-      ? waitForHttpReady({ ...readinessContext, timeout: readinessTimeout })
+      ? waitForHttpReady({
+          ...readinessContext,
+          timeout: readinessTimeout,
+          ...(options.readinessProbe === undefined
+            ? {}
+            : { readinessProbe: options.readinessProbe }),
+        })
       : Deferred.await(serverReady).pipe(
           Effect.timeoutOrElse({
             duration: readinessTimeout,
@@ -745,6 +774,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const pauseReplies = yield* PubSub.unbounded<DesktopTelemetryRunsPausedForUpdate>();
   let nextPauseRequestId = 0;
   const outputTail = yield* Ref.make("");
+  const migrationProgress = yield* Ref.make<DatabaseMigrationProgress | null>(null);
   // One streaming decoder per stream keeps UTF-8 characters split across chunks intact.
   const makeOutputDecoders = () => ({ stdout: new TextDecoder(), stderr: new TextDecoder() });
   let outputDecoders = makeOutputDecoders();
@@ -972,6 +1002,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 );
 
               if (isCurrentRun) {
+                yield* Ref.set(migrationProgress, null);
+                yield* spec.onMigrationProgress?.(null) ?? Effect.void;
                 yield* desktopTelemetryPublisher.removeControlSource(spec.id);
                 if (Option.isSome(pid)) {
                   if (exitObserved && !stopRequested) {
@@ -1042,6 +1074,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               pid: Option.some(pid),
             }));
             yield* Ref.set(outputTail, "");
+            yield* Ref.set(migrationProgress, null);
+            yield* spec.onMigrationProgress?.(null) ?? Effect.void;
             outputDecoders = makeOutputDecoders();
             yield* backendOutputLog.beginSession({
               details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
@@ -1072,6 +1106,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               return;
             }
 
+            yield* Ref.set(migrationProgress, null);
+            yield* spec.onMigrationProgress?.(null) ?? Effect.void;
             yield* spec.onReady?.(config.value.httpBaseUrl, pid) ?? Effect.void;
             if (
               config.value.runningDistro !== undefined &&
@@ -1086,7 +1122,10 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           }),
           onReadinessFailure: Effect.fn("desktop.backendInstance.onReadinessFailure")(
             function* (error) {
-              if (isRunningDatabaseMigrations(yield* Ref.get(outputTail))) {
+              if (
+                (yield* Ref.get(migrationProgress)) !== null ||
+                isRunningDatabaseMigrations(yield* Ref.get(outputTail))
+              ) {
                 yield* logInstanceWarning("backend is still migrating its database; waiting", {
                   error: error.message,
                 });
@@ -1102,12 +1141,31 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             },
           ),
           onOutput: (streamName, chunk) =>
-            Ref.update(outputTail, (tail) =>
-              // A cut through a surrogate pair would make encodeURIComponent throw when rendering.
-              (tail + outputDecoders[streamName].decode(chunk, { stream: true }))
-                .slice(-STARTUP_FAILURE_OUTPUT_CHARS)
-                .toWellFormed(),
-            ).pipe(Effect.andThen(backendOutputLog.writeOutputChunk(streamName, chunk))),
+            Ref.modify(outputTail, (tail) => {
+              const output = tail + outputDecoders[streamName].decode(chunk, { stream: true });
+              return [
+                output,
+                // A cut through a surrogate pair would make encodeURIComponent throw when rendering.
+                output.slice(-STARTUP_FAILURE_OUTPUT_CHARS).toWellFormed(),
+              ];
+            }).pipe(
+              Effect.flatMap((output) =>
+                Effect.gen(function* () {
+                  const latest = yield* SubscriptionRef.get(state);
+                  if (
+                    !latest.ready &&
+                    Option.isSome(latest.active) &&
+                    latest.active.value.id === runId
+                  ) {
+                    const progress = yield* Ref.updateAndGet(migrationProgress, (previous) =>
+                      databaseMigrationProgress(output, previous),
+                    );
+                    yield* spec.onMigrationProgress?.(progress) ?? Effect.void;
+                  }
+                }),
+              ),
+              Effect.andThen(backendOutputLog.writeOutputChunk(streamName, chunk)),
+            ),
         }).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HttpClient.HttpClient, httpClient),

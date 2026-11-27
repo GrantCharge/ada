@@ -1,7 +1,7 @@
 import { T } from "gt-react";
 import { TRIAGE_CLI_GUIDANCE } from "~/hooks/useStartTriage";
 
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 import { APP_NAME } from "@t3tools/shared/branding";
 
 /**
@@ -18,33 +18,26 @@ export function TriageDraftHero(props: {
         <T>What went wrong?</T>
       </h1>
       <p className="mt-2 flex h-6 w-full items-center justify-center gap-1.5 text-sm">
-        <Tooltip>
-          <TooltipTrigger
-            render={<span tabIndex={0} className="min-w-0 truncate font-medium text-foreground" />}
-          >
-            {props.machineLabel ?? <T>This machine</T>}
-            {props.serverVersion === null ? null : (
-              <span className="ml-1.5 font-normal text-muted-foreground">
-                v{props.serverVersion}
-              </span>
-            )}
-          </TooltipTrigger>
-          <TooltipPopup side="bottom">
-            The agent reads {APP_NAME}'s logs and source here, and asks before it applies a fix or
-            posts anything.
-          </TooltipPopup>
-        </Tooltip>
+        <SharedTooltipTrigger
+          render={<span tabIndex={0} className="min-w-0 truncate font-medium text-foreground" />}
+          label={`The agent reads ${APP_NAME}'s logs and source here, and asks before it applies a fix or posts anything.`}
+          side="bottom"
+        >
+          {props.machineLabel ?? <T>This machine</T>}
+          {props.serverVersion === null ? null : (
+            <span className="ml-1.5 font-normal text-muted-foreground">v{props.serverVersion}</span>
+          )}
+        </SharedTooltipTrigger>
         <span aria-hidden className="text-muted-foreground">
           ·
         </span>
-        <Tooltip>
-          <TooltipTrigger render={<span tabIndex={0} className="text-muted-foreground" />}>
-            or run <code className="font-mono text-xs">triage</code>
-          </TooltipTrigger>
-          <TooltipPopup side="bottom">
-            In a terminal on that machine, {TRIAGE_CLI_GUIDANCE}.
-          </TooltipPopup>
-        </Tooltip>
+        <SharedTooltipTrigger
+          render={<span tabIndex={0} className="text-muted-foreground" />}
+          label={`In a terminal on that machine, ${TRIAGE_CLI_GUIDANCE}.`}
+          side="bottom"
+        >
+          or run <code className="font-mono text-xs">triage</code>
+        </SharedTooltipTrigger>
       </p>
     </div>
   );

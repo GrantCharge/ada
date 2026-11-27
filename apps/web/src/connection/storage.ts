@@ -16,6 +16,7 @@ import {
   setRoutesInCatalog,
   replaceCatalogValue,
   Persistence,
+  ThreadTriageOutboxStore,
   makeStoredShellSnapshotEncoder,
   makeStoredThreadSnapshotEncoder,
   makeThreadCacheWriteOrder,
@@ -46,6 +47,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { m } from "../i18n/messages";
 import { projectFaviconCache } from "../assets/projectFaviconCache";
+import { browserThreadTriageOutboxStore } from "./threadTriageOutboxStore";
 
 /** Environments dropped from the catalog because T3 Connect was their only route; read once. */
 export class ConnectOnlyNotice extends Context.Service<
@@ -1151,6 +1153,7 @@ export const layer = Layer.effectContext(
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),
       Context.add(ConnectOnlyNotice, connectOnlyNotice),
       Context.add(Persistence.EnvironmentCacheStore, cacheStore),
+      Context.add(ThreadTriageOutboxStore, browserThreadTriageOutboxStore),
       Context.add(EnvironmentQueryStore, queryStore),
     );
   }),
