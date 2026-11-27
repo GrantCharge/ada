@@ -167,6 +167,7 @@ export const CodexDriver: ProviderDriver<
     environment,
     enabled,
     config,
+    privacy,
   }) {
     if (config.setupMode === "managed")
       return yield* makeManagedCodexProvider({
@@ -176,6 +177,7 @@ export const CodexDriver: ProviderDriver<
         environment,
         enabled,
         config,
+        privacy,
       });
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
@@ -250,6 +252,7 @@ export const CodexDriver: ProviderDriver<
         environment,
         enabled,
         config: homeConfig,
+        privacy,
       },
       {
         onUsageLimits: (update) => snapshot.applyUsageLimits(update),
@@ -275,7 +278,7 @@ export const CodexDriver: ProviderDriver<
     const checkProvider = modelCatalog.refreshInBackground.pipe(
       Effect.andThen(
         Effect.zipWith(
-          checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
+          checkCodexProviderStatus(effectiveConfig, undefined, processEnv, undefined, privacy),
           currentCatalog,
           (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
           { concurrent: true },
@@ -324,6 +327,8 @@ export const CodexDriver: ProviderDriver<
       effectiveConfig,
       processEnv,
       snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
+      undefined,
+      privacy,
     );
     const probeSkills = yield* makeCodexSkillsProbe().pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -339,6 +344,7 @@ export const CodexDriver: ProviderDriver<
               launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
               cwd,
               environment: processEnv,
+              privacy: privacy?.(),
             }).pipe(Effect.timeout(resolveProviderProbeTimeoutMs("codex", 20_000, processEnv))),
           ]).pipe(
             Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
@@ -367,6 +373,7 @@ export const CodexDriver: ProviderDriver<
               launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
               cwd: process.cwd(),
               environment: processEnv,
+              privacy: privacy?.(),
             });
             const response = yield* client.request("account/rateLimitResetCredit/consume", {
               idempotencyKey,

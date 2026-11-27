@@ -9,7 +9,11 @@ import {
   type ProcessExit,
   type SpawnedMspConnection,
 } from "@muse-code/sdk";
-import type { RuntimeMode } from "@t3tools/contracts";
+import type { ProviderPrivacySource, RuntimeMode } from "@t3tools/contracts";
+import {
+  DO_NOT_TRACK_TABLE,
+  withProviderPrivacyEnvironment,
+} from "@t3tools/provider-core/server/privacy";
 import { envTrampoline, supportsEnvChdir } from "@t3tools/shared/envTrampoline";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
@@ -62,6 +66,8 @@ export interface MuseSdkHostOptions {
   readonly startupTimeoutMs?: number;
   readonly onProcessExit?: (exit: ProcessExit) => void;
 }
+
+export const MUSE_PRIVACY_ENVIRONMENT = DO_NOT_TRACK_TABLE;
 
 export function makeMuseEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
@@ -225,9 +231,23 @@ export async function createMuseSdkHost(
 
 /** Cancellation waits for native shutdown before callers release startup resources. */
 export const createMuseSdkHostEffect = Effect.fn("createMuseSdkHostEffect")(function* (
-  options: Omit<MuseSdkHostOptions, "signal">,
+  {
+    privacy,
+    ...input
+  }: Omit<MuseSdkHostOptions, "signal"> & { readonly privacy?: ProviderPrivacySource | undefined },
   createHost: typeof createMuseSdkHost = createMuseSdkHost,
 ) {
+  const options =
+    privacy === undefined
+      ? input
+      : {
+          ...input,
+          environment: withProviderPrivacyEnvironment(
+            input.environment ?? makeMuseEnvironment(),
+            MUSE_PRIVACY_ENVIRONMENT,
+            privacy,
+          ),
+        };
   const native = options.launch ?? (yield* museLaunch(options.binaryPath, options.environment));
   // The Muse SDK hands libuv the cwd and the PATH search, which freeze the server while a
   // mount under either hangs; `env` does both in the child.

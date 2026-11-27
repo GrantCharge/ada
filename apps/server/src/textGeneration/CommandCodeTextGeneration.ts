@@ -1,6 +1,7 @@
 import {
   type CommandCodeSettings,
   type ModelSelection,
+  type ProviderPrivacySource,
   TextGenerationError,
 } from "@t3tools/contracts";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
@@ -26,6 +27,7 @@ import { collectCommandCode } from "../provider/commandCodeProcess.ts";
 export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGeneration")(function* (
   settings: CommandCodeSettings,
   environment: NodeJS.ProcessEnv,
+  privacy?: ProviderPrivacySource,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const runCommandCodeJson = Effect.fn("CommandCodeTextGeneration.runCommandCodeJson")(function* <
@@ -56,6 +58,7 @@ export const makeCommandCodeTextGeneration = Effect.fn("makeCommandCodeTextGener
       ],
       cwd: input.cwd,
       environment,
+      privacy,
       prompt: input.prompt,
     }).pipe(
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

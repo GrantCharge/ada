@@ -1,5 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -77,6 +81,61 @@ describe("startOpenCodeServerProcess", () => {
 
       expect(server.serverPassword).toMatch(/^[\w-]{43}$/);
       expect(yield* fs.readFileString(receivedPath)).toBe(server.serverPassword);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect.each([
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, user: {}, expected: '1|{"share":"disabled"}' },
+    {
+      choice: DEFAULT_PROVIDER_PRIVACY_CHOICE,
+      user: { DO_NOT_TRACK: "0", OPENCODE_CONFIG_CONTENT: '{"share":"auto"}' },
+      expected: '0|{"share":"auto"}',
+    },
+    { choice: ALLOW_ALL_PROVIDER_PRIVACY_CHOICE, user: {}, expected: "|{}" },
+  ])("applies the privacy choice to the server it starts (%#)", ({ choice, user, expected }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-opencode-privacy-" });
+      const binaryPath = path.join(tempDir, "opencode");
+      const receivedPath = path.join(tempDir, "received");
+      yield* fs.writeFileString(
+        binaryPath,
+        [
+          "#!/bin/sh",
+          `printf '%s|%s' "$DO_NOT_TRACK" "$OPENCODE_CONFIG_CONTENT" > "${receivedPath}"`,
+          'echo "opencode server listening on http://127.0.0.1:4097"',
+          "",
+        ].join("\n"),
+      );
+      yield* fs.chmod(binaryPath, 0o755);
+
+      yield* OpenCodeRuntime.OpenCodeRuntime.pipe(
+        Effect.flatMap((runtime) =>
+          runtime.startOpenCodeServerProcess({
+            binaryPath,
+            directory: tempDir,
+            port: 4097,
+            environment: { PATH: process.env.PATH, ...user },
+            privacy: () => choice,
+            verify: () => Effect.succeed("1.0.0"),
+          }),
+        ),
+        Effect.provide(
+          OpenCodeRuntime.layer.pipe(
+            Layer.provide(
+              Layer.succeed(
+                OpenCodeServerLedger.OpenCodeServerLedger,
+                OpenCodeServerLedger.OpenCodeServerLedger.of({
+                  track: () => Effect.succeed(Effect.void),
+                }),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(yield* fs.readFileString(receivedPath)).toBe(expected);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

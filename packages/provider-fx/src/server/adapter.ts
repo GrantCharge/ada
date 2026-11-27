@@ -1,6 +1,9 @@
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveSelfInvocation, type SelfInvocation } from "@t3tools/shared/nodeRuntime";
-import { type OrchestrationV2ProviderCapabilities } from "@t3tools/contracts";
+import {
+  type OrchestrationV2ProviderCapabilities,
+  type ProviderPrivacySource,
+} from "@t3tools/contracts";
 import { FxSettings } from "../settings.ts";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -178,6 +181,7 @@ export interface FxAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: FxSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly selfInvocation: SelfInvocation;
   /** The backend and model "Default" runs in a folder, which `fx status` reports there. */
   readonly defaultChoice?: (cwd: string) => Effect.Effect<FxModelChoice | undefined>;
@@ -202,6 +206,7 @@ function makeFxAcpAdapterFlavor(options: FxAdapterV2Options): AcpAdapterV2Flavor
         ...input,
         fxSettings: options.settings,
         environment: { ...options.environment, ...processEnvironment },
+        privacy: options.privacy,
       }));
   // A runtime serves one folder; "Default" resolves there.
   const runtimeCwds = new WeakMap<AcpSessionRuntime.AcpSessionRuntime["Service"], string>();
@@ -270,6 +275,7 @@ export const makeFxAdapterV2Driver = (
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
         environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        privacy: input.privacy,
         selfInvocation,
         defaultChoice,
         nativeLogging: (threadId) =>

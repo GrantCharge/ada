@@ -20,7 +20,11 @@ import {
   makeCopilotSubagentRouting,
 } from "./copilotAcp.ts";
 import { prefersHttpMcpTransport } from "./mcpTransport.ts";
-import { defaultInstanceIdForDriver, ProviderDriverKind } from "@t3tools/contracts";
+import {
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+  type ProviderPrivacySource,
+} from "@t3tools/contracts";
 import { readCustomModelEntries } from "@t3tools/shared/model";
 import { AcpRegistrySettings } from "../settings.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -77,6 +81,7 @@ export interface AcpRegistryAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: AcpRegistrySettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly selfInvocation: SelfInvocation;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   readonly makeRuntime?: (
@@ -151,7 +156,7 @@ function makeAcpRegistryRuntime(
     Effect.gen(function* () {
       const { processEnvironment, ...runtimeInput } = input;
       const resolved = yield* catalog
-        .resolve(options.settings, input.cwd, options.environment)
+        .resolve(options.settings, input.cwd, options.environment, options.privacy)
         .pipe(
           Effect.mapError(
             (cause) =>
@@ -459,6 +464,7 @@ export const AcpRegistryAdapterV2Driver: ProviderAdapterDriver<
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
         environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        privacy: input.privacy,
         selfInvocation,
         continuationRequests: yield* ProviderContinuationRequests.ProviderContinuationRequests,
         nativeLogging: (threadId) =>

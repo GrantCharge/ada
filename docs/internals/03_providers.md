@@ -69,6 +69,10 @@ and permission claims match what the protocol can enforce.
   read-only installs (such as Nix) manual-only.
 - **Attachments stay outside the project workspace.** Never copy uploads into the project tree to
   bypass a provider's sandbox or approval rules.
+- **Privacy is read at spawn.** `ProviderDriverCreateInput.privacy` is a live getter for the synced
+  `providerPrivacy` setting. Call it where each process starts (turns, text generation, probes) and
+  overlay with `withProviderPrivacyEnvironment`, which never replaces a variable the user set.
+  Rebuilding the instance instead would close its scope and stop running sessions.
 - **T3 MCP tools.** Inject the thread's authenticated MCP server so agents can reach T3 tools, and
   keep turns working if that server is unreachable.
 

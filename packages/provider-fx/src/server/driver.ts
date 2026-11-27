@@ -88,6 +88,7 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -139,7 +140,7 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         buildInitialFxProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
-      checkProvider: checkFxProviderStatus(effectiveConfig, processEnv).pipe(
+      checkProvider: checkFxProviderStatus(effectiveConfig, processEnv, privacy).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -169,7 +170,7 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
     );
 
     const orchestrationAdapter = yield* makeFxAdapterV2Driver((cwd) =>
-      readFxDefaultChoice(effectiveConfig, processEnv, cwd).pipe(
+      readFxDefaultChoice(effectiveConfig, processEnv, cwd, privacy).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       ),
     )
@@ -180,6 +181,7 @@ export const FxDriver: ProviderDriver<FxSettings, FxDriverEnv> = {
         environment,
         enabled,
         config: effectiveConfig,
+        privacy,
       })
       .pipe(
         Effect.mapError(

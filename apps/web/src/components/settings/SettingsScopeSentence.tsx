@@ -57,6 +57,8 @@ export const SETTINGS_DEVICE_ONLY_PATHS: ReadonlySet<string> = new Set([
   // Network access and authorized clients belong to the environment serving this app.
   "/settings/connections",
   "/settings/about",
+  // Provider privacy is one choice copied to every connected machine.
+  "/settings/privacy",
 ]);
 
 interface SettingsScopeMenuProps {

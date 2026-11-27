@@ -16,6 +16,7 @@ import { writeLocalStorageValue } from "../../hooks/useLocalStorage";
 import type { MessageResolver } from "../../i18n/messages";
 import { commandLabel } from "./KeybindingsSettings.logic";
 import type { ResolvedSettingsScope } from "./settingsScope";
+import { PROVIDER_PRIVACY_CATALOG } from "@t3tools/client-runtime/state/provider-privacy";
 import { APP_NAME, CLI_COMMAND } from "@t3tools/shared/branding";
 
 export type SettingsPath =
@@ -29,6 +30,7 @@ export type SettingsPath =
   | "/settings/keybindings"
   | "/settings/snap-shot"
   | "/settings/providers"
+  | "/settings/privacy"
   | "/settings/threads"
   | "/settings/browser"
   | "/settings/devices"
@@ -109,6 +111,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/keybindings": msg("Keybindings"),
   "/settings/snap-shot": msg("SnapShots"),
   "/settings/providers": msg("Providers"),
+  "/settings/privacy": msg("Privacy"),
   "/settings/threads": msg("Threads"),
   "/settings/browser": msg("Browser"),
   "/settings/devices": msg("Devices"),
@@ -158,6 +161,7 @@ const ALL_SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
     heading: msg("Agents"),
     paths: [
       "/settings/providers",
+      "/settings/privacy",
       "/settings/threads",
       "/settings/browser",
       "/settings/devices",
@@ -246,6 +250,23 @@ export function sourceControlHostSearchItems(
     ];
   });
 }
+
+export function providerPrivacySearchId(driverKind: string) {
+  return `provider-privacy-${driverKind}` as const;
+}
+
+const PROVIDER_PRIVACY_TERMS = msg(
+  "telemetry analytics tracking do not track error reporting crash reports sentry statsig feedback training data retention privacy",
+);
+
+/** One row per provider CLI on the Privacy page. */
+const PROVIDER_PRIVACY_SEARCH_ITEMS = PROVIDER_PRIVACY_CATALOG.map((entry) => ({
+  id: providerPrivacySearchId(entry.driverKind),
+  title: msg("{name} privacy", { name: entry.name }),
+  to: "/settings/privacy" as const,
+  searchTerms: [entry.name, PROVIDER_PRIVACY_TERMS],
+  secondary: true,
+}));
 
 /** For settings that apply to every host. */
 const SOURCE_CONTROL_HOST_LABELS = sourceControlClients.definitions
@@ -1139,6 +1160,25 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "provider-privacy",
+    title: msg("Provider privacy"),
+    to: "/settings/privacy",
+    searchTerms: [PROVIDER_PRIVACY_TERMS],
+  },
+  {
+    id: "provider-telemetry",
+    title: msg("Block provider telemetry"),
+    to: "/settings/privacy",
+    searchTerms: [PROVIDER_PRIVACY_TERMS],
+  },
+  {
+    id: "provider-non-essential-traffic",
+    title: msg("Block non-essential traffic"),
+    to: "/settings/privacy",
+    searchTerms: [msg("network update checks offline minimal traffic privacy")],
+  },
+  ...PROVIDER_PRIVACY_SEARCH_ITEMS,
+  {
     id: "usage-providers",
     title: msg("Usage providers"),
     to: "/settings/providers",
@@ -1604,6 +1644,7 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/snap-shot": null,
   "/settings/keybindings": null,
   "/settings/providers": null,
+  "/settings/privacy": null,
   "/settings/threads": null,
   "/settings/browser": null,
   "/settings/devices": null,

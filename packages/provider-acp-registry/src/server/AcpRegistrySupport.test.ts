@@ -3,6 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodePath from "@effect/platform-node/NodePath";
 import { describe, expect, it } from "@effect/vitest";
 import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -284,6 +286,34 @@ describe("AcpRegistrySupport", () => {
       ),
     );
   });
+
+  it.effect.each([
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, env: {}, expected: "1" },
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, env: { DO_NOT_TRACK: "0" }, expected: "0" },
+    { choice: ALLOW_ALL_PROVIDER_PRIVACY_CHOICE, env: {}, expected: undefined },
+  ])("overlays the privacy choice on the resolved agent env (%#)", ({ choice, env, expected }) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cacheDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-privacy-" });
+      yield* fileSystem.writeFileString(`${cacheDir}/dsh`, "#!/bin/sh\n");
+      yield* fileSystem.chmod(`${cacheDir}/dsh`, 0o755);
+      const resolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir,
+        toolsDir: `${cacheDir}/tools`,
+        registryUrl,
+      }).pipe(Effect.provideService(HostProcess.Environment, {}));
+      const resolved = yield* resolver.resolve(
+        decodeAcpRegistrySettings({ source: "local", commandPath: "dsh" }),
+        "/workspace",
+        { ...env, PATH: cacheDir },
+        () => choice,
+      );
+      expect(resolved.spawn.env?.DO_NOT_TRACK).toBe(expected);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(layerResolver(() => Effect.die("unexpected registry request"))),
+    ),
+  );
 
   it.effect("resolves a local executable path and inherits the host environment", () =>
     Effect.gen(function* () {

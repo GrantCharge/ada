@@ -1,5 +1,9 @@
 import * as NodeAssert from "node:assert/strict";
 
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+} from "@t3tools/contracts";
 import { describe, it } from "vite-plus/test";
 
 import {
@@ -10,6 +14,36 @@ import {
 } from "./codexLaunchArgs.ts";
 
 describe("codexAppServerArgs", () => {
+  it("turns Codex analytics and feedback off before launch args, so the user's -c wins", () => {
+    NodeAssert.deepEqual(
+      codexAppServerArgs("-c analytics.enabled=true", DEFAULT_PROVIDER_PRIVACY_CHOICE),
+      [
+        "app-server",
+        "-c",
+        "thread_unload_delay_secs=0",
+        "-c",
+        "analytics.enabled=false",
+        "-c",
+        'otel.metrics_exporter="none"',
+        "-c",
+        "feedback.enabled=false",
+        "-c",
+        "analytics.enabled=true",
+      ],
+    );
+    NodeAssert.ok(
+      codexAppServerArgs(undefined, {
+        ...ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+        minimalNetwork: true,
+      }).includes("check_for_update_on_startup=false"),
+    );
+    NodeAssert.deepEqual(codexAppServerArgs(undefined, ALLOW_ALL_PROVIDER_PRIVACY_CHOICE), [
+      "app-server",
+      "-c",
+      "thread_unload_delay_secs=0",
+    ]);
+  });
+
   it.each([
     {
       name: "preserves escaped TOML quotes in config values",

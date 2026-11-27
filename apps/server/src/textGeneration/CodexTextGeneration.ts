@@ -21,6 +21,7 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import {
   codexExecLaunchArgs,
   codexMcpListLaunchArgs,
+  codexPrivacyArgs,
   resolveCodexLaunchArgs,
 } from "../provider/codexLaunchArgs.ts";
 import { codexAppServerEnvironment } from "../provider/CodexProvider.ts";
@@ -74,6 +75,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     import("@t3tools/contracts").ProviderSetupError,
     Scope.Scope
   >,
+  privacy?: import("@t3tools/contracts").ProviderPrivacySource,
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -314,6 +316,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         binary,
         [
           "exec",
+          ...codexPrivacyArgs(privacy?.()),
           // Before launch args: a later table would replace servers their -c flags define.
           ...(mcpServersOff ? ["--config", mcpServersOff] : []),
           ...execLaunchArgs,

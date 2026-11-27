@@ -4,6 +4,7 @@ import {
   ProviderInstanceId,
   providerInstanceConfigEnabledFlag,
   resolveProviderInstanceEnabled,
+  resolveProviderPrivacy,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   ServerSettings,
@@ -138,6 +139,7 @@ export const layerSettingsWatcher = (
   settingsChanges: Stream.Stream<ServerSettings>,
   // The settings the registry was built from: a change queued during startup differs from these.
   initialSettings: ServerSettings | undefined,
+  onSettings: (settings: ServerSettings) => void = () => {},
 ) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -151,6 +153,7 @@ export const layerSettingsWatcher = (
           serverSettings.getSettings.pipe(
             Effect.flatMap((current) =>
               Effect.gen(function* () {
+                onSettings(current);
                 yield* mutator.reconcile(deriveProviderInstanceConfigMap(current));
                 // Reconcile leaves instances parked on an unreadable secret alone,
                 // and a corrected secret provider is what can make them readable.
@@ -199,9 +202,12 @@ export const layer: Layer.Layer<
     );
     // Instances of drivers the policy leaves out stay listed, as unavailable, so their threads
     // explain why instead of losing their provider.
+    // Read at each spawn so a privacy change reaches new processes without restarting sessions.
+    let providerPrivacy = initialSettings?.providerPrivacy;
     const layerMutable = ProviderInstanceRegistry.layer({
       drivers: BUILT_IN_DRIVERS,
       configMap: initialConfigMap,
+      privacy: (driver) => resolveProviderPrivacy(providerPrivacy, driver),
       blockedReason: (driver) =>
         ManagedProviders.disallowedDriverReason(serverSettings.managedPolicy, driver),
     }).pipe(
@@ -212,9 +218,9 @@ export const layer: Layer.Layer<
       Layer.provide(SecretResolver.layer),
     );
 
-    return layerSettingsWatcher(settingsChanges, initialSettings).pipe(
-      Layer.provideMerge(layerMutable),
-    );
+    return layerSettingsWatcher(settingsChanges, initialSettings, (current) => {
+      providerPrivacy = current.providerPrivacy;
+    }).pipe(Layer.provideMerge(layerMutable));
   }),
 ) as Layer.Layer<
   | ProviderInstanceRegistry.ProviderInstanceRegistry

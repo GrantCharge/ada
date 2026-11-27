@@ -9,6 +9,7 @@ import {
 export { AgentSkill } from "./agentSkills.ts";
 import { EasDeviceHostConfigs, SimlockDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
 import { AgentGatewaySettings } from "./mcpGateway.ts";
+import { DEFAULT_PROVIDER_PRIVACY_SETTINGS, ProviderPrivacySettings } from "./providerPrivacy.ts";
 import { ComputerApprovalsMode } from "./computer.ts";
 import {
   AuthAccessWriteScope,
@@ -1775,6 +1776,9 @@ export const ServerSettings = Schema.Struct({
   snoozePresets: SnoozePresetSettings.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SNOOZE_PRESETS)),
   ),
+  providerPrivacy: ProviderPrivacySettings.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_PRIVACY_SETTINGS)),
+  ),
   /** Clients hide threads with these tags while `hideTaggedThreads` is on. Bad entries drop alone, so a hand edit cannot reset settings. */
   hiddenThreadTags: Schema.Array(Schema.Unknown).pipe(
     Schema.decodeTo(
@@ -2259,6 +2263,7 @@ export const ServerSettingsPatch = Schema.Struct({
   autoResumeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozeLimitedThreads: Schema.optionalKey(Schema.Boolean),
   snoozePresets: Schema.optionalKey(SnoozePresetSettings),
+  providerPrivacy: Schema.optionalKey(ProviderPrivacySettings),
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),
   hideTaggedThreads: Schema.optionalKey(Schema.Boolean),
   linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),

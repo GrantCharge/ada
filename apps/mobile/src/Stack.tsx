@@ -101,6 +101,7 @@ import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppea
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
 import { SettingsProviderAccountsRouteScreen } from "./features/settings/SettingsProviderAccountsRouteScreen";
+import { SettingsPrivacyRouteScreen } from "./features/settings/SettingsPrivacyRouteScreen";
 import { SettingsEnvironmentDetailRouteScreen } from "./features/settings/SettingsEnvironmentDetailRouteScreen";
 import {
   SettingsIssueTrackerRouteScreen,
@@ -179,6 +180,7 @@ const ROUTE_TITLES: Readonly<Record<string, string>> = {
   SettingsWorktrees: msg("Worktrees"),
   SettingsLabs: msg("Labs"),
   SettingsProviderAccounts: msg("Providers"),
+  SettingsPrivacy: msg("Privacy"),
   SettingsEnvironmentMaintenance: msg("Maintenance"),
   SettingsNotifications: msg("Notifications"),
   SettingsThreads: msg("Threads"),
@@ -289,6 +291,11 @@ const SETTINGS_SCREENS = {
   SettingsProviderAccounts: createNativeStackScreen({
     screen: SettingsProviderAccountsRouteScreen,
     linking: "settings/provider-accounts",
+    options: settingsPage(),
+  }),
+  SettingsPrivacy: createNativeStackScreen({
+    screen: SettingsPrivacyRouteScreen,
+    linking: "settings/privacy",
     options: settingsPage(),
   }),
   SettingsEnvironmentMaintenance: createNativeStackScreen({

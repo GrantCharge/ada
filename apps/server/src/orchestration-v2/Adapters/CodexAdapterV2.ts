@@ -41,6 +41,8 @@ import {
   parseGoalCommand,
   ProviderDriverKind,
   ProviderMcpSignInError,
+  type ProviderPrivacyChoice,
+  type ProviderPrivacySource,
   ProviderSetupError,
   type ServerProviderCompatibilityAdvisory,
   type ServerProviderModel,
@@ -1660,6 +1662,7 @@ export interface CodexAppServerClientFactoryShape {
     readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
     readonly settings: CodexSettings;
     readonly environment: NodeJS.ProcessEnv;
+    readonly privacy?: ProviderPrivacyChoice | undefined;
   }) => Effect.Effect<
     CodexClient.CodexAppServerClient["Service"],
     ProviderAdapter.ProviderAdapterOpenSessionError,
@@ -2010,6 +2013,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           command: input.settings.binaryPath || "codex",
           args: codexAppServerArgs(
             resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
+            input.privacy,
           ),
           env: environment,
           threadId: input.threadId,
@@ -2061,7 +2065,13 @@ export type CodexAdapterV2DriverEnv =
   | ServerConfig;
 
 export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapterV2")(function* (
-  { instanceId, environment, enabled, config }: ProviderAdapterDriverCreateInput<CodexSettings>,
+  {
+    instanceId,
+    environment,
+    enabled,
+    config,
+    privacy,
+  }: ProviderAdapterDriverCreateInput<CodexSettings>,
   hooks: Pick<
     CodexAdapterV2Options,
     "onUsageLimits" | "resolveRuntime" | "compatibility" | "models"
@@ -2101,6 +2111,7 @@ export const createCodexAdapterV2 = Effect.fn("CodexAdapterV2.createCodexAdapter
     instanceId,
     settings,
     environment: yield* mergeProviderInstanceEnvironment(environment, hostEnvironment),
+    privacy,
     clientFactory,
     digest,
     fileSystem,
@@ -2116,6 +2127,7 @@ export interface CodexAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CodexSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly clientFactory: CodexAppServerClientFactoryShape;
   readonly onUsageLimits?: ManagedServerProvider["applyUsageLimits"];
   /** The provider's published models, read per turn for catalog defaults. */
@@ -2182,6 +2194,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           runtimePolicy: input.runtimePolicy,
           settings: resolvedRuntime?.config ?? adapterOptions.settings,
           environment: resolvedRuntime?.environment ?? adapterOptions.environment,
+          privacy: adapterOptions.privacy?.(),
         });
         const codexZone = codexTimeZone(resolvedRuntime?.environment ?? adapterOptions.environment);
         const additionalContextByThread = yield* Ref.make(

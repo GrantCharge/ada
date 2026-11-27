@@ -5,7 +5,11 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { ProviderDriverKind, TextGenerationError } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  type ProviderPrivacySource,
+  TextGenerationError,
+} from "@t3tools/contracts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import {
   brokenVersionDetail,
@@ -38,6 +42,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv = process.env,
   compatibility: ProviderCompatibilityLookup = noCompatibilityPolicy,
+  privacy?: ProviderPrivacySource,
 ) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -84,6 +89,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
         disableExtensions: true,
         // Background naming/content helpers must never mutate the workspace.
         disableTools: true,
+        privacy,
       });
       const connection = yield* makePiRpcConnection({
         command: piSettings.binaryPath || "pi",

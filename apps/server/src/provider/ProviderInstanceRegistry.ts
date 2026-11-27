@@ -5,6 +5,7 @@ import {
   type ProviderInstanceConfigMap,
   type ProviderInstanceEnvironment,
   type ProviderDriverKind,
+  type ProviderPrivacyChoice,
   type ResolvedProviderInstanceEnvironment,
   type SecretReference,
   secretReferencesInSettings,
@@ -243,6 +244,7 @@ const resolveEntryEnabled = (entry: ProviderInstanceConfig, typedConfig: unknown
 };
 
 type BlockedReason = (driver: ProviderDriverKind) => string | undefined;
+type PrivacyLookup = (driver: ProviderDriverKind) => ProviderPrivacyChoice;
 
 // The enabled state `buildEntry` decodes, so a disabled instance never reads its secrets.
 const isEntryEnabled = Effect.fn("ProviderInstanceRegistry.isEntryEnabled")(function* <R>(
@@ -259,6 +261,7 @@ const isEntryEnabled = Effect.fn("ProviderInstanceRegistry.isEntryEnabled")(func
 const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R>(input: {
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly blockedReason: BlockedReason;
+  readonly privacy: PrivacyLookup | undefined;
   readonly parentScope: Scope.Scope;
   readonly instanceId: ProviderInstanceId;
   readonly rawInstanceId: string;
@@ -380,6 +383,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
       accentColor: entry.accentColor,
       environment: secrets.environment,
       enabled,
+      privacy: input.privacy && (() => input.privacy!(entry.driver)),
       config:
         secrets.config.length === 0
           ? typedConfig
@@ -420,6 +424,7 @@ const makeReconcile = <R>(input: {
   readonly state: RegistryState;
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly blockedReason: BlockedReason;
+  readonly privacy: PrivacyLookup | undefined;
   readonly parentScope: Scope.Scope;
 }): ((
   configMap: ProviderInstanceConfigMap,
@@ -427,7 +432,7 @@ const makeReconcile = <R>(input: {
   deferSecrets?: boolean,
   carried?: ReadonlyMap<ProviderInstanceId, InstanceSecrets>,
 ) => Effect.Effect<void, never, R | SecretResolver.SecretResolver>) => {
-  const { state, driversById, blockedReason, parentScope } = input;
+  const { state, driversById, blockedReason, privacy, parentScope } = input;
   return (configMap, rebuild = new Set(), deferSecrets = false, carried = new Map()) =>
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
@@ -524,6 +529,7 @@ const makeReconcile = <R>(input: {
         const result = yield* buildEntry({
           driversById,
           blockedReason,
+          privacy,
           parentScope,
           instanceId,
           rawInstanceId,
@@ -581,6 +587,8 @@ export const makeProviderInstanceRegistry = Effect.fn(
   readonly configMap: ProviderInstanceConfigMap;
   /** A reason to show instead of running a driver, such as an administrator's policy. */
   readonly blockedReason?: BlockedReason | undefined;
+  /** Live privacy choice per driver; drivers read it at each spawn, so changes never restart sessions. */
+  readonly privacy?: PrivacyLookup | undefined;
 }): Effect.fn.Return<
   {
     readonly registry: ProviderInstanceRegistry["Service"];
@@ -614,6 +622,7 @@ export const makeProviderInstanceRegistry = Effect.fn(
     state,
     driversById,
     blockedReason: input.blockedReason ?? (() => undefined),
+    privacy: input.privacy,
     parentScope,
   });
   const configMapRef = yield* Ref.make(input.configMap);
@@ -779,6 +788,7 @@ export const layer = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;
   readonly blockedReason?: BlockedReason | undefined;
+  readonly privacy?: PrivacyLookup | undefined;
 }): Layer.Layer<
   ProviderInstanceRegistry | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
   never,

@@ -1,7 +1,11 @@
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
@@ -38,6 +42,15 @@ describe("KiroDriver", () => {
     assert.equal(custom.command, "/opt/kiro/bin/kiro-cli");
     assert.deepEqual(custom.args, ["acp", "--agent-engine=v3", "--auth-method=cli"]);
     assert.deepEqual(custom.env, { KIRO_API_KEY: "ksk_test" });
+  });
+
+  it.each([
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, env: {}, expected: "1" },
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, env: { DO_NOT_TRACK: "0" }, expected: "0" },
+    { choice: ALLOW_ALL_PROVIDER_PRIVACY_CHOICE, env: {}, expected: undefined },
+  ])("overlays the privacy choice on the agent env (%#)", ({ choice, env, expected }) => {
+    const spawn = buildKiroAcpSpawnInput(decodeSettings({}), "/work", env, () => choice);
+    assert.equal(spawn.env?.DO_NOT_TRACK, expected);
   });
 
   // Outputs recorded from `kiro-cli whoami --format json` on Kiro CLI 2.27.0.

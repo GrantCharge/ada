@@ -6,7 +6,11 @@ import * as TestClock from "effect/testing/TestClock";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -109,6 +113,27 @@ describe("Antigravity process environment", () => {
         TMPDIR: profile.tempDirectory,
       },
     });
+  });
+
+  it.each([
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, baseEnv: {}, flag: true, value: "1" },
+    {
+      choice: DEFAULT_PROVIDER_PRIVACY_CHOICE,
+      baseEnv: { DO_NOT_TRACK: "0" },
+      flag: true,
+      value: "0",
+    },
+    { choice: ALLOW_ALL_PROVIDER_PRIVACY_CHOICE, baseEnv: {}, flag: false, value: undefined },
+  ])("applies the privacy choice to each spawn (%#)", ({ choice, baseEnv, flag, value }) => {
+    const spawn = buildAntigravityAcpSpawnInput({
+      installation: { executablePath: "/usr/bin/agy" },
+      profile,
+      cwd: "/project",
+      baseEnv,
+      privacy: () => choice,
+    });
+    expect(spawn.args.includes("--disable-telemetry")).toBe(flag);
+    expect(spawn.env?.DO_NOT_TRACK).toBe(value);
   });
 
   it("passes only the configured method's credential and keeps the GCP pair out of the environment", () => {

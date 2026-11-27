@@ -2,6 +2,7 @@ import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/sna
 import {
   type CustomModelSetting,
   type ModelCapabilities,
+  type ProviderPrivacySource,
   type ServerProvider,
   type ServerProviderAuth,
   type ServerProviderModel,
@@ -38,8 +39,10 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "@t3tools/provider-core/server/maintenanceResolver";
+import { withProviderPrivacyEnvironment } from "@t3tools/provider-core/server/privacy";
 import {
   GROK_DEFAULT_MODEL_SLUG,
+  GROK_PRIVACY_ENVIRONMENT,
   GROK_SUPPORTED_RUNTIME_MODES,
   isValidGrokReasoningEffortToken,
   makeGrokAcpRuntime,
@@ -400,6 +403,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   grokSettings: GrokSettings,
   environment: NodeJS.ProcessEnv = process.env,
   cwd?: string,
+  privacy?: ProviderPrivacySource,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -424,7 +428,12 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     });
   }
 
-  const probeEnvironment = grokProbeEnvironment(environment);
+  const privateEnvironment = withProviderPrivacyEnvironment(
+    environment,
+    GROK_PRIVACY_ENVIRONMENT,
+    privacy,
+  );
+  const probeEnvironment = grokProbeEnvironment(privateEnvironment);
   const apiKey = environment[GROK_API_KEY_ENV]?.trim();
 
   const versionResult = yield* runGrokCliCommand(
@@ -518,7 +527,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         ? { status: "unauthenticated" }
         : { status: "unknown" };
 
-  const skills = yield* discoverGrokSkills(grokSettings, environment, cwd).pipe(
+  const skills = yield* discoverGrokSkills(grokSettings, privateEnvironment, cwd).pipe(
     Effect.tapError((cause) => Effect.logDebug("Grok skill discovery failed.", { cause })),
     Effect.orElseSucceed(() => []),
   );

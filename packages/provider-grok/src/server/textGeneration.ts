@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
-import { TextGenerationError } from "@t3tools/contracts";
+import { type ProviderPrivacySource, TextGenerationError } from "@t3tools/contracts";
 import type { GrokSettings } from "../settings.ts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
@@ -26,6 +26,7 @@ const isTextGenerationError = Schema.is(TextGenerationError);
 export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(function* (
   grokSettings: GrokSettings,
   environment: NodeJS.ProcessEnv = process.env,
+  privacy?: ProviderPrivacySource,
 ) {
   const random = yield* SecureRandom.SecureRandom;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -38,6 +39,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       const runtime = yield* makeGrokAcpRuntime({
         grokSettings,
         environment,
+        privacy,
         cwd,
         clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
         // Grok config may always-approve; ask mode sends tool approvals here, and none are granted.

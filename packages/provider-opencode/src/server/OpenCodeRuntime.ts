@@ -1,7 +1,12 @@
 import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
 import * as NodeURL from "node:url";
 
-import type { ChatAttachment, ModelSelection, ProviderApprovalDecision } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  ModelSelection,
+  ProviderApprovalDecision,
+  ProviderPrivacySource,
+} from "@t3tools/contracts";
 import {
   createOpencodeClient,
   type Agent,
@@ -33,6 +38,10 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
+import {
+  type ProviderPrivacyEnvironmentTable,
+  withProviderPrivacyEnvironment,
+} from "@t3tools/provider-core/server/privacy";
 import { isWindowsCommandNotFound } from "@t3tools/provider-core/server/snapshotProbe";
 import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@t3tools/provider-core/server/snapshotProbe";
@@ -47,6 +56,26 @@ import { parseSemver } from "@t3tools/shared/semver";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const OPENCODE_EMPTY_CONFIG_CONTENT = "{}";
+const decodeOpenCodeConfigObject = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
+);
+
+const OPENCODE_PRIVACY_ENVIRONMENT: ProviderPrivacyEnvironmentTable = {
+  usageAnalytics: { DO_NOT_TRACK: "1" },
+  minimalNetwork: { OPENCODE_DISABLE_AUTOUPDATE: "1" },
+};
+
+/** A `share` the user configured wins; content that is not a plain JSON object is left alone. */
+function withOpenCodePrivacyConfig(
+  content: string,
+  privacy: ProviderPrivacySource | undefined,
+): string {
+  if (!privacy?.().feedback) return content;
+  const config = Option.getOrUndefined(decodeOpenCodeConfigObject(content));
+  if (config === undefined || "share" in config) return content;
+  const encoded = encodeUnknownJsonStringExit({ ...config, share: "disabled" });
+  return Exit.isSuccess(encoded) ? encoded.value : content;
+}
 
 const OPENCODE_HEALTH_TIMEOUT_MS = 5_000;
 
@@ -336,6 +365,7 @@ export class OpenCodeRuntime extends Context.Service<
       readonly directory: string;
       readonly serverPassword?: string;
       readonly environment?: NodeJS.ProcessEnv;
+      readonly privacy?: ProviderPrivacySource | undefined;
       readonly port?: number;
       readonly hostname?: string;
       readonly timeoutMs?: number;
@@ -347,6 +377,7 @@ export class OpenCodeRuntime extends Context.Service<
       readonly serverUrl?: string | null;
       readonly serverPassword?: string;
       readonly environment?: NodeJS.ProcessEnv;
+      readonly privacy?: ProviderPrivacySource | undefined;
       readonly port?: number;
       readonly hostname?: string;
       readonly timeoutMs?: number;
@@ -641,11 +672,18 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
           detached: hostPlatform !== "win32",
           shell: spawnCommand.shell,
           env: {
-            ...input.environment,
+            ...withProviderPrivacyEnvironment(
+              input.environment ?? {},
+              OPENCODE_PRIVACY_ENVIRONMENT,
+              input.privacy,
+            ),
             OPENCODE_SERVER_PASSWORD: serverPassword,
             // The value is set explicitly (rather than relying on inheritance) because
             // `extendEnv` is false whenever `input.environment` is provided.
-            OPENCODE_CONFIG_CONTENT: resolveOpenCodeConfigContent(input.environment),
+            OPENCODE_CONFIG_CONTENT: withOpenCodePrivacyConfig(
+              resolveOpenCodeConfigContent(input.environment),
+              input.privacy,
+            ),
           },
           extendEnv: input.environment === undefined,
         }),
@@ -857,6 +895,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       directory: input.directory,
       ...(input.serverPassword !== undefined ? { serverPassword: input.serverPassword } : {}),
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
+      ...(input.privacy !== undefined ? { privacy: input.privacy } : {}),
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
       ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),

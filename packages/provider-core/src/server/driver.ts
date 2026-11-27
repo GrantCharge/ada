@@ -8,6 +8,7 @@ import type {
   ProviderDriverKind,
   ResolvedProviderInstanceEnvironment,
   ProviderInstanceId,
+  ProviderPrivacySource,
   ProviderRuntimeModeLimit,
   ServerProvider,
   ServerProviderWorkspaceSnapshot,
@@ -121,6 +122,8 @@ export interface ProviderDriverCreateInput<Config> {
   readonly environment: ResolvedProviderInstanceEnvironment;
   readonly enabled: boolean;
   readonly config: Config;
+  /** Current provider privacy choice; read it when spawning, not once at create. */
+  readonly privacy?: ProviderPrivacySource | undefined;
 }
 
 /** create calls with different instanceId/config must share no mutable state. */

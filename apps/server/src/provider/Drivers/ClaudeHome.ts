@@ -5,12 +5,25 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
+import type { ProviderPrivacyEnvironmentTable } from "@t3tools/provider-core/server/privacy";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import { readClaudeSettingsEnv } from "./ClaudeSkills.ts";
 
 const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
+
+// DISABLE_TELEMETRY and DO_NOT_TRACK also stop feature-flag evaluation, which Remote Control needs.
+export const CLAUDE_PRIVACY_ENVIRONMENT: ProviderPrivacyEnvironmentTable = {
+  usageAnalytics: { DISABLE_TELEMETRY: "1", DO_NOT_TRACK: "1" },
+  errorReports: { DISABLE_ERROR_REPORTING: "1" },
+  feedback: {
+    CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1",
+    DISABLE_FEEDBACK_COMMAND: "1",
+    DISABLE_BUG_COMMAND: "1",
+  },
+  minimalNetwork: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" },
+};
 
 export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function* (
   config: Pick<ClaudeSettings, "homePath">,

@@ -1,4 +1,5 @@
 import {
+  type ProviderPrivacySource,
   type ServerProviderAuth,
   type ServerProviderModel,
   type ServerProviderSubProvider,
@@ -21,10 +22,12 @@ import {
   FX_DRIVER_KIND,
   FX_EFFORT_OPTION_DESCRIPTOR,
   FX_FULL_ACCESS_MODE_ID,
+  FX_PRIVACY_ENVIRONMENT,
   FX_SUPPORTED_RUNTIME_MODES,
   type FxModelChoice,
   fxModelSlug,
 } from "./acpSupport.ts";
+import { withProviderPrivacyEnvironment } from "@t3tools/provider-core/server/privacy";
 import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
@@ -287,6 +290,7 @@ const probeFxBackend = Effect.fn("probeFxBackend")(function* (
 export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function* (
   settings: FxSettings,
   environment: NodeJS.ProcessEnv,
+  privacy?: ProviderPrivacySource,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -303,7 +307,11 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
     });
   }
 
-  const probeEnvironment = providerProbeEnvironment(environment);
+  const probeEnvironment = withProviderPrivacyEnvironment(
+    providerProbeEnvironment(environment),
+    FX_PRIVACY_ENVIRONMENT,
+    privacy,
+  );
   const versionResult = yield* runFxCli(settings, ["--version"], probeEnvironment).pipe(
     Effect.timeoutOption(
       resolveProviderProbeTimeoutMs("fx", VERSION_PROBE_TIMEOUT_MS, environment),
@@ -398,10 +406,16 @@ export const readFxDefaultChoice = Effect.fn("readFxDefaultChoice")(function* (
   settings: FxSettings,
   environment: NodeJS.ProcessEnv,
   cwd: string,
+  privacy?: ProviderPrivacySource,
 ): Effect.fn.Return<FxModelChoice | undefined, never, ChildProcessSpawner.ChildProcessSpawner> {
   const status = Option.getOrUndefined(
     Option.flatMap(
-      yield* readFxCli(settings, ["status", "--json"], environment, cwd),
+      yield* readFxCli(
+        settings,
+        ["status", "--json"],
+        withProviderPrivacyEnvironment(environment, FX_PRIVACY_ENVIRONMENT, privacy),
+        cwd,
+      ),
       decodeFxStatus,
     ),
   );
