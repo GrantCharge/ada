@@ -3627,9 +3627,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           navigationParent={
                             nested?.parentRow ??
                             folderRow ??
-                            (section === "working" ||
-                            section === "snoozed" ||
-                            section === "settled"
+                            (section === "working" || section === "snoozed" || section === "settled"
                               ? `shelf:${section}`
                               : undefined)
                           }
@@ -3652,9 +3650,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           dragOverPinned={
                             dragState?.activeKey === threadKey && dragTargetSection === "pinned"
                           }
-                          sweepAction={
-                            actionSweep?.keys.has(threadKey) ? actionSweep.action : null
-                          }
+                          sweepAction={actionSweep?.keys.has(threadKey) ? actionSweep.action : null}
                           snoozeWakeLabelText={
                             section === "snoozed" && thread.snoozedUntil != null
                               ? snoozeWakeLabel(
@@ -3666,23 +3662,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           }
                           wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                           isActive={routeRowThreadKey === threadKey}
-                          revealRef={
-                            routeRowThreadKey === threadKey ? revealActiveRow : undefined
-                          }
+                          revealRef={routeRowThreadKey === threadKey ? revealActiveRow : undefined}
                           isRouteThread={routeThreadKey === threadKey}
                           readOpensPullRequestsInRightPanel={readOpensPullRequestsInRightPanel}
-                          jumpLabel={
-                            showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
-                          }
-                          environmentLabel={
-                            environmentLabelById.get(thread.environmentId) ?? null
-                          }
+                          jumpLabel={showJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null}
+                          environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
                           environmentMachine={
                             environmentMachineById.get(thread.environmentId) ?? "server"
                           }
                           project={
-                            projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                            null
+                            projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
                           }
                           projectDisplayName={
                             projectDisplayNameByKey.get(
@@ -3741,9 +3730,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           navigationParent={
                             nested?.parentRow ??
                             folderRow ??
-                            (section === "working" ||
-                            section === "snoozed" ||
-                            section === "settled"
+                            (section === "working" || section === "snoozed" || section === "settled"
                               ? `shelf:${section}`
                               : undefined)
                           }

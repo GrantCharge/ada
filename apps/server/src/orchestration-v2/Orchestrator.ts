@@ -860,8 +860,6 @@ function delegatedTasksStopEffect(command: {
 }
 
 const WORKSPACE_PREPARATION_INPUT = "Preparing workspace";
-/** How long automatic settlement waits for a queued turn to start. */
-export { QUEUED_TURN_START_GRACE_MS };
 const RUNTIME_REQUEST_DELIVERY_FAILED_MESSAGE = `${APP_NAME} could not confirm that your answer reached the agent. If the run stays stuck, stop it and try again.`;
 
 function withoutPreparationResult(

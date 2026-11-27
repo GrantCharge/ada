@@ -74,7 +74,7 @@ it("reports upstream analytics, crash reporting and hosted-app defaults in shipp
     "apps/server/src/f.test.ts": 'const host = "https://ingest.t3.codes";\n',
     "apps/marketing/src/g.astro": '<a href="https://posthog.com/privacy">PostHog</a>\n',
     "apps/web/vercel.ts": 'const ROUTER_HOST = "app.t3.codes";\n',
-    "apps/server/src/h.ts": 'const host = process.env.T3CODE_TELEMETRY_HOST;\n',
+    "apps/server/src/h.ts": "const host = process.env.T3CODE_TELEMETRY_HOST;\n",
     "packages/shared/src/i.ts": "export const isRelayTracingEnabled = () => true;\n",
     "apps/mobile/src/j.ts": 'const ANALYTICS_DEVICE_ID_KEY = "id";\n',
   });

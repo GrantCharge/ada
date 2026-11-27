@@ -64,14 +64,14 @@ section), keeps its own row, and a live child of a settled parent stays in the a
 - **Automatic settlement**: By default, environments settle inactive threads after 7 days (even while your apps are closed). Finished threads remain active until this idle age passes. Active work, pending questions/approvals, and waited-on background work block auto-settlement. New activity and un-settling reset the idle clock. Pull request state does not trigger automatic settlement; turn on **Keep threads with a PR** in **Settings → Threads** to also keep threads that have a pull request out of inactivity settlement. Configure rules in **Settings → Threads** (per environment or **All environments**).
 - **Child chats settle sooner**: Once a child chat, such as a delegated task, has finished its work and gone 12 hours without changes, it settles on its own, along with its own idle child chats. Its parent stays where it is, and un-settling the child brings its children back. Change the hours with **Auto-settle finished child chats** in **Settings → Threads**, or turn it off. This applies to the whole environment.
 - **Auto-archive**: Threads that stay settled for 10 days are archived, just as if you archived them yourself. The
-conversation stays, project files and worktrees are left alone, and it works even if the thread's
-project folder or worktree is no longer on this machine. Pinned, snoozed, and
-auto-settle-disabled threads are never archived automatically. Neither are threads with work in
-progress, pending questions, a watched or open pull request, an enabled scheduled task that posts
-into them, or child chats that have not settled. Find archived threads in **Settings → Archived** and unarchive them there; an unarchived
-thread gets another full period before it can be archived again. Change the days with
-**Auto-archive settled threads** in **Settings → Threads**, or turn it off. This rule applies to
-the whole environment.
+  conversation stays, project files and worktrees are left alone, and it works even if the thread's
+  project folder or worktree is no longer on this machine. Pinned, snoozed, and
+  auto-settle-disabled threads are never archived automatically. Neither are threads with work in
+  progress, pending questions, a watched or open pull request, an enabled scheduled task that posts
+  into them, or child chats that have not settled. Find archived threads in **Settings → Archived** and unarchive them there; an unarchived
+  thread gets another full period before it can be archived again. Change the days with
+  **Auto-archive settled threads** in **Settings → Threads**, or turn it off. This rule applies to
+  the whole environment.
 - **Per-thread override**: Open a thread's menu → **Auto-settle behavior → Never** to exempt a single thread.
 - **Drag-to-settle** (web/desktop): Press and drag down/up from a thread's **Settle**, **Un-settle**, or **Wake** button to act on a contiguous range (`Esc` cancels).
 - **Offline settle/snooze**: Queues locally (**Pending** / **Waiting to sync**) and syncs on reconnect; remote changes take precedence if the thread changed in the meantime.

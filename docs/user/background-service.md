@@ -6,8 +6,8 @@ Run Ada as a background user service on Linux, macOS, or Windows so your host st
 
 Install the `ada` CLI first ([Command line](./install.md#command-line)), then run these commands on the host machine:
 
-| Task                                    | Command                                                   |
-| --------------------------------------- | --------------------------------------------------------- |
+| Task                                    | Command                                                    |
+| --------------------------------------- | ---------------------------------------------------------- |
 | Set up access from other devices        | `ada up`                                                   |
 | Check how other devices reach it        | `ada status`                                               |
 | Install and start (or repair)           | `ada service install`                                      |
@@ -69,13 +69,13 @@ It previews system changes, asks for confirmation and `sudo`, and optionally pro
 
 Run `ada service status` on the host to see the log path and health checks:
 
-| Status                                 | Fix                                                                                                                                             |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status                                 | Fix                                                                                                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `linger-disabled`                      | Run `sudo loginctl enable-linger "$(id -un)"` (or `ssh -t your-server '...'`), then retry setup as your normal user. Never run Ada as root. |
-| `linger-unavailable`                   | Check `loginctl show-user "$(id -un)" --property=Linger` and verify `systemd-logind`.                                                           |
-| `user-manager-unavailable`             | Run `systemctl --user status` in a login session to verify systemd user support.                                                                |
-| `service-disabled` / `service-stopped` | Check the log and `systemctl --user status t3code.service`, then run `ada service install`.                                                      |
-| `restart-pending`                      | Run `ada service restart` to switch to the newly installed version.                                                                              |
+| `linger-unavailable`                   | Check `loginctl show-user "$(id -un)" --property=Linger` and verify `systemd-logind`.                                                       |
+| `user-manager-unavailable`             | Run `systemctl --user status` in a login session to verify systemd user support.                                                            |
+| `service-disabled` / `service-stopped` | Check the log and `systemctl --user status t3code.service`, then run `ada service install`.                                                 |
+| `restart-pending`                      | Run `ada service restart` to switch to the newly installed version.                                                                         |
 
 ## Trim old threads
 

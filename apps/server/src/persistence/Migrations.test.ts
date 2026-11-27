@@ -108,9 +108,11 @@ describe("runMigrations", () => {
         ),
         v2Migrations,
       );
+      // Fork migrations run in the same pass, so progress counts more steps than upstream's ledger.
+      assert.isAbove(steps.length, v2Migrations.length);
       assert.deepStrictEqual(
         steps,
-        v2Migrations.map((_, index) => ({ current: index + 1, total: v2Migrations.length })),
+        steps.map((_, index) => ({ current: index + 1, total: steps.length })),
       );
       assert.deepStrictEqual(loggedSteps, steps);
       assert.isNull(yield* Ref.get(current));

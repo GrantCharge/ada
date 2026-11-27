@@ -44,10 +44,10 @@ Enable automatic cleanup in **Settings → Worktrees → Cleanup** (off by defau
 - **Manual run**: Click **Delete now** to run rules immediately and inspect what was removed, kept, or orphaned (untracked folders are listed but never auto-deleted).
 - **Captures and logs**: Browser captures and rotated logs have separate machine-wide retention periods.
 - **Reclaim a finished thread's worktree**: To free a finished thread's worktree without enabling a policy, ask an agent connected through
-Ada's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps
-its history and branch, and its next turn recreates the checkout. Reclaiming also requires the
-latest commit to be included in the remote default branch, so squash-merged branches are kept;
-dependency installs and build output may be removed, other ignored files are kept. Every reason a checkout is kept is reported.
+  Ada's MCP tools to reclaim it (`t3_reclaim_worktree`; a dry run only reports). The thread keeps
+  its history and branch, and its next turn recreates the checkout. Reclaiming also requires the
+  latest commit to be included in the remote default branch, so squash-merged branches are kept;
+  dependency installs and build output may be removed, other ignored files are kept. Every reason a checkout is kept is reported.
 
 ## Light worktrees
 

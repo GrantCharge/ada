@@ -324,6 +324,7 @@ it.effect(
           apply: () => Effect.void,
           putProfileSnapshotContent: () => Effect.die("unused putProfileSnapshotContent"),
           getProfileSnapshotContent: () => Effect.die("unused getProfileSnapshotContent"),
+          getForkSourceRunIds: () => Effect.die("unused getForkSourceRunIds"),
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getLimitRecoveryWakeAt: () => Effect.die("unused getLimitRecoveryWakeAt"),
           getOpenRemoteDelegatedTasks: Effect.die("unused getOpenRemoteDelegatedTasks"),

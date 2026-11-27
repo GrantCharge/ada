@@ -295,8 +295,7 @@ export function replaceThreadLinks(
       if (spanEnd !== -1) pattern.lastIndex = spanEnd;
       continue;
     }
-    const href =
-      match.groups?.angleHref ?? match.groups?.href ?? match.groups?.autolink;
+    const href = match.groups?.angleHref ?? match.groups?.href ?? match.groups?.autolink;
     const link = href === undefined ? null : parseThreadLinkHref(href);
     const label = match.groups?.label;
     const rewritten =

@@ -29,12 +29,12 @@ Every Ada release is a nightly, published on [GitHub Releases](https://github.co
 
 ## Update a connected server manually
 
-| Situation                           | Action                                                                                                |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Background service / desktop server | Click **Update server** in **Settings → Environments** (desktop hosts relaunch automatically).        |
+| Situation                           | Action                                                                                                                                                            |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Background service / desktop server | Click **Update server** in **Settings → Environments** (desktop hosts relaunch automatically).                                                                    |
 | Installed `ada` CLI                 | Run `ada update <version>` on the host (then `ada service restart` if you declined the restart prompt). `ada update` with no version moves to the newest release. |
-| AppImage headless unit              | Run `t3-headless-update install <version>`; see [Headless Linux host](../operations/headless-linux.md). |
-| Package manager (Nix, AUR)          | Update via your package manager.                                                                      |
+| AppImage headless unit              | Run `t3-headless-update install <version>`; see [Headless Linux host](../operations/headless-linux.md).                                                           |
+| Package manager (Nix, AUR)          | Update via your package manager.                                                                                                                                  |
 
 Each server checks npm/Homebrew/pnpm using its own local registry and proxy settings. To download Ada releases through a mirror of [GitHub Releases](https://github.com/jayleaton/ada/releases), set `T3CODE_RELEASE_BASE_URL` for the installer and in the server's environment.
 

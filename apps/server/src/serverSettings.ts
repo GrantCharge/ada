@@ -209,10 +209,7 @@ export function selectAgentSkills(settings: ServerSettings, skillIds: ReadonlyAr
   return settings.agentSkills.filter((skill) => wanted.has(skill.skillId));
 }
 
-function redactSecretsForClient(
-  settings: ServerSettings,
-  client: SettingsClient,
-): ServerSettings {
+function redactSecretsForClient(settings: ServerSettings, client: SettingsClient): ServerSettings {
   const redacted = mapSettingsSecrets(settings, (secret) =>
     secret.sensitive
       ? { value: "", redacted: secret.redacted || secret.value.length > 0 }
@@ -658,15 +655,6 @@ function migrateLegacyProviderSettings(
   };
 }
 
-const ACP_REGISTRY_DRIVER = ProviderDriverKind.make("acpRegistry");
-
-function selectionSupportsTextGeneration(
-  settings: ServerSettings,
-  selection: ModelSelection,
-): boolean {
-  return settings.providerInstances[selection.instanceId]?.driver !== ACP_REGISTRY_DRIVER;
-}
-
 /** A new or renamed agent whose name clashes, ignoring case, gets a numbered suffix instead of failing. */
 function withUniqueMcpGatewayProfileNames(
   current: ServerSettings,
@@ -752,9 +740,7 @@ const withoutServerOwnedFields = <
 }: T) => content;
 
 // Older builds render only the legacy literal, so every writer of an iconId also gets its nearest one.
-const withLegacyAgentIcon = <T extends Pick<McpGatewayProfile, "icon" | "iconId">>(
-  profile: T,
-): T =>
+const withLegacyAgentIcon = <T extends Pick<McpGatewayProfile, "icon" | "iconId">>(profile: T): T =>
   profile.iconId !== undefined && profile.icon === undefined
     ? { ...profile, icon: legacyAgentIcon(profile.iconId) }
     : profile;
