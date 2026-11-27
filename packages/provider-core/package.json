@@ -103,6 +103,10 @@
       "types": "./src/server/pathExpansion.ts",
       "import": "./src/server/pathExpansion.ts"
     },
+    "./server/privacy": {
+      "types": "./src/server/privacy.ts",
+      "import": "./src/server/privacy.ts"
+    },
     "./server/processGroup": {
       "types": "./src/server/processGroup.ts",
       "import": "./src/server/processGroup.ts"

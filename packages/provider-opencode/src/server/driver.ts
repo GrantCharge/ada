@@ -275,6 +275,7 @@ export const OpenCodeDriver: ProviderDriver<
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -375,6 +376,7 @@ export const OpenCodeDriver: ProviderDriver<
       environment,
       enabled,
       config: effectiveConfig,
+      privacy,
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -392,6 +394,7 @@ export const OpenCodeDriver: ProviderDriver<
       serverPassword: effectiveConfig.serverPassword,
       directory: host.paths.cwd,
       environment: processEnv,
+      privacy,
     }).pipe(
       Effect.provideService(OpenCodeRuntime.OpenCodeRuntime, openCodeRuntime),
       Effect.provideService(
@@ -550,6 +553,7 @@ export const OpenCodeDriver: ProviderDriver<
       directory: host.paths.cwd,
       ...(effectiveConfig.serverPassword ? { serverPassword: effectiveConfig.serverPassword } : {}),
       environment: processEnv,
+      privacy,
     });
     const textGeneration = selectOpenCodeRuntimeTextGeneration(
       resolveRuntime,

@@ -1,5 +1,9 @@
 import type * as EffectAcpSchema from "effect-acp/compat";
-import type { ProviderApprovalOption, RuntimeMode } from "@t3tools/contracts";
+import type {
+  ProviderApprovalOption,
+  ProviderPrivacySource,
+  RuntimeMode,
+} from "@t3tools/contracts";
 import type { KiroSettings } from "../settings.ts";
 import type * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -14,6 +18,10 @@ import {
   type AcpRuntimePolicy,
 } from "@t3tools/provider-acp/server/clientPolicy";
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import {
+  DO_NOT_TRACK_TABLE,
+  withProviderPrivacyEnvironment,
+} from "@t3tools/provider-core/server/privacy";
 
 /**
  * Kiro's default engine is a v2 server this driver does not speak, so V3 is
@@ -74,16 +82,22 @@ export function kiroAutopilotValue(policy: {
 
 type KiroAcpRuntimeSettings = Pick<KiroSettings, "binaryPath">;
 
+// Kiro documents no telemetry variable of its own.
+export const KIRO_PRIVACY_ENVIRONMENT = DO_NOT_TRACK_TABLE;
+
 export function buildKiroAcpSpawnInput(
   settings: KiroAcpRuntimeSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
+  privacy?: ProviderPrivacySource,
 ): AcpSessionRuntime.AcpSpawnInput {
   return {
     command: settings?.binaryPath || "kiro-cli",
     args: [...KIRO_ACP_ARGS],
     cwd,
-    ...(environment === undefined ? {} : { env: environment }),
+    ...(environment === undefined
+      ? {}
+      : { env: withProviderPrivacyEnvironment(environment, KIRO_PRIVACY_ENVIRONMENT, privacy) }),
   };
 }
 
@@ -131,6 +145,7 @@ export interface KiroAcpRuntimeInput extends Omit<
 > {
   readonly settings: KiroAcpRuntimeSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
 }
 
 export const makeKiroAcpRuntime = Effect.fn("KiroAcpSupport.makeKiroAcpRuntime")(function* (
@@ -140,11 +155,11 @@ export const makeKiroAcpRuntime = Effect.fn("KiroAcpSupport.makeKiroAcpRuntime")
   EffectAcpErrors.AcpError,
   ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
 > {
-  const { settings, environment, ...runtimeOptions } = input;
+  const { settings, environment, privacy, ...runtimeOptions } = input;
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...runtimeOptions,
-      spawn: buildKiroAcpSpawnInput(settings, input.cwd, environment),
+      spawn: buildKiroAcpSpawnInput(settings, input.cwd, environment, privacy),
     }),
   );
   return yield* Effect.service(AcpSessionRuntime.AcpSessionRuntime).pipe(Effect.provide(context));

@@ -4,6 +4,9 @@ Ada doesn't collect product usage data. It has no analytics or crash reporting, 
 machines reports to the upstream project. Diagnostics leave a server only when you send
 them to your own receiver.
 
+The provider CLIs Ada runs report to their own vendors. To turn that off, see
+[Provider privacy](./provider-privacy.md).
+
 ## Export diagnostics to your own receiver
 
 To send traces, metrics, or logs to an OpenTelemetry receiver, open

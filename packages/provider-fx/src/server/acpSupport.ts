@@ -3,6 +3,7 @@ import {
   type ModelSelection,
   type ProviderOptionDescriptor,
   ProviderDriverKind,
+  type ProviderPrivacySource,
   type RuntimeMode,
 } from "@t3tools/contracts";
 import type { FxSettings } from "../settings.ts";
@@ -17,6 +18,10 @@ import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import {
+  type ProviderPrivacyEnvironmentTable,
+  withProviderPrivacyEnvironment,
+} from "@t3tools/provider-core/server/privacy";
 import { collectSessionConfigOptionValues } from "@t3tools/provider-acp/server/runtimeModel";
 import {
   acpPermissionDisposition,
@@ -340,12 +345,29 @@ export const applyFxEffortDefault = Effect.fn("applyFxEffortDefault")(function* 
   }
 });
 
+export const FX_PRIVACY_ENVIRONMENT: ProviderPrivacyEnvironmentTable = {
+  minimalNetwork: { FX_AUTO_UPGRADE: "0" },
+};
+
+export const buildFxAcpSpawnInput = (
+  fxSettings: Pick<FxSettings, "binaryPath">,
+  cwd: string,
+  environment: NodeJS.ProcessEnv | undefined,
+  privacy: ProviderPrivacySource | undefined,
+): AcpSessionRuntime.AcpSpawnInput => ({
+  command: fxSettings.binaryPath || "fx",
+  args: ["acp"],
+  cwd,
+  env: withProviderPrivacyEnvironment({ ...environment }, FX_PRIVACY_ENVIRONMENT, privacy),
+});
+
 interface FxAcpRuntimeInput extends Omit<
   AcpSessionRuntime.AcpSessionRuntimeOptions,
   "authMethodId" | "spawn" | "cancelBehavior"
 > {
   readonly fxSettings: Pick<FxSettings, "binaryPath">;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
 }
 
 export const makeFxAcpRuntime = Effect.fn("makeFxAcpRuntime")(function* (
@@ -355,16 +377,11 @@ export const makeFxAcpRuntime = Effect.fn("makeFxAcpRuntime")(function* (
   EffectAcpErrors.AcpError,
   ChildProcessSpawner.ChildProcessSpawner | SecureRandom.SecureRandom | Scope.Scope
 > {
-  const { fxSettings, environment, ...runtimeOptions } = input;
+  const { fxSettings, environment, privacy, ...runtimeOptions } = input;
   const context = yield* Layer.build(
     AcpSessionRuntime.layer({
       ...runtimeOptions,
-      spawn: {
-        command: fxSettings.binaryPath || "fx",
-        args: ["acp"],
-        cwd: input.cwd,
-        env: { ...environment },
-      },
+      spawn: buildFxAcpSpawnInput(fxSettings, input.cwd, environment, privacy),
       cancelBehavior: FX_ACP_CANCEL_BEHAVIOR,
     }),
   );

@@ -24,6 +24,7 @@ import {
   type OrchestrationV2UserInputQuestion,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
+  type ProviderPrivacySource,
   type MessageId,
   type OrchestrationV2ProviderTurnTokenUsage,
 } from "@t3tools/contracts";
@@ -202,6 +203,7 @@ export interface PiAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: PiSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly continuationRequests?: {
     readonly offer: (
       request: ProviderContinuationRequests.ProviderContinuationRequest,
@@ -553,6 +555,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             extensionPath,
             sessionPath,
             runtimeMode: input.runtimePolicy.runtimeMode,
+            privacy: options.privacy,
           });
           const env = { ...launch.env, ...tempDirEnv };
           const scopedLaunch = yield* agentScope.wrap({
@@ -2990,6 +2993,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           shortLived: true,
           disableExtensions: true,
           disableTools: true,
+          privacy: options.privacy,
         });
         return yield* Effect.scoped(
           Effect.gen(function* () {
@@ -4960,6 +4964,7 @@ export const PiAdapterV2Driver: ProviderAdapterDriver<PiSettings, PiAdapterV2Dri
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
         environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        privacy: input.privacy,
         continuationRequests,
       });
     },

@@ -110,6 +110,7 @@ Ada is an open-source control plane for coding agents. It gives the coding agent
 - [Maintenance, power, and diagnostics](./diagnostics.md) — Background activity profiles, keep awake, Diagnostics UI, and `ada trace`.
 - [CLI reference (`ada`)](./cli.md) — Complete overview of `ada` subcommands.
 - [Product usage data and diagnostics](./telemetry.md) — What Ada does not collect, and exporting diagnostics to your own OTLP receiver.
+- [Provider privacy](./provider-privacy.md) — Blocking provider CLI telemetry and non-essential traffic on every connected machine.
 - [Triage an issue](./triage.md) — Letting an agent investigate an Ada bug and draft an issue.
 - [Managed policy](./managed-policy.md) — Machine-wide enterprise configuration via JSON, macOS profiles, and Windows GPO/registry.
 - [Open source licenses](./open-source-licenses.md) — Viewing third-party license notices in the app.

@@ -4,6 +4,7 @@ import {
   type ModelSelection,
   ProviderDriverKind,
   type OrchestrationV2ProviderCapabilities,
+  type ProviderPrivacySource,
 } from "@t3tools/contracts";
 import { KiroSettings } from "../settings.ts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
@@ -198,6 +199,7 @@ export interface KiroAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: KiroSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly selfInvocation: SelfInvocation;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
   /**
@@ -544,6 +546,7 @@ function makeKiroAcpAdapterFlavor(options: KiroAdapterV2Options): AcpAdapterV2Fl
         ...runtimeInput,
         settings: options.settings,
         environment: { ...options.environment, ...processEnvironment },
+        privacy: options.privacy,
       });
     });
   const stripSteeringNote = makeKiroSteeringNoteFilter();
@@ -627,6 +630,7 @@ export const makeKiroAdapterV2Driver = (
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
         environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        privacy: input.privacy,
         selfInvocation,
         defaultModel,
         nativeLogging: (threadId) =>

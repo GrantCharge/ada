@@ -1,7 +1,9 @@
 import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
+import { withProviderPrivacyEnvironment } from "@t3tools/provider-core/server/privacy";
 import {
   ProviderDriverKind,
   type CustomModelSetting,
+  type ProviderPrivacySource,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -26,7 +28,7 @@ import * as HttpClient from "effect/http/HttpClient";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
+import { buildPiRpcLaunch, PI_PRIVACY_ENVIRONMENT, resolvePiLaunchArgs } from "./mcpInjection.ts";
 import {
   makePiRpcConnection,
   PiRpcError,
@@ -302,14 +304,23 @@ const discoverPiViaRpc = Effect.fn("PiProviderStatus.discoverPiViaRpc")(function
 }, Effect.scoped);
 
 export const discoverPiCommandsForCwd = Effect.fn("discoverPiCommandsForCwd")(
-  function* (piSettings: PiSettings, environment: NodeJS.ProcessEnv, cwd: string) {
+  function* (
+    piSettings: PiSettings,
+    environment: NodeJS.ProcessEnv,
+    cwd: string,
+    privacy?: ProviderPrivacySource,
+  ) {
     const launchArgs = resolvePiLaunchArgs(piSettings.launchArgs);
     if (!launchArgs.ok) {
       return yield* new PiRpcError({ operation: "launch", detail: launchArgs.message });
     }
     const connection = yield* makePiDiscoveryConnection(
       piSettings,
-      providerProbeEnvironment(environment),
+      withProviderPrivacyEnvironment(
+        providerProbeEnvironment(environment),
+        PI_PRIVACY_ENVIRONMENT,
+        privacy,
+      ),
       launchArgs.args,
       cwd,
     );
@@ -438,6 +449,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
   environment: NodeJS.ProcessEnv = process.env,
   cwd?: string,
   compatibility: ProviderCompatibilityLookup = noCompatibilityPolicy,
+  privacy?: ProviderPrivacySource,
 ): Effect.fn.Return<ServerProviderDraft, never, ChildProcessSpawner.ChildProcessSpawner> {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const fallbackModels = piModelsFromSettings(piSettings.customModels);
@@ -458,7 +470,11 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     });
   }
 
-  const probeEnvironment = providerProbeEnvironment(environment);
+  const probeEnvironment = withProviderPrivacyEnvironment(
+    providerProbeEnvironment(environment),
+    PI_PRIVACY_ENVIRONMENT,
+    privacy,
+  );
   const versionResult = yield* runPiVersionCommand(piSettings, probeEnvironment).pipe(
     Effect.timeoutOption(
       resolveProviderProbeTimeoutMs("pi", VERSION_PROBE_TIMEOUT_MS, environment),

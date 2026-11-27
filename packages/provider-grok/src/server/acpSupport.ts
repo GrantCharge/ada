@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ProviderApprovalOption,
   ProviderDriverKind,
+  type ProviderPrivacySource,
   type RuntimeMode,
 } from "@t3tools/contracts";
 import type { GrokSettings } from "../settings.ts";
@@ -16,6 +17,10 @@ import * as HostProcess from "@t3tools/shared/HostProcess";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 
 import * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
+import {
+  type ProviderPrivacyEnvironmentTable,
+  withProviderPrivacyEnvironment,
+} from "@t3tools/provider-core/server/privacy";
 import { makeXAiPromptCompletionRuntime } from "./xaiAcpExtension.ts";
 
 const GROK_API_KEY_ENV = "XAI_API_KEY";
@@ -34,7 +39,19 @@ interface GrokAcpRuntimeInput extends Omit<
   readonly grokSettings: GrokAcpRuntimeGrokSettings | null | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   readonly runtimeMode?: RuntimeMode;
+  readonly privacy?: ProviderPrivacySource | undefined;
 }
+
+export const GROK_PRIVACY_ENVIRONMENT: ProviderPrivacyEnvironmentTable = {
+  usageAnalytics: {
+    GROK_TELEMETRY_ENABLED: "false",
+    GROK_TELEMETRY_MIXPANEL_ENABLED: "false",
+    GROK_TELEMETRY_TRACE_UPLOAD: "false",
+    DO_NOT_TRACK: "1",
+  },
+  feedback: { GROK_FEEDBACK_ENABLED: "false" },
+  minimalNetwork: { GROK_DISABLE_AUTOUPDATER: "1" },
+};
 
 // grok agent treats settings-only acceptEdits as ask; it has no Auto-accept edits launch mode.
 export const GROK_SUPPORTED_RUNTIME_MODES = [
@@ -57,20 +74,22 @@ export function grokAcpSpawnArgs(runtimeMode?: RuntimeMode): ReadonlyArray<strin
   }
 }
 
-function buildGrokAcpSpawnInput(
+export function buildGrokAcpSpawnInput(
   grokSettings: GrokAcpRuntimeGrokSettings | null | undefined,
   cwd: string,
   environment?: NodeJS.ProcessEnv,
   runtimeMode?: RuntimeMode,
+  privacy?: ProviderPrivacySource,
 ): AcpSessionRuntime.AcpSpawnInput {
   return {
     command: grokSettings?.binaryPath || "grok",
     args: [...grokAcpSpawnArgs(runtimeMode)],
     cwd,
-    env: {
-      ...environment,
-      [GROK_OAUTH2_REFERRER_ENV]: T3_CODE_OAUTH_REFERRER,
-    },
+    env: withProviderPrivacyEnvironment(
+      { ...environment, [GROK_OAUTH2_REFERRER_ENV]: T3_CODE_OAUTH_REFERRER },
+      GROK_PRIVACY_ENVIRONMENT,
+      privacy,
+    ),
   };
 }
 
@@ -137,6 +156,7 @@ export const makeGrokAcpRuntime = Effect.fn("GrokAcpSupport.makeGrokAcpRuntime")
         input.cwd,
         input.environment,
         input.runtimeMode,
+        input.privacy,
       ),
       authMethodId: resolveGrokAuthMethodId(input.environment),
       cancelMeta: { ...input.cancelMeta, ...GROK_ACP_CANCEL_META },

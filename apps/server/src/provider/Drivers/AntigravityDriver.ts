@@ -139,6 +139,7 @@ export const AntigravityDriver: ProviderDriver<
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const digest = yield* Digest.Digest;
     const random = yield* SecureRandom.SecureRandom;
@@ -306,6 +307,7 @@ export const AntigravityDriver: ProviderDriver<
           baseEnv,
           auth,
           runtimeTempDirectory,
+          privacy,
         }),
       };
     });

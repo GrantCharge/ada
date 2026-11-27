@@ -2,7 +2,12 @@ import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 
+import type { ProviderPrivacySource } from "@t3tools/contracts";
 import type { McpProviderSessionConfig } from "@t3tools/provider-core/server/mcpSession";
+import {
+  type ProviderPrivacyEnvironmentTable,
+  withProviderPrivacyEnvironment,
+} from "@t3tools/provider-core/server/privacy";
 import {
   PI_T3_MCP_EXTENSION_FILENAME,
   PI_T3_MCP_EXTENSION_SOURCE,
@@ -247,6 +252,11 @@ export const materializePiT3McpExtension = Effect.fn("materializePiT3McpExtensio
   return dest;
 });
 
+export const PI_PRIVACY_ENVIRONMENT: ProviderPrivacyEnvironmentTable = {
+  usageAnalytics: { DO_NOT_TRACK: "1" },
+  minimalNetwork: { PI_SKIP_VERSION_CHECK: "1" },
+};
+
 export function buildPiRpcLaunch(input: {
   readonly launchArgs: ReadonlyArray<string>;
   readonly environment: NodeJS.ProcessEnv;
@@ -260,6 +270,7 @@ export function buildPiRpcLaunch(input: {
   readonly disableExtensions?: boolean;
   readonly disableTools?: boolean;
   readonly runtimeMode?: "approval-required" | "auto-accept-edits" | "auto" | "full-access";
+  readonly privacy?: ProviderPrivacySource | undefined;
 }): {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
@@ -293,7 +304,11 @@ export function buildPiRpcLaunch(input: {
   ) {
     args.push("--extension", input.extensionPath);
   }
-  const environment = { ...input.environment };
+  const environment = withProviderPrivacyEnvironment(
+    { ...input.environment },
+    PI_PRIVACY_ENVIRONMENT,
+    input.privacy,
+  );
   // MCP credentials belong to this T3 session; discard inherited server/parent credentials.
   delete environment[T3_MCP_URL_ENV];
   delete environment[T3_MCP_BEARER_ENV];

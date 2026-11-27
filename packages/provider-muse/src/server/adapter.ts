@@ -17,6 +17,7 @@ import {
   type NodeId,
   type OrchestrationV2TurnItem,
   type ProviderInstanceId,
+  type ProviderPrivacySource,
   type PlanId,
   type OrchestrationV2PlanStep,
   type ProviderApprovalDecision,
@@ -206,6 +207,7 @@ export interface MuseAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: MuseSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly modelCatalog?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
   readonly createHost?: typeof createMuseSdkHost;
   readonly requestTimeoutMs?: number;
@@ -1821,6 +1823,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
               launchArgs: launch.args,
               cwd,
               environment,
+              privacy: options.privacy,
               runtimeMode: input.runtimePolicy.runtimeMode,
               onProcessExit: (exit) => {
                 Deferred.doneUnsafe(processExited, Effect.succeed(exit));

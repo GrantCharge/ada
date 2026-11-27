@@ -1,5 +1,11 @@
 import { assert, describe, expect, it } from "@effect/vitest";
-import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 
 import {
   T3_MCP_BEARER_ENV,
@@ -154,6 +160,31 @@ describe("pi T3 MCP injection", () => {
     assert.deepInclude(resolvePiLaunchArgs("--provider=openrouter --models gpt-6"), rejection);
     assert.isTrue(resolvePiLaunchArgs("--provider openrouter --model=deepseek/v4").ok);
     assert.isTrue(resolvePiLaunchArgs("--model deepseek/v4").ok);
+  });
+});
+
+describe("buildPiRpcLaunch privacy", () => {
+  it.each([
+    {
+      choice: { ...DEFAULT_PROVIDER_PRIVACY_CHOICE, minimalNetwork: true },
+      env: {},
+      expected: { DO_NOT_TRACK: "1", PI_SKIP_VERSION_CHECK: "1" },
+    },
+    {
+      choice: { ...DEFAULT_PROVIDER_PRIVACY_CHOICE, minimalNetwork: true },
+      env: { DO_NOT_TRACK: "0" },
+      expected: { DO_NOT_TRACK: "0", PI_SKIP_VERSION_CHECK: "1" },
+    },
+    { choice: ALLOW_ALL_PROVIDER_PRIVACY_CHOICE, env: {}, expected: {} },
+  ])("overlays the privacy choice on the RPC env (%#)", ({ choice, env, expected }) => {
+    const launch = buildPiRpcLaunch({
+      launchArgs: [],
+      environment: env,
+      mcpSession: undefined,
+      extensionPath: undefined,
+      privacy: () => choice,
+    });
+    expect(launch.env).toEqual(expected);
   });
 });
 

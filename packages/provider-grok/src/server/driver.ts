@@ -155,6 +155,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const random = yield* SecureRandom.SecureRandom;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -195,6 +196,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
       environment,
       enabled,
       config,
+      privacy,
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -206,9 +208,9 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv, Path.Path> 
           }),
       ),
     );
-    const textGeneration = yield* makeGrokTextGeneration(effectiveConfig, processEnv);
+    const textGeneration = yield* makeGrokTextGeneration(effectiveConfig, processEnv, privacy);
 
-    const checkProvider = checkGrokProviderStatus(effectiveConfig, processEnv, cwd).pipe(
+    const checkProvider = checkGrokProviderStatus(effectiveConfig, processEnv, cwd, privacy).pipe(
       Effect.filterOrElse(
         (snapshot) =>
           !(

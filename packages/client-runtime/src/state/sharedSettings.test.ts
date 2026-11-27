@@ -10,6 +10,19 @@ import { filterSharedServerPatch, splitSharedServerPatch } from "./sharedSetting
 const restartCapabilities = { threadRestartContinuation: true, agentSkillsSync: true };
 
 describe("filterSharedServerPatch", () => {
+  it("sends provider privacy only to servers that apply it", () => {
+    const providerPrivacy = { drivers: {}, updatedAt: "2026-11-27T00:00:00.000Z" };
+    expect(splitSharedServerPatch({ providerPrivacy }).sharedPatch).toEqual({ providerPrivacy });
+    expect(filterSharedServerPatch({ providerPrivacy }, restartCapabilities)).toEqual({});
+    expect(
+      filterSharedServerPatch(
+        { providerPrivacy },
+        { ...restartCapabilities, providerPrivacy: true },
+        DEFAULT_SERVER_SETTINGS,
+      ),
+    ).toEqual({ providerPrivacy });
+  });
+
   it("holds the restart preference until the target's config loads", () => {
     const patch = { continueThreadsAfterServerUpdate: true, sidebarAutoSettleAfterDays: 7 };
     expect(filterSharedServerPatch(patch, undefined)).toEqual({ sidebarAutoSettleAfterDays: 7 });

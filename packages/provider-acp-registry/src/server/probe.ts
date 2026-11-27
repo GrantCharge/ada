@@ -8,6 +8,7 @@ import {
   type AcpRegistryProbeModel,
   type AcpRegistryUrlAuthAction,
   type ProviderInstanceId,
+  type ProviderPrivacySource,
   type ServerProviderSkill,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -407,6 +408,7 @@ export interface AcpRegistryConfigurationProbeInput {
   readonly settings: AcpRegistrySettings;
   readonly cwd: string;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly modelDiscovery?: AcpRegistryModelDiscovery;
 }
 
@@ -527,7 +529,7 @@ export const probeAcpRegistryConfiguration = Effect.fn("AcpRegistryProbe.probeCo
 
     // Downloads and package installs have their own bounded timeouts inside AcpRegistryCatalog.
     const resolved = yield* catalog
-      .resolve(input.settings, input.cwd, input.environment)
+      .resolve(input.settings, input.cwd, input.environment, input.privacy)
       .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
 
     const openSession = Effect.gen(function* () {
@@ -747,7 +749,7 @@ export const makeAcpRegistryManagementRuntime = Effect.fn("AcpRegistryProbe.make
       AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator,
     );
     const resolved = yield* catalog
-      .resolve(input.settings, input.cwd, input.environment)
+      .resolve(input.settings, input.cwd, input.environment, input.privacy)
       .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError));
     const runtimeContext = yield* Layer.build(
       AcpSessionRuntime.layer({

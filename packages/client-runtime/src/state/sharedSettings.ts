@@ -22,6 +22,7 @@ const SHARED_SERVER_SETTING_KEYS = [
   "mcpGatewayProfiles",
   "mcpGatewayProfileDeletedAt",
   "textGenerationModelSelection",
+  "providerPrivacy",
 ] as const satisfies ReadonlyArray<keyof ServerSettings & keyof ServerSettingsPatch>;
 
 const SHARED_KEY_SET = new Set<string>(SHARED_SERVER_SETTING_KEYS);
@@ -50,13 +51,14 @@ export function filterSharedServerPatch(
   capabilities:
     | Pick<
         ExecutionEnvironmentCapabilities,
-        "threadRestartContinuation" | "agentSkillsSync" | "agentSkillResources"
+        "threadRestartContinuation" | "agentSkillsSync" | "agentSkillResources" | "providerPrivacy"
       >
     | undefined,
   settings?: ServerSettings,
   sourceSettings = settings,
   targetIsSource = false,
 ): ServerSettingsPatch {
+  if (capabilities?.providerPrivacy !== true) patch = Struct.omit(patch, ["providerPrivacy"]);
   if (capabilities?.agentSkillsSync !== true) {
     patch = Struct.omit(patch, ["agentSkills", "agentSkillDeletedAt"]);
     if (patch.mcpGatewayProfiles)

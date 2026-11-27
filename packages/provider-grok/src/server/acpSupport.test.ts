@@ -1,9 +1,43 @@
 import { describe, expect, it } from "@effect/vitest";
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+} from "@t3tools/contracts";
 
 import * as Effect from "effect/Effect";
 import * as EffectAcpErrors from "effect-acp/errors";
 
-import { applyGrokAcpModelSelection, grokAcpSpawnArgs } from "./acpSupport.ts";
+import {
+  applyGrokAcpModelSelection,
+  buildGrokAcpSpawnInput,
+  grokAcpSpawnArgs,
+} from "./acpSupport.ts";
+
+describe("buildGrokAcpSpawnInput privacy", () => {
+  it.each([
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, env: {}, telemetry: "false", feedback: "false" },
+    {
+      choice: DEFAULT_PROVIDER_PRIVACY_CHOICE,
+      env: { GROK_TELEMETRY_ENABLED: "true" },
+      telemetry: "true",
+      feedback: "false",
+    },
+    {
+      choice: ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+      env: {},
+      telemetry: undefined,
+      feedback: undefined,
+    },
+  ])(
+    "overlays the privacy choice on the agent env (%#)",
+    ({ choice, env, telemetry, feedback }) => {
+      const spawn = buildGrokAcpSpawnInput(null, "/project", env, undefined, () => choice);
+      expect(spawn.env?.GROK_TELEMETRY_ENABLED).toBe(telemetry);
+      expect(spawn.env?.GROK_FEEDBACK_ENABLED).toBe(feedback);
+      expect(spawn.env?.GROK_DISABLE_AUTOUPDATER).toBeUndefined();
+    },
+  );
+});
 
 describe("grokAcpSpawnArgs", () => {
   it("inherits the Grok CLI config when no T3 runtime mode is set", () => {

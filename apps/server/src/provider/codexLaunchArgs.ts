@@ -1,3 +1,8 @@
+import {
+  PROVIDER_PRIVACY_CATEGORIES,
+  type ProviderPrivacyCategory,
+  type ProviderPrivacyChoice,
+} from "@t3tools/contracts";
 import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 
 const T3CODE_CODEX_LAUNCH_ARGS_ENV = "T3CODE_CODEX_LAUNCH_ARGS";
@@ -12,11 +17,30 @@ export const resolveCodexLaunchArgs = (
 
 const codexLaunchArgv = (launchArgs?: string): ReadonlyArray<string> => tokenizeCliArgs(launchArgs);
 
+// analytics.enabled=false stops the Statsig exporter; metrics_exporter="none" covers configs that
+// name one explicitly.
+const CODEX_PRIVACY_CONFIG: Partial<Record<ProviderPrivacyCategory, ReadonlyArray<string>>> = {
+  usageAnalytics: ["analytics.enabled=false", 'otel.metrics_exporter="none"'],
+  feedback: ["feedback.enabled=false"],
+  minimalNetwork: ["check_for_update_on_startup=false"],
+};
+
+/** Goes before launch args, so a user's own -c for the same key wins. */
+export const codexPrivacyArgs = (privacy: ProviderPrivacyChoice | undefined) =>
+  privacy === undefined
+    ? []
+    : PROVIDER_PRIVACY_CATEGORIES.flatMap((category) =>
+        privacy[category]
+          ? (CODEX_PRIVACY_CONFIG[category] ?? []).flatMap((value) => ["-c", value])
+          : [],
+      );
+
 // T3 unsubscribes only when it unloads a thread; Codex's own unload delay would stack on that.
-export const codexAppServerArgs = (launchArgs?: string) => [
+export const codexAppServerArgs = (launchArgs?: string, privacy?: ProviderPrivacyChoice) => [
   "app-server",
   "-c",
   "thread_unload_delay_secs=0",
+  ...codexPrivacyArgs(privacy),
   ...codexLaunchArgv(launchArgs),
 ];
 
