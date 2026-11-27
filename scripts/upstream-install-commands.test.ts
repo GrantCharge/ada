@@ -150,14 +150,9 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     why: "Upstream's GitHub App name.",
   },
   {
-    file: /^README\.md$/,
-    text: "T3 Code",
-    why: "Switching from T3 Code, which installs beside Ada.",
-  },
-  {
     file: /^docs\/user\/(?:install|updating)\.md$/,
     text: "T3 Code",
-    why: "Warnings that T3 Code's installers replace Ada's server.",
+    why: "Installer warnings and switching copy for the app that installs beside Ada.",
   },
   {
     file: /^apps\/marketing\/src\/(?:lib\/seo\.ts|pages\/95\.astro)$/,
@@ -213,12 +208,12 @@ const BRAND_ALLOWLIST: ReadonlyArray<BrandAllowance> = [
     why: "Upstream's npm package, which this message says how to remove.",
   },
   {
-    file: /^README\.md$/,
+    file: /^docs\/user\/install\.md$/,
     text: "t3 service uninstall",
     why: "T3 Code's own command for its background service.",
   },
   {
-    file: /^(?:README\.md|docs\/user\/remote-access\.md|apps\/(?:web|mobile)\/src\/(?:components|features\/connection)\/ConnectOnlyNoticeCoordinator\.tsx|apps\/(?:web|mobile)\/src\/connection\/storage\.ts|apps\/server\/src\/environment\/ConnectTeardown\.ts)$/,
+    file: /^(?:docs\/user\/(?:install|remote-access)\.md|apps\/(?:web|mobile)\/src\/(?:components|features\/connection)\/ConnectOnlyNoticeCoordinator\.tsx|apps\/(?:web|mobile)\/src\/connection\/storage\.ts|apps\/server\/src\/environment\/ConnectTeardown\.ts)$/,
     text: "T3 Connect",
     why: "The removed upstream service, named so the people who used it know what changed.",
   },

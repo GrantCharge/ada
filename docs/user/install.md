@@ -8,6 +8,22 @@ desktop, web, or mobile app. Set up the machine where the agents will work first
 You need an installed, authenticated provider before starting a thread. You can
 launch Ada and configure providers afterwards.
 
+## Switching from T3 Code
+
+Ada uses the same data directory (`~/.t3`) as T3 Code, so your projects,
+threads, settings, provider sign-ins and paired devices carry over, and phones
+and other machines still recognise this one. Your database is upgraded the
+first time Ada starts.
+
+- Quit T3 Code first. The two apps share one profile, so only one of them can
+  run at a time.
+- If you installed T3 Code's background service, run `t3 service uninstall`
+  before opening Ada. Otherwise that service keeps using your data directory
+  and Ada cannot start its own server.
+- Ada does not include T3 Connect. Devices you paired through T3 Connect need
+  to pair again over your local network or tailnet
+  ([remote access](./remote-access.md)).
+
 ## Command line
 
 ```bash
