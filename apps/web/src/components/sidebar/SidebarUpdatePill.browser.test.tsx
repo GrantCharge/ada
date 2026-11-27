@@ -200,6 +200,40 @@ describe("SidebarUpdatePill update everything", () => {
     await expect.element(row.getByRole("cell", { name: label, exact: true })).toBeVisible();
     await expect.element(row.getByRole("cell", { name: "Claude", exact: true })).toBeVisible();
   });
+
+  it("shows skipped provider machines and reasons right away without marking Ada skipped", async () => {
+    setup(null, {
+      hasUpdates: true,
+      rows: [
+        {
+          environmentId: EnvironmentId.make("studio"),
+          label: "Studio-01",
+          app: null,
+          skipped: null,
+          providerSkipped: "Antigravity needs a manual update",
+          providers: ["Codex"],
+        },
+        {
+          environmentId: EnvironmentId.make("dev-box"),
+          label: "dev-box",
+          app: null,
+          skipped: null,
+          providerSkipped: "no permission to update providers (grant Manage providers)",
+          providers: [],
+        },
+      ],
+    });
+    await using screen = await render(<SidebarUpdatePill />);
+    await userEvent.click(screen.getByRole("button", { name: "Update everything" }));
+
+    await expect.element(page.getByText("Antigravity needs a manual update")).toBeVisible();
+    await expect
+      .element(page.getByText("no permission to update providers (grant Manage providers)"))
+      .toBeVisible();
+    const table = page.getByRole("table");
+    const studioRow = table.getByRole("row", { name: /Studio-01/ });
+    await expect.element(studioRow.getByText("Skipped")).not.toBeInTheDocument();
+  });
 });
 
 describe("SidebarUpdatePill check", () => {

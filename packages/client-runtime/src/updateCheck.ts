@@ -20,7 +20,7 @@ import {
 
 export type UpdateCheckResult =
   | { readonly status: "up-to-date" }
-  | { readonly status: "available"; readonly version: string }
+  | { readonly status: "available"; readonly version: string; readonly manual?: true }
   | { readonly status: "error"; readonly reason: string };
 
 export interface UpdateCheckItem {
@@ -123,7 +123,10 @@ function providerUpdateItems(
   label: string,
   providers: ReadonlyArray<ServerProvider>,
 ): UpdateCheckItem[] {
-  const available = new Map<ProviderDriverKind, string>();
+  const outdatedByDriver = new Map<
+    ProviderDriverKind,
+    { version: string; commands: Set<string>; hasManual: boolean }
+  >();
   for (const provider of providers) {
     const advisory = provider.versionAdvisory;
     const latestStatus = provider.compatibilityAdvisory?.latestVersionStatus;
@@ -132,16 +135,28 @@ function providerUpdateItems(
       advisory?.status === "behind_latest" &&
       advisory.latestVersion !== null &&
       latestStatus !== "broken" &&
-      latestStatus !== "unsupported" &&
-      !available.has(provider.driver)
+      latestStatus !== "unsupported"
     ) {
-      available.set(provider.driver, advisory.latestVersion);
+      const entry = outdatedByDriver.get(provider.driver) ?? {
+        version: advisory.latestVersion,
+        commands: new Set<string>(),
+        hasManual: false,
+      };
+      if (advisory.canUpdate === true && advisory.updateCommand !== null) {
+        entry.commands.add(advisory.updateCommand);
+      } else {
+        entry.hasManual = true;
+      }
+      outdatedByDriver.set(provider.driver, entry);
     }
   }
-  if (available.size === 0) return [{ subject: `Providers on ${label}`, result: upToDate }];
-  return [...available].map(([driver, version]) => ({
+  if (outdatedByDriver.size === 0) return [{ subject: `Providers on ${label}`, result: upToDate }];
+  return [...outdatedByDriver].map(([driver, entry]) => ({
     subject: `${PROVIDER_DISPLAY_NAMES[driver] ?? driver} on ${label}`,
-    result: { status: "available", version },
+    result:
+      entry.hasManual || entry.commands.size !== 1
+        ? { status: "available", version: entry.version, manual: true }
+        : { status: "available", version: entry.version },
   }));
 }
 
@@ -201,7 +216,9 @@ export interface UpdateCheckSummary {
 export function summarizeUpdateCheck(items: ReadonlyArray<UpdateCheckItem>): UpdateCheckSummary {
   const lines = items.map(({ subject, result }) =>
     result.status === "available"
-      ? `${subject}: ${result.version} available`
+      ? result.manual
+        ? `${subject}: ${result.version} available (manual update)`
+        : `${subject}: ${result.version} available`
       : result.status === "error"
         ? `${subject}: ${result.reason}`
         : `${subject}: up to date`,
@@ -209,8 +226,16 @@ export function summarizeUpdateCheck(items: ReadonlyArray<UpdateCheckItem>): Upd
   if (items.length === 0) {
     return { tone: "error", title: "Nothing to check", lines: ["Connect to a server first."] };
   }
-  if (items.some(({ result }) => result.status === "available")) {
-    return { tone: "available", title: "Updates available", lines };
+  const available = items.filter(({ result }) => result.status === "available");
+  if (available.length > 0) {
+    const allManual = available.every(
+      ({ result }) => result.status === "available" && result.manual === true,
+    );
+    return {
+      tone: "available",
+      title: allManual ? "Manual updates available" : "Updates available",
+      lines,
+    };
   }
   if (items.some(({ result }) => result.status === "error")) {
     return { tone: "error", title: "Could not check everything", lines };
