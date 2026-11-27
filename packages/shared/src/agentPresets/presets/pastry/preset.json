@@ -5,24 +5,29 @@
   "color": "#f5b775",
   "icon": "code",
   "model": {
-    "provider": "codex",
-    "model": "gpt-6.1-sol",
-    "reasoningEffort": "medium"
+    "provider": "antigravity",
+    "model": "gemini-4-neon",
+    "reasoningEffort": "high"
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
   "skills": [
+    "principle-prove-it-works",
     "diagnose",
     "improve-codebase-architecture",
-    "new-pattern-project",
+    "davit",
+    "github-git",
+    "native-first-tools",
     "playwright-cli",
-    "principle-prove-it-works",
-    "t3-agents"
+    "new-pattern-project",
+    "typesafe-ai"
   ],
   "setupNotes": [
-    "Computer use requires Codex with native computer use enabled on a supported machine.",
+    "Requires Antigravity with access to gemini-4-neon.",
+    "Computer use requires Ada computer use on a machine with a desktop session; browser work uses OpenCode Browse or Ada preview.",
     "Project bootstrapping requires Git and Node.js; Go, Make and Docker are needed for generated project checks.",
     "GitHub publication requires an authenticated GitHub CLI and explicit authorization.",
-    "Browser CLI workflows require playwright-cli and its browser dependencies."
+    "Browser CLI workflows require playwright-cli and its browser dependencies.",
+    "Heavy builds and tests can run in a Davit box when the davit client and a host are configured; otherwise they run locally."
   ]
 }

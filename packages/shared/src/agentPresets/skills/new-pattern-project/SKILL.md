@@ -1,16 +1,13 @@
 ---
 name: new-pattern-project
-description: Bootstrap a named Go + Datastar project from Go Fast Stack and verify its module paths, naming, repository and checks.
+description: "Bootstrap a Go + Datastar project from Go Fast Stack and verify module paths, naming, repo, and checks."
 ---
 
 # New Pattern Project
 
-Use this when the requested starting point is the public [Go Fast Stack template](https://github.com/jayleaton/go-fast-stack). Reuse the requested slug, display name, destination, visibility and repository intent. Default destination is `~/Documents/projects`; respect another requested location.
+Use for new projects starting from [Go Fast Stack](https://github.com/jayleaton/go-fast-stack) (Go + Datastar + Postgres, not a Node web workspace; Node/pnpm applies only to optional `apps/mobile-app` Expo app). Default destination: `~/Documents/projects`.
 
-Read [setup.md](references/setup.md) and inspect [bootstrap-go-fast-project.mjs](scripts/bootstrap-go-fast-project.mjs) before execution. The helper clones the template, rewrites Go module references and product names, commits the scaffold, and can create/push a GitHub repository. Use `--skip-github` unless publication is authorized. It never overwrites an existing directory. Dependency downloads and checks require `--install` and `--verify`; run those in the configured isolated compute environment, if any.
-
-Follow the cloned repository's AGENTS.md, CONTEXT.md, mise.toml and Makefile. This is a Go server with Datastar and Postgres, not a Node web workspace. Keep the pinned Go and Go-tool versions. Node and pnpm apply only to the optional standalone Expo app in `apps/mobile-app`.
-
-Verify all Go module/import prefixes, display names, mobile identifiers and deployment project names agree; the template remote must be removed or replaced. Verify with the new repo's own verification skill. Do not run deployment targets merely to verify a scaffold.
-
-Proceed to the requested first workflow. Clarify only material product constraints; scaffolding does not require a mandatory interview.
+- Read [setup.md](references/setup.md) and [bootstrap-go-fast-project.mjs](scripts/bootstrap-go-fast-project.mjs) first.
+- Run the bootstrapper with requested slug/name/destination/visibility; pass `--skip-github` unless repo creation is authorized, and `--install --verify` (in Davit or another isolated compute environment if configured). Never overwrite an existing dir.
+- Follow the scaffolded `AGENTS.md`, `CONTEXT.md`, `mise.toml`, and `Makefile` (keep pinned Go versions).
+- Verify all Go module/import prefixes, display names, mobile IDs, and deploy names match, template remote is replaced/removed, and the new repo's verification checks pass. Do not run deploy targets just to verify a scaffold. Proceed directly to the first requested workflow without a mandatory interview.

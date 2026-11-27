@@ -1,0 +1,112 @@
+#!/bin/sh
+":" //; exec env ELECTRON_RUN_AS_NODE=1 "${ADA_NODE:-/Applications/Ada.app/Contents/MacOS/Ada}" "$0" "$@"
+const { execFile } = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
+
+const ADA = process.env.T3CODE_CLI_PATH || `${os.homedir()}/.t3/bin/ada`;
+const POLL_MS = 15_000;
+const MAX_FAILURES = 6; // consecutive failed reads before ERROR (~3 min with backoff)
+const TERMINAL = new Set(["completed", "failed", "interrupted", "cancelled", "stopped"]);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const argv = process.argv.slice(2);
+let timeoutMin = 240;
+const targets = [];
+for (let i = 0; i < argv.length; i++) {
+  if (argv[i] === "--timeout") timeoutMin = Number(argv[++i]);
+  else {
+    const at = argv[i].lastIndexOf("@");
+    targets.push(at > 0 ? { id: argv[i].slice(0, at), env: argv[i].slice(at + 1) } : { id: argv[i] });
+  }
+}
+if (!targets.length || !(timeoutMin > 0)) {
+  console.error("usage: watch-children [--timeout <minutes>] <threadId>[@<environmentId>] ...");
+  process.exit(64);
+}
+
+const run = (args, env) =>
+  new Promise((resolve, reject) =>
+    execFile(ADA, args, { env: { ...process.env, ...env }, timeout: 60_000, maxBuffer: 16 << 20 }, (err, out, errOut) =>
+      err ? reject(new Error((errOut || err.message).trim().split("\n").pop())) : resolve(out)));
+
+let mcpEnv, sessionId;
+async function connect() {
+  if (process.env.T3_ACP_MCP_ENDPOINT && process.env.T3_ACP_MCP_AUTHORIZATION) return (mcpEnv = {});
+  const { origin } = JSON.parse(fs.readFileSync(`${process.env.T3CODE_HOME || `${os.homedir()}/.t3`}/userdata/server-runtime.json`, "utf8"));
+  const issued = JSON.parse(await run(["auth", "session", "issue", "--subject", "mcp-client", "--scope", "orchestration:read",
+    "--ttl", `${Math.ceil(timeoutMin) + 15}m`, "--label", "watch-children", "--json"]));
+  sessionId = issued.sessionId;
+  mcpEnv = { T3_ACP_MCP_ENDPOINT: new URL("/mcp", origin).href, T3_ACP_MCP_AUTHORIZATION: `Bearer ${issued.token}` };
+}
+
+async function call(tool, args) {
+  const res = JSON.parse(await run(["acp-mcp-call", tool, JSON.stringify(args)], mcpEnv));
+  const body = res.structuredContent ?? JSON.parse(res.content?.[0]?.text ?? "{}");
+  if (res.isError) throw new Error(body.message || res.content?.[0]?.text || `${tool} failed`);
+  return body;
+}
+
+async function inspect(t) {
+  const where = { threadId: t.id, ...(t.env ? { environmentId: t.env } : {}) };
+  const read = await call("t3_thread_read", { ...where, view: "activity", limit: 30, runLimit: 1, maxCharsPerItem: 200 });
+  const th = read.thread;
+  if (th.pendingRequestCount > 0) {
+    const q = (await call("t3_get_pending_questions", where)).data ?? {};
+    if (q.status === "waiting-input" && q.pendingQuestions?.length)
+      return [...new Set(q.pendingQuestions.map((p) => p.questionRequestId ?? p.requestId))].map((r) => `INPUT ${t.id} ${r}`);
+    if (q.status === "waiting-approval") {
+      const item = read.items.find((i) => i.type === "approval_request" && i.status === "waiting");
+      const wait = await call("t3_thread_wait", { ...where, timeoutMs: 1000 }).catch(() => ({}));
+      const reqId = wait.pendingApproval?.requestId
+        ?? (item && decodeURIComponent(item.itemId.replace(/^turn-item:runtime-request:/, "")));
+      if (reqId) return [`APPROVAL ${t.id} ${reqId} ${(item?.text ?? wait.pendingApproval?.kind ?? "").replace(/\s+/g, " ").slice(0, 200)}`];
+    }
+  }
+  const idle = !th.activeRunId && !(th.pendingBackgroundTasks?.length) && TERMINAL.has(th.status);
+  return idle ? [{ ended: `ENDED ${t.id} ${th.status}`, runId: th.latestRunId }] : [];
+}
+
+async function check(t) {
+  let found = await inspect(t);
+  const end = found.find((e) => e.ended);
+  if (!end) return found;
+  await sleep(5000); // confirm: a run handoff or background wake would change this
+  found = await inspect(t);
+  return found.some((e) => e.ended && e.runId === end.runId) ? [end.ended] : found.filter((e) => !e.ended);
+}
+
+async function main() {
+  await connect();
+  const deadline = Date.now() + timeoutMin * 60_000;
+  const failures = new Map();
+  while (Date.now() < deadline) {
+    const lines = (await Promise.all(targets.map(async (t) => {
+      try {
+        const found = await check(t);
+        failures.delete(t);
+        return found;
+      } catch (err) {
+        const n = (failures.get(t) ?? 0) + 1;
+        failures.set(t, n);
+        return n >= MAX_FAILURES ? [`ERROR ${t.id} ${err.message.replace(/\s+/g, " ").slice(0, 300)}`] : [];
+      }
+    }))).flat();
+    if (lines.length) return console.log(lines.join("\n")), 0;
+    const worst = Math.max(0, ...failures.values());
+    await sleep(Math.min(worst ? 10_000 * 2 ** (worst - 1) : POLL_MS, 60_000, Math.max(0, deadline - Date.now())));
+  }
+  console.log("TIMEOUT");
+  return 2;
+}
+
+for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"])
+  process.on(sig, () => (sessionId ? run(["auth", "session", "revoke", sessionId]).catch(() => {}) : Promise.resolve())
+    .then(() => process.exit(130)));
+
+main()
+  .catch((err) => (console.log(`ERROR - ${err.message}`), 1))
+  .then(async (code) => {
+    if (sessionId) await run(["auth", "session", "revoke", sessionId]).catch(() => {});
+    process.exit(code);
+  });

@@ -1,74 +1,86 @@
 {
   "presets/advosary": {
-    "digest": "55fb5db4eab17372",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "bdf000c129a3af17",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "presets/captain": {
-    "digest": "d6e6f5e4062a0496",
-    "updatedAt": "2026-11-24T00:00:00.000Z"
+    "digest": "12c7f8c1697c4897",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "presets/cleaner": {
-    "digest": "32cd5fed10f88823",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "7468529c3b4c375e",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "presets/cook": {
-    "digest": "55fb5db4eab17372",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "bdf000c129a3af17",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "presets/cook-opensource": {
-    "digest": "82bbd021956b125b",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "bdf000c129a3af17",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "presets/pastry": {
-    "digest": "cb449cad083a7207",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "54288b90b6056c7a",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "skills/agentic-harness-design": {
     "digest": "fa0467ad69cb7b8f",
     "updatedAt": "2026-11-17T00:00:00.000Z"
   },
   "skills/captain-event-loop": {
-    "digest": "fe0507d2befa0db0",
-    "updatedAt": "2026-11-24T00:00:00.000Z"
+    "digest": "dd6db94c974a49e2",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
+  },
+  "skills/davit": {
+    "digest": "56234d90334c7c1a",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "skills/diagnose": {
     "digest": "17854abc1dcc89d6",
     "updatedAt": "2026-11-17T00:00:00.000Z"
   },
-  "skills/grill-me": {
-    "digest": "b2e510e6e68f69c8",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+  "skills/github-git": {
+    "digest": "849ba384b1ebe6c2",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "skills/grilling": {
     "digest": "4e21139c1d04d12a",
     "updatedAt": "2026-11-17T00:00:00.000Z"
   },
   "skills/improve-codebase-architecture": {
-    "digest": "db7e6c3777e4db21",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "c8595441834e739f",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
+  },
+  "skills/native-first-tools": {
+    "digest": "8af596e81e5eed7a",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "skills/new-pattern-project": {
-    "digest": "a3a579efe6e640c5",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "2553f6e90a162917",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "skills/playwright-cli": {
-    "digest": "c082640b0e3c5991",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "c900c68ba0f2e3a1",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "skills/principle-prove-it-works": {
-    "digest": "521628d0f8ee1376",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "b5eff10c1836048e",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "skills/retro": {
-    "digest": "2834bfcf57f5c3a5",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "a85f86648fd0b512",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   },
   "skills/t3-agents": {
     "digest": "4ffed9769d21ab3c",
     "updatedAt": "2026-11-24T00:00:00.000Z"
   },
+  "skills/typesafe-ai": {
+    "digest": "06bcce07e84a8b2d",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
+  },
   "skills/worktree-cleanup-rule": {
-    "digest": "33873f2a8a055f60",
-    "updatedAt": "2026-11-17T00:00:00.000Z"
+    "digest": "e60890540f37bd12",
+    "updatedAt": "2026-11-27T00:00:00.000Z"
   }
 }

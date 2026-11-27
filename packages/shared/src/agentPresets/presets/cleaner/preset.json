@@ -5,19 +5,21 @@
   "color": "#f41f4a",
   "icon": "shield",
   "model": {
-    "provider": "codex",
-    "model": "gpt-6.1-sol",
-    "reasoningEffort": "medium"
+    "provider": "antigravity",
+    "model": "gemini-4-neon"
   },
   "runtimeMode": "full-access",
   "interactionMode": "default",
   "skills": [
     "improve-codebase-architecture",
     "diagnose",
-    "agentic-harness-design",
     "playwright-cli",
     "principle-prove-it-works",
-    "t3-agents"
+    "native-first-tools",
+    "github-git"
   ],
-  "setupNotes": ["Browser CLI workflows require playwright-cli and its browser dependencies."]
+  "setupNotes": [
+    "Requires Antigravity with access to gemini-4-neon.",
+    "Browser CLI workflows require playwright-cli and its browser dependencies."
+  ]
 }
