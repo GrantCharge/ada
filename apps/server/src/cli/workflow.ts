@@ -1,3 +1,4 @@
+import { CLI_COMMAND } from "@t3tools/shared/branding";
 import { WorkflowHook, WorkflowRunStatus } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Console from "effect/Console";
@@ -284,7 +285,7 @@ const signalCommand = Command.make("signal", {
             );
       yield* withThreadTools(
         // Named on the answer to a question it sends.
-        { ...flags, json: false, clientLabel: threadTitle || "t3 workflow signal" },
+        { ...flags, json: false, clientLabel: threadTitle || `${CLI_COMMAND} workflow signal` },
         Effect.fn("cli.workflow.signal")(function* (tools) {
           const { delivery } = yield* tools.call(
             "t3_workflow",

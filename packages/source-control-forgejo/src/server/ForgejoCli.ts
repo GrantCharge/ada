@@ -1,3 +1,4 @@
+import { APP_NAME } from "@t3tools/shared/branding";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -412,7 +413,7 @@ export const make = Effect.gen(function* () {
         return yield* new ForgejoCliError({
           command: "gt",
           cwd: input.cwd,
-          detail: "`gt auth status` failed. Run it on the T3 Code server to see what gt reports.",
+          detail: `\`gt auth status\` failed. Run it on the ${APP_NAME} server to see what gt reports.`,
         });
       // Only a rejected command says so; a gt that could not be asked fails as it did.
       if (!isVcsProcessExitError(version.failure.cause)) return yield* version.failure;

@@ -231,7 +231,7 @@ it.effect("signal from an agent's shell answers in the name of the agent's threa
       sessionLabels.length = 0;
       const { error } = yield* runCli(answer, call, env);
       assert.isUndefined(error);
-      assert.strictEqual(sessionLabels.at(-1), "t3 workflow signal");
+      assert.strictEqual(sessionLabels.at(-1), "ada workflow signal");
     }
   }),
 );
