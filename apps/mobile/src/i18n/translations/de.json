@@ -3105,6 +3105,8 @@
   "56edbb36e9731d20": "Anbieter aktualisieren",
   "2baa086b75bc2077": "{version} · Neueste {latest}",
   "2150d724c48243b1": "Version unbekannt",
+  "09060387ee928c1b": "Eigener Pfad · {appName} aktualisiert ihn nicht.",
+  "05d64a8af582e7c8": "System-PATH · {appName} aktualisiert ihn nicht.",
   "b7f8938a8b7567d2": "Update eingereiht",
   "a639775fc8ef993d": "Update läuft",
   "ba210d5161bffe73": "Update erfolgreich",

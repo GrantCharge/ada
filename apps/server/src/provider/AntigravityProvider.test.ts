@@ -29,8 +29,10 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import type { ServerProvider } from "@t3tools/contracts";
 import {
+  antigravityManagedVersionAdvisory,
   buildAntigravityModelsFromSession,
   makeAntigravityProvider,
+  type AntigravityProbeResult,
 } from "./AntigravityProvider.ts";
 import { mergeProviderSnapshot } from "./ProviderRegistry.ts";
 
@@ -143,10 +145,10 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
   } = {},
 ) {
   const savedRuntimeModes = yield* Ref.make<ReadonlyArray<ReadonlyArray<RuntimeMode>>>([]);
-  const initialProbe = yield* Deferred.make<EffectAcpSchema.InitializeResponse, ProbeError>();
+  const initialProbe = yield* Deferred.make<AntigravityProbeResult, ProbeError>();
   const probeCalls = yield* Ref.make(0);
   const safetyCalls = yield* Ref.make(0);
-  const probe = yield* Ref.make<Effect.Effect<EffectAcpSchema.InitializeResponse, ProbeError>>(
+  const probe = yield* Ref.make<Effect.Effect<AntigravityProbeResult, ProbeError>>(
     Deferred.await(initialProbe),
   );
   const safety = yield* Ref.make<Effect.Effect<boolean>>(Effect.succeed(options.safe ?? true));
@@ -195,6 +197,28 @@ const makeHarness = Effect.fn("makeAntigravityProviderHarness")(function* (
     nextPublish,
     savedRuntimeModes,
   };
+});
+
+describe("Antigravity managed update advisory", () => {
+  it("reports an update only when a newer release than the installed one is known", () => {
+    expect(
+      antigravityManagedVersionAdvisory({ version: "1.6.0", installedVersion: "1.5.12" }),
+    ).toMatchObject({
+      status: "behind_latest",
+      currentVersion: "1.5.12",
+      latestVersion: "1.6.0",
+      updateCommand: null,
+      canUpdate: false,
+    });
+    for (const state of [
+      { version: "1.5.12", installedVersion: "1.5.12" },
+      { version: "1.5.0", installedVersion: "1.5.12" },
+      { version: null, installedVersion: "1.5.12" },
+      { version: "1.6.0", installedVersion: null },
+    ]) {
+      expect(antigravityManagedVersionAdvisory(state)).toBeUndefined();
+    }
+  });
 });
 
 describe("Antigravity model catalog", () => {
@@ -404,10 +428,10 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           installed: true,
           status: "warning",
           version: "1.5.12",
-          auth: { status: "unknown", ...(auth ? { type: auth.type } : {}) },
+          auth: { status: "unknown", ...auth },
           message:
             auth?.type === "gemini-api-key" || auth?.type === "agent-platform"
-              ? `Antigravity is installed. Connect with ${auth.label} to load models.`
+              ? `Antigravity is installed. ${auth.label} is checked when a session starts.`
               : "Antigravity is installed. Google account access is not checked yet.",
           models: [],
         });
@@ -754,6 +778,32 @@ it.layer(layerTest)("Antigravity provider snapshots", (it) => {
           updatedAfterFresh.models.find((model) => model.slug === "carbon")?.aliases,
         ).toContain(ANTIGRAVITY_DEFAULT_MODEL);
       }),
+  );
+
+  it.effect("publishes where the runtime came from and the managed runtime's update advisory", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const advisory = antigravityManagedVersionAdvisory({
+        version: "1.6.0",
+        installedVersion: "1.5.12",
+      });
+      yield* Deferred.succeed(harness.initialProbe, {
+        ...initializeResult,
+        runtime: { source: "managed", versionAdvisory: advisory },
+      });
+      yield* harness.initialUpdate;
+      expect(yield* harness.provider.snapshot.getSnapshot).toMatchObject({
+        runtimeSource: "managed",
+        versionAdvisory: { status: "behind_latest", latestVersion: "1.6.0" },
+      });
+      yield* Ref.set(
+        harness.probe,
+        Effect.succeed({ ...initializeResult, runtime: { source: "path" } }),
+      );
+      const onPath = yield* harness.provider.snapshot.refresh;
+      expect(onPath.runtimeSource).toBe("path");
+      expect(onPath.versionAdvisory).toBeUndefined();
+    }),
   );
 
   it.effect("does not guess a version before a custom launcher's first handshake", () =>

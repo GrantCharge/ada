@@ -3107,6 +3107,8 @@
   "56edbb36e9731d20": "Refresh providers",
   "2baa086b75bc2077": "{version} · Latest {latest}",
   "2150d724c48243b1": "Version unknown",
+  "09060387ee928c1b": "Custom path · {appName} does not update it.",
+  "05d64a8af582e7c8": "System PATH · {appName} does not update it.",
   "b7f8938a8b7567d2": "Update queued",
   "a639775fc8ef993d": "Update running",
   "ba210d5161bffe73": "Update succeeded",

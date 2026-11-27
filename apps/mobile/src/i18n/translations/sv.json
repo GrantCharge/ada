@@ -3106,6 +3106,8 @@
   "56edbb36e9731d20": "Uppdatera leverantörer",
   "2baa086b75bc2077": "{version} · Senaste {latest}",
   "2150d724c48243b1": "Okänd version",
+  "09060387ee928c1b": "Egen sökväg · {appName} uppdaterar den inte.",
+  "05d64a8af582e7c8": "System-PATH · {appName} uppdaterar den inte.",
   "b7f8938a8b7567d2": "Uppdatering köad",
   "a639775fc8ef993d": "Uppdatering körs",
   "ba210d5161bffe73": "Uppdateringen lyckades",

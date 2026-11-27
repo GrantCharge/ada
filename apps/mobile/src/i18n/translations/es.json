@@ -3100,6 +3100,8 @@
   "56edbb36e9731d20": "Actualizar proveedores",
   "2baa086b75bc2077": "{version} · Última {latest}",
   "2150d724c48243b1": "Versión desconocida",
+  "09060387ee928c1b": "Ruta personalizada · {appName} no la actualiza.",
+  "05d64a8af582e7c8": "PATH del sistema · {appName} no lo actualiza.",
   "b7f8938a8b7567d2": "Actualización en cola",
   "a639775fc8ef993d": "Actualización en curso",
   "ba210d5161bffe73": "Actualización completada",

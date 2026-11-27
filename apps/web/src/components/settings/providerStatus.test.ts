@@ -71,6 +71,24 @@ describe("Antigravity with unchecked sign-in", () => {
     }
   });
 
+  it("presents configured but unchecked credentials neutrally", () => {
+    for (const auth of [
+      { status: "unknown", type: "gemini-api-key", label: "Gemini API key" },
+      { status: "unknown", type: "agent-platform", label: "Agent Platform" },
+    ] as const) {
+      const candidate = {
+        ...unchecked,
+        auth,
+        message: `Antigravity is installed. ${auth.label} is checked when a session starts.`,
+      };
+      expect.soft(getProviderSummary(candidate)).toEqual({
+        headline: `Installed · ${auth.label} not checked`,
+        detail: candidate.message,
+      });
+      expect(getProviderStatusKey(candidate)).toBe("neutral");
+    }
+  });
+
   // regression: #18623 neutral unchecked-sign-in display must not mask real warnings
   it("preserves actionable warnings, failures and disabled states outside unchecked Google sign-in", () => {
     const cases = [
@@ -96,18 +114,6 @@ describe("Antigravity with unchecked sign-in", () => {
         name: "missing CLI",
         change: { installed: false },
         headline: "Not found",
-        status: "warning",
-      },
-      {
-        name: "API key authentication",
-        change: { auth: { status: "unknown", type: "gemini-api-key" } },
-        headline: "Needs attention",
-        status: "warning",
-      },
-      {
-        name: "Agent Platform authentication",
-        change: { auth: { status: "unknown", type: "agent-platform" } },
-        headline: "Needs attention",
         status: "warning",
       },
       {

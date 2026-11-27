@@ -36,19 +36,18 @@ export function providerAuthLabel(
   return auth.label ?? auth.type;
 }
 
-// Antigravity's local health check verifies installation, not Google sign-in.
-// API-key and Agent Platform warnings still need attention.
+// Antigravity's local health check verifies installation and settings, not the account: the
+// server reports missing credentials as an error, so a warning with unknown auth is only unchecked.
 function isAntigravitySignInUnchecked(provider: ServerProvider): boolean {
   return (
     provider.driver === "antigravity" &&
     provider.installed &&
     provider.status === "warning" &&
-    provider.auth.status === "unknown" &&
-    (provider.auth.type === undefined ||
-      provider.auth.type === "oauth-personal" ||
-      provider.auth.type === "oauth-business")
+    provider.auth.status === "unknown"
   );
 }
+
+const ANTIGRAVITY_CREDENTIAL_AUTH_TYPES = new Set(["gemini-api-key", "agent-platform"]);
 
 export function getProviderStatusKey(provider: ServerProvider | undefined): ProviderStatusKey {
   if (provider && !provider.enabled) return "disabled";
@@ -92,8 +91,13 @@ export function getProviderSummary(
     };
   }
   if (isAntigravitySignInUnchecked(provider)) {
+    const credential = ANTIGRAVITY_CREDENTIAL_AUTH_TYPES.has(provider.auth.type ?? "")
+      ? providerAuthLabel(provider.auth, resolve)
+      : undefined;
     return {
-      headline: resolve(msg("Installed · Sign-in not checked")),
+      headline: credential
+        ? resolve(msg("Installed · {method} not checked", { method: credential }))
+        : resolve(msg("Installed · Sign-in not checked")),
       detail: provider.message ?? null,
     };
   }
@@ -134,6 +138,45 @@ export function getProviderVersionLabel(version: string | null | undefined) {
     return `${year}-${month}-${day}${candidate ? ` ${candidate}` : ""}`;
   }
   return /^\d/.test(version) ? `v${version}` : version;
+}
+
+/** Where the server found the runtime; only a managed one is updated by the server. */
+export function getProviderRuntimeSourcePresentation(
+  source: ServerProvider["runtimeSource"],
+  resolve: MessageResolver = m,
+): { readonly label: string; readonly detail: string; readonly managed: boolean } | null {
+  switch (source) {
+    case "managed":
+      return {
+        label: resolve(msg("Managed by {appName}", { appName: APP_NAME })),
+        detail: resolve(
+          msg("{appName} installed this runtime and checks it for updates.", { appName: APP_NAME }),
+        ),
+        managed: true,
+      };
+    case "custom":
+      return {
+        label: resolve(msg("Custom path", { $context: "provider runtime source" })),
+        detail: resolve(
+          msg("Runs the custom binary path below. {appName} does not update it.", {
+            appName: APP_NAME,
+          }),
+        ),
+        managed: false,
+      };
+    case "path":
+      return {
+        label: resolve(msg("System PATH")),
+        detail: resolve(
+          msg("Runs the copy found on the system PATH. {appName} does not update it.", {
+            appName: APP_NAME,
+          }),
+        ),
+        managed: false,
+      };
+    case undefined:
+      return null;
+  }
 }
 
 const COMPATIBILITY_TITLES = {
