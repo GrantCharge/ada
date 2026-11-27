@@ -18,6 +18,7 @@ import {
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -144,7 +145,14 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     selected: AntigravityInstallation.AntigravityExecutable;
     failResolution: boolean;
     beforeAcquire: Effect.Effect<void>;
-  } = { selected: first, failResolution: false, beforeAcquire: Effect.void };
+    installVersions: { readonly version: string | null; readonly installedVersion: string | null };
+  } = {
+    selected: first,
+    failResolution: false,
+    beforeAcquire: Effect.void,
+    installVersions: { version: null, installedVersion: null },
+  };
+  const updateChecked = yield* Deferred.make<void>();
   const acquisitions: Array<{ binaryPath: string | undefined; path: string | undefined }> = [];
   const releases: Array<string | null> = [];
   const launches: Array<{
@@ -163,6 +171,17 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
 
   const layerInstallation = Layer.mock(AntigravityInstallation.AntigravityInstallation)({
     managedDirectory: root,
+    state: Effect.sync(() => ({
+      driver: ProviderDriverKind.make("antigravity"),
+      operationId: null,
+      phase: "idle" as const,
+      downloadedBytes: 0,
+      totalBytes: null,
+      canRemove: true,
+      message: null,
+      ...controls.installVersions,
+    })),
+    checkForUpdate: Deferred.succeed(updateChecked, undefined).pipe(Effect.asVoid),
     compatibility: (version) =>
       Effect.succeed(
         resolveProviderCompatibility(
@@ -279,6 +298,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     second,
     signedOut,
     controls,
+    updateChecked,
     acquisitions,
     releases,
     launches,
@@ -313,6 +333,29 @@ const layerTest = ProviderHostLive.layer.pipe(
 );
 
 it.layer(layerTest)("AntigravityDriver", (it) => {
+  it.effect("a managed runtime's health check looks for updates and reports a newer release", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      h.controls.installVersions = { version: "9.0.0", installedVersion: "1.0.0" };
+      const managed = yield* h.instance.snapshot.refresh;
+      yield* Deferred.await(h.updateChecked);
+      expect(managed).toMatchObject({
+        runtimeSource: "managed",
+        versionAdvisory: {
+          status: "behind_latest",
+          currentVersion: "1.0.0",
+          latestVersion: "9.0.0",
+          canUpdate: false,
+        },
+      });
+
+      h.controls.selected = { ...h.first, source: "path", version: null };
+      const onPath = yield* h.instance.snapshot.refresh;
+      expect(onPath.runtimeSource).toBe("path");
+      expect(onPath.versionAdvisory).toBeUndefined();
+    }),
+  );
+
   it.effect.skipIf(windowsHost)(
     "refreshes the selected executable and limits form capabilities to chat",
     () =>

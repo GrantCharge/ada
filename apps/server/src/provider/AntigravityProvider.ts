@@ -3,12 +3,15 @@ import {
   ANTIGRAVITY_DEFAULT_MODEL,
   ProviderDriverKind,
   type AntigravitySettings,
+  type ProviderInstallState,
   type ProviderSetupError,
   type RuntimeMode,
   type ServerProvider,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
+  type ServerProviderVersionAdvisory,
 } from "@t3tools/contracts";
+import { compareSemverVersions } from "@t3tools/shared/semver";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -52,6 +55,32 @@ type SessionSetupResult = Pick<
   AcpSessionRuntime.AcpSessionRuntimeStartResult["sessionSetupResult"],
   "configOptions" | "models"
 >;
+
+/** The health probe's stand-in handshake plus where it found the runtime. */
+export type AntigravityProbeResult = EffectAcpSchema.InitializeResponse & {
+  readonly runtime?: {
+    readonly source: NonNullable<ServerProvider["runtimeSource"]>;
+    readonly versionAdvisory?: ServerProviderVersionAdvisory | undefined;
+  };
+};
+
+/** Installs and updates happen in Antigravity setup, so the advisory carries no command. */
+export function antigravityManagedVersionAdvisory(
+  state: Pick<ProviderInstallState, "version" | "installedVersion">,
+): ServerProviderVersionAdvisory | undefined {
+  const { version: latestVersion, installedVersion } = state;
+  if (!latestVersion || !installedVersion) return undefined;
+  if (compareSemverVersions(latestVersion, installedVersion) <= 0) return undefined;
+  return {
+    status: "behind_latest",
+    currentVersion: installedVersion,
+    latestVersion,
+    updateCommand: null,
+    canUpdate: false,
+    checkedAt: null,
+    message: `Antigravity ${latestVersion} is available. Update it from Antigravity setup in provider settings.`,
+  };
+}
 
 type ThinkingConfig = NonNullable<ReturnType<typeof antigravityThinkingConfig>>;
 
@@ -193,7 +222,7 @@ interface AntigravityProviderOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly stampIdentity: (snapshot: ServerProviderDraft) => Effect.Effect<ServerProvider>;
   readonly probe: Effect.Effect<
-    EffectAcpSchema.InitializeResponse,
+    AntigravityProbeResult,
     EffectAcpErrors.AcpError | ProviderSetupError
   >;
   readonly supportsTextGeneration: Effect.Effect<boolean>;
@@ -231,7 +260,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     ? `Connect with ${options.auth.label} to use Antigravity and load models.`
     : SIGN_IN_MESSAGE;
   const authUncheckedMessage = usesCredentials
-    ? `Antigravity is installed. Connect with ${options.auth.label} to load models.`
+    ? `Antigravity is installed. ${options.auth.label} is checked when a session starts.`
     : AUTH_UNCHECKED_MESSAGE;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
   const initialDraft = {
@@ -248,7 +277,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
         installed: false,
         version: null,
         status: "warning",
-        auth: { status: "unknown", ...(options.auth ? { type: options.auth.type } : {}) },
+        auth: { status: "unknown", ...options.auth },
         message: settings.enabled
           ? "Checking Antigravity availability."
           : `Antigravity is disabled in ${APP_NAME} settings.`,
@@ -311,6 +340,7 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     const initialized =
       Result.isSuccess(result) && Option.isSome(result.success) ? result.success.value : undefined;
     const version = initialized?.agentInfo?.version;
+    const runtime = initialized?.runtime;
     const failure = Result.isFailure(result) ? result.failure : undefined;
     const missingInstallation = failure !== undefined && isMissingInstallation(failure);
     const errorMessage =
@@ -328,7 +358,13 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
     const updatedAt = DateTime.formatIso(yield* DateTime.now);
     const applyCheck = (state: AntigravityProviderState) => {
       if (state.authRevision !== before.authRevision) return state;
-      const { message: _previousMessage, ...draft } = state.draft;
+      const {
+        message: _previousMessage,
+        versionAdvisory: previousAdvisory,
+        ...draft
+      } = state.draft;
+      // A failed probe cannot tell where the runtime is, so it keeps the last answer.
+      const versionAdvisory = runtime ? runtime.versionAdvisory : previousAdvisory;
       const authenticated = draft.auth.status === "authenticated";
       const message =
         errorMessage ??
@@ -362,6 +398,8 @@ export const makeAntigravityProvider = Effect.fn("makeAntigravityProvider")(func
               }
             : {}),
           ...(message ? { message } : {}),
+          ...(runtime ? { runtimeSource: runtime.source } : {}),
+          ...(versionAdvisory ? { versionAdvisory } : {}),
         },
       } satisfies AntigravityProviderState;
     };

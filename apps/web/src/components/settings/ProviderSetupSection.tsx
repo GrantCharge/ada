@@ -24,6 +24,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { SettingsRow } from "./settingsLayout";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
+import { getProviderRuntimeSourcePresentation } from "./providerStatus";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
 
 interface ProviderSetupSectionProps {
@@ -138,6 +139,9 @@ function ProviderSetupActions({
     installation?.phase === "extracting" ||
     installation?.phase === "verifying";
   const usesCustomBinary = Boolean(binaryPath?.trim());
+  const runtimeSource = provider.installed
+    ? getProviderRuntimeSourcePresentation(provider.runtimeSource, m)
+    : null;
   const installed =
     provider.installed || (!usesCustomBinary && installation?.installedVersion != null);
   const queryError = authQuery.error ?? installQuery.error;
@@ -225,7 +229,11 @@ function ProviderSetupActions({
         description={gt("Install and manage Antigravity.")}
         status={
           <div className="space-y-2">
-            {usesCustomBinary ? (
+            {runtimeSource ? (
+              <p className="text-muted-foreground">
+                {runtimeSource.label} · {runtimeSource.detail}
+              </p>
+            ) : usesCustomBinary ? (
               <p className="text-muted-foreground">
                 <T>Uses the custom binary path below. Installation keeps that path.</T>
               </p>

@@ -3100,6 +3100,8 @@
   "56edbb36e9731d20": "Actualiser les fournisseurs",
   "2baa086b75bc2077": "{version} · Dernière {latest}",
   "2150d724c48243b1": "Version inconnue",
+  "09060387ee928c1b": "Chemin personnalisé · {appName} ne le met pas à jour.",
+  "05d64a8af582e7c8": "PATH système · {appName} ne le met pas à jour.",
   "b7f8938a8b7567d2": "Mise à jour en file d’attente",
   "a639775fc8ef993d": "Mise à jour en cours",
   "ba210d5161bffe73": "Mise à jour réussie",

@@ -298,6 +298,8 @@ export const ServerProvider = Schema.Struct({
   // Version reported by the installed CLI for a local provider with a separate
   // server. Null means unknown; absence keeps legacy snapshots on `version`.
   installedVersion: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  // Where a provider the server can install found its executable. Only `managed` is updated by the server.
+  runtimeSource: Schema.optionalKey(Schema.Literals(["managed", "custom", "path"])),
   status: ServerProviderState,
   auth: ServerProviderAuth,
   checkedAt: IsoDateTime,

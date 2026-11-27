@@ -384,6 +384,19 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
                                 ? (provider.version ?? gt("Version unknown"))
                                 : gt("Not installed")}
                           </Text>
+                          {provider.installed &&
+                          (provider.runtimeSource === "custom" ||
+                            provider.runtimeSource === "path") ? (
+                            <Text className="text-sm text-foreground-muted">
+                              {provider.runtimeSource === "custom"
+                                ? gt("Custom path · {appName} does not update it.", {
+                                    appName: MOBILE_APP_NAME,
+                                  })
+                                : gt("System PATH · {appName} does not update it.", {
+                                    appName: MOBILE_APP_NAME,
+                                  })}
+                            </Text>
+                          ) : null}
                           {provider.updateState && provider.updateState.status !== "idle" ? (
                             <Text
                               selectable
