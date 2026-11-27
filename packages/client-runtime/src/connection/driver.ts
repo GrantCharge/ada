@@ -163,13 +163,13 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   // route must not stop retries of another route that only lost packets.
   return yield* (
     transient ??
-      answeredBlocked ??
-      silentTransient ??
-      blocked ??
-      new ConnectionTransientError({
-        reason: "endpoint-unavailable",
-        detail: `${entry.target.label} did not answer on any saved route.`,
-      })
+    answeredBlocked ??
+    silentTransient ??
+    blocked ??
+    new ConnectionTransientError({
+      reason: "endpoint-unavailable",
+      detail: `${entry.target.label} did not answer on any saved route.`,
+    })
   );
 });
 

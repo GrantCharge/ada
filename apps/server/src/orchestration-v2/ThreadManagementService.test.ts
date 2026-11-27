@@ -1361,7 +1361,9 @@ it.effect.each(["steer", "promoted_queued_to_steer"] as const)(
       yield* TestClock.adjust(Duration.millis(60_000));
       const dispatched: Array<string> = [];
       const layerTest = ThreadManagementService.layer.pipe(
-        Layer.provideMerge(ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory))),
+        Layer.provideMerge(
+          ProjectionStore.layer.pipe(Layer.provide(SqlitePersistence.layerMemory)),
+        ),
         Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
         Layer.provide(
           Layer.mock(Orchestrator.OrchestratorV2)({
