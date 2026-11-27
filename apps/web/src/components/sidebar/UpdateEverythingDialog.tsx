@@ -19,7 +19,11 @@ import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { MiddleTruncate } from "../ui/middle-truncate";
 import { ScrollArea } from "../ui/scroll-area";
-import type { RestartingMachine, UpdateEverythingRow } from "./updateEverything.logic";
+import {
+  formatSkippedReason,
+  type RestartingMachine,
+  type UpdateEverythingRow,
+} from "./updateEverything.logic";
 import { APP_NAME } from "@t3tools/shared/branding";
 
 const isRunning = (status: string) =>
@@ -129,7 +133,10 @@ function UpdateEverythingDialogContent({
   const running = stopped + continuing;
   const restarting = new Set(restarts.map((machine) => machine.environmentId));
   const updating = rows.filter((row) => row.app !== null || row.providers.length > 0);
-  const skipped = rows.filter((row) => row.skipped !== null);
+  const skipped = rows.flatMap((row) => {
+    const reason = formatSkippedReason(row);
+    return reason === null ? [] : [{ row, reason }];
+  });
 
   return (
     <>
@@ -219,7 +226,7 @@ function UpdateEverythingDialogContent({
             ))}
           </div>
           {skipped.length > 0 ? (
-            <Collapsible>
+            <Collapsible defaultOpen>
               <CollapsibleTrigger className="flex items-center gap-1 text-muted-foreground text-xs hover:text-foreground data-panel-open:[&_svg]:rotate-90">
                 <ChevronRightIcon className="size-3.5 transition-transform" aria-hidden />
                 {gt("{count, plural, one {{count} skipped} other {{count} skipped}}", {
@@ -228,12 +235,12 @@ function UpdateEverythingDialogContent({
               </CollapsibleTrigger>
               <CollapsiblePanel>
                 <div className="grid grid-cols-[minmax(0,max-content)_1fr] gap-x-3 gap-y-0.5 pt-1.5 ps-4.5 text-muted-foreground text-xs">
-                  {skipped.map((row) => (
+                  {skipped.map(({ row, reason }) => (
                     <Fragment key={row.environmentId ?? "this-app"}>
                       <span className="max-w-32 min-w-0">
                         <MiddleTruncate value={row.label} />
                       </span>
-                      <span className="wrap-anywhere">{row.skipped}</span>
+                      <span className="wrap-anywhere">{reason}</span>
                     </Fragment>
                   ))}
                 </div>

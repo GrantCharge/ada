@@ -152,6 +152,10 @@ it("provider updates and checks exclude connections without a confirmed manageme
 
   const writableId = state.environments[1]!.environmentId;
   expect(updates.machines.map(({ environmentId }) => environmentId)).toEqual([writableId]);
+  expect(updates.skipped.map(({ label, reason }) => [label, reason])).toEqual([
+    ["Read only", "no permission to update Codex (grant Manage providers)"],
+    ["Unresolved", "still loading"],
+  ]);
   await act(async () => {
     await updates.updateAll({ quiet: true });
   });

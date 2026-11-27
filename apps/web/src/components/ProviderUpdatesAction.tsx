@@ -1,23 +1,30 @@
+import { useAtomValue } from "@effect/atom-react";
+import { connectionErrorText } from "@t3tools/client-runtime/connection";
 import { AuthProvidersManageScope, PROVIDER_DISPLAY_NAMES } from "@t3tools/contracts";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
+import { sessionDeniesScope } from "@t3tools/client-runtime/state/session";
 import {
   checkEnvironmentUpdates,
   type UpdateCheckItem,
 } from "@t3tools/client-runtime/update-check";
 import { useRef, useState } from "react";
-import { T } from "gt-react";
+import { T, useMessages } from "gt-react";
 
 import { useEnvironmentProviders, useEnvironments } from "~/state/environments";
+import { environmentIdsKey } from "~/state/environmentAtomList";
 import { serverEnvironment } from "~/state/server";
-import { useEnvironmentsWithScope } from "~/state/session";
+import {
+  environmentSessionStatesAtom,
+  sessionHasScope,
+  useEnvironmentsWithScope,
+} from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { isHostedByThisApp } from "~/connection/desktopLocal";
 import {
-  canOneClickUpdateProviderCandidate,
-  collectProviderUpdateCandidates,
   getProviderUpdateRunToastView,
   type ProviderUpdateRun,
 } from "./ProviderUpdateLaunchNotification.logic";
+import { collectProviderUpdateTargets } from "./sidebar/updateEverything.logic";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { SharedTooltipTrigger } from "./ui/shared-tooltip";
@@ -58,26 +65,32 @@ export function useCheckEnvironmentUpdates() {
 
 export function useProviderUpdates() {
   const { environments } = useEnvironments();
-  const manageableIds = useEnvironmentsWithScope(environments, AuthProvidersManageScope);
+  const resolve = useMessages();
+  const sessionStates = useAtomValue(
+    environmentSessionStatesAtom(
+      environmentIdsKey(environments.map(({ environmentId }) => environmentId)),
+    ),
+  );
   const providersByEnvironment = useEnvironmentProviders();
   const updateProvider = useAtomCommand(serverEnvironment.updateProvider, {
     reportFailure: false,
   });
-  const machines = environments.flatMap((environment) => {
-    const providers = providersByEnvironment.get(environment.environmentId) ?? [];
-    if (
-      environment.connection.phase !== "connected" ||
-      !manageableIds.has(environment.environmentId)
-    ) {
-      return [];
-    }
-    const candidates = collectProviderUpdateCandidates(providers).filter((candidate) =>
-      canOneClickUpdateProviderCandidate(candidate, providers),
-    );
-    return candidates.length > 0
-      ? [{ environmentId: environment.environmentId, label: environment.label, candidates }]
-      : [];
-  });
+  const { targets: machines, skipped } = collectProviderUpdateTargets(
+    environments.map((environment, index) => {
+      const sessionState = sessionStates[index]!;
+      return {
+        environmentId: environment.environmentId,
+        label: environment.label,
+        connected: environment.connection.phase === "connected",
+        connectionError: connectionErrorText(environment.connection, resolve) ?? null,
+        turnedOff: environment.entry?.enabled === false,
+        canManageProviders: sessionHasScope(sessionState, AuthProvidersManageScope),
+        providerAccessDenied: sessionDeniesScope(sessionState, AuthProvidersManageScope),
+        providers: providersByEnvironment.get(environment.environmentId) ?? [],
+      };
+    }),
+    resolve,
+  );
 
   const updateAll = async ({ quiet = false }: { readonly quiet?: boolean } = {}) => {
     const runs = await Promise.all(
@@ -106,11 +119,11 @@ export function useProviderUpdates() {
     return runs;
   };
 
-  return { machines, updateAll };
+  return { machines, skipped, updateAll };
 }
 
 export function ProviderUpdatesAction() {
-  const { machines, updateAll } = useProviderUpdates();
+  const { machines, skipped, updateAll } = useProviderUpdates();
   const pending = useRef(false);
   const [isPending, setIsPending] = useState(false);
   if (machines.length === 0 && !isPending) {
@@ -138,14 +151,23 @@ export function ProviderUpdatesAction() {
           {isPending ? <T>Updating…</T> : <T>Update all</T>}
         </Button>
       }
-      label={machines.map((machine) => (
-        <div key={machine.environmentId}>
-          {machine.label}:{" "}
-          {machine.candidates
-            .map((candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver)
-            .join(", ")}
-        </div>
-      ))}
+      label={
+        <>
+          {machines.map((machine) => (
+            <div key={machine.environmentId}>
+              {machine.label}:{" "}
+              {machine.candidates
+                .map((candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver)
+                .join(", ")}
+            </div>
+          ))}
+          {skipped.map((machine) => (
+            <div key={`skipped:${machine.environmentId}`} className="text-muted-foreground">
+              {machine.label}: {machine.reason}
+            </div>
+          ))}
+        </>
+      }
     />
   );
 }

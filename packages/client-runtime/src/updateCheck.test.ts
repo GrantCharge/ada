@@ -40,8 +40,8 @@ function provider(
       status: latestVersion === null ? "current" : "behind_latest",
       currentVersion: "1.0.0",
       latestVersion,
-      updateCommand: null,
-      canUpdate: false,
+      updateCommand: latestVersion === null ? null : `npm install -g ${driver}`,
+      canUpdate: latestVersion !== null,
       checkedAt: null,
       message: null,
     },
@@ -230,5 +230,59 @@ describe("summarizeUpdateCheck", () => {
       summarizeUpdateCheck([{ subject: "Providers on studio", result: { status: "up-to-date" } }])
         .title,
     ).toBe("Everything is up to date");
+  });
+
+  it("marks manual-only provider updates clearly and distinguishes them from one-click updates", async () => {
+    const manualProvider = (driver: string, latestVersion: string) =>
+      provider(driver, latestVersion, {
+        versionAdvisory: {
+          status: "behind_latest",
+          currentVersion: "1.0.0",
+          latestVersion,
+          updateCommand: null,
+          canUpdate: false,
+          checkedAt: null,
+          message: "Update it with the app or tool that installed it.",
+        },
+      });
+
+    const manualOnlyItems = await checkEnvironmentUpdates(
+      [environment("studio", "0.1.10", { hostedByThisApp: true })],
+      commands({}, [
+        manualProvider("antigravity", "1.5.15"),
+        manualProvider("claudeAgent", "2.1.332"),
+      ]),
+    );
+    expect(manualOnlyItems).toEqual([
+      {
+        subject: "Antigravity on studio",
+        result: { status: "available", version: "1.5.15", manual: true },
+      },
+      {
+        subject: "Claude on studio",
+        result: { status: "available", version: "2.1.332", manual: true },
+      },
+    ]);
+    expect(summarizeUpdateCheck(manualOnlyItems)).toEqual({
+      tone: "available",
+      title: "Manual updates available",
+      lines: [
+        "Antigravity on studio: 1.5.15 available (manual update)",
+        "Claude on studio: 2.1.332 available (manual update)",
+      ],
+    });
+
+    const mixedItems = await checkEnvironmentUpdates(
+      [environment("studio", "0.1.10", { hostedByThisApp: true })],
+      commands({}, [manualProvider("antigravity", "1.5.15"), provider("codex", "0.173.0")]),
+    );
+    expect(summarizeUpdateCheck(mixedItems)).toEqual({
+      tone: "available",
+      title: "Updates available",
+      lines: [
+        "Antigravity on studio: 1.5.15 available (manual update)",
+        "Codex on studio: 0.173.0 available",
+      ],
+    });
   });
 });
