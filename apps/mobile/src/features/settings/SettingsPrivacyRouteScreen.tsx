@@ -208,7 +208,7 @@ export function SettingsPrivacyRouteScreen() {
               {account ? (
                 <ListActionRow
                   icon="arrow.up.right"
-                  label={`${m(account.label)} ↗`}
+                  label={m(account.label)}
                   description={gt("Whether your prompts train models is an account setting.")}
                   onPress={() => void tryOpenExternalUrl(account.url)}
                 />
