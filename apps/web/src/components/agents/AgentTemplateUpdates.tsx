@@ -3,6 +3,7 @@ import { BookOpenIcon } from "lucide-react";
 import {
   agentTemplateMergePrompt,
   applyAgentTemplateUpdate,
+  keepAgentTemplateCopy,
   type AgentTemplateUpdate,
 } from "@t3tools/shared/agentTemplateUpdates";
 import { APP_NAME } from "@t3tools/shared/branding";
@@ -63,6 +64,10 @@ export function AgentTemplateUpdates({
         }),
       );
     });
+  const keep = (item: AgentTemplateUpdate) =>
+    run(updateKey(item), () =>
+      updateSettings(keepAgentTemplateCopy(library, item, new Date().toISOString())),
+    );
   const merge = (item: AgentTemplateUpdate) =>
     run(updateKey(item), async () => {
       const [full] =
@@ -85,7 +90,7 @@ export function AgentTemplateUpdates({
           <DialogDescription>
             {APP_NAME} updated the templates of built-in agents and skills you installed. Copies you
             edited are never replaced: an agent chat merges the update into your copy for you to
-            review.
+            review, or you can keep your copy as it is.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
@@ -125,6 +130,17 @@ export function AgentTemplateUpdates({
                         {item.modified && " Your copy has your own changes."}
                       </span>
                     </span>
+                    {item.modified && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy !== null}
+                        onClick={() => void keep(item)}
+                      >
+                        Keep mine
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       size="sm"

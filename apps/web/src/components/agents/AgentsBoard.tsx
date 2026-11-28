@@ -40,9 +40,8 @@ import { AgentPresetPicker } from "./AgentPresetPicker";
 import { randomUUID } from "../../lib/utils";
 import { AgentTaskDialog, type AgentTaskSeed } from "./AgentTaskDialog";
 import { AgentTemplateUpdates } from "./AgentTemplateUpdates";
-import { useBuiltInAgentPresets } from "./useBuiltInAgentPresets";
+import { useAgentTemplateUpdates } from "./useAgentTemplateUpdates";
 import {
-  agentTemplateUpdates,
   markAgentTemplateMerged,
   type AgentTemplateUpdate,
 } from "@t3tools/shared/agentTemplateUpdates";
@@ -199,10 +198,8 @@ export function AgentsBoard() {
     readonly update: AgentTemplateUpdate;
     readonly seed: AgentTaskSeed;
   } | null>(null);
-  const builtInPresets = useBuiltInAgentPresets();
   const library = { agentSkills: skills, mcpGatewayProfiles: profiles };
-  const templateUpdates =
-    builtInPresets && available ? agentTemplateUpdates(library, builtInPresets) : [];
+  const templateUpdates = useAgentTemplateUpdates();
   const [order, setOrder] = useLocalStorage(
     "t3code:agents:column-order",
     emptyAgentOrder,
