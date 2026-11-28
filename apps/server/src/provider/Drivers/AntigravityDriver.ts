@@ -72,7 +72,11 @@ import {
 } from "../../orchestration-v2/Adapters/AntigravityAdapterV2.ts";
 import { makeAcpNativeLoggerFactory } from "@t3tools/provider-acp/server/nativeLogging";
 import { ProviderDriverError } from "../Errors.ts";
-import { makeAntigravityProvider } from "../AntigravityProvider.ts";
+import {
+  antigravityManagedVersionAdvisory,
+  makeAntigravityProvider,
+  type AntigravityProbeResult,
+} from "../AntigravityProvider.ts";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import {
@@ -139,6 +143,7 @@ export const AntigravityDriver: ProviderDriver<
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const digest = yield* Digest.Digest;
     const random = yield* SecureRandom.SecureRandom;
@@ -306,6 +311,7 @@ export const AntigravityDriver: ProviderDriver<
           baseEnv,
           auth,
           runtimeTempDirectory,
+          privacy,
         }),
       };
     });
@@ -556,6 +562,9 @@ export const AntigravityDriver: ProviderDriver<
             }),
         ),
       );
+      const managed = executable.source === "managed";
+      // The lookup is hourly-gated and honors the update-check setting, so a per-minute probe is cheap.
+      if (managed) yield* Effect.forkDetach(installation.checkForUpdate);
       return {
         protocolVersion: 1,
         agentCapabilities: {
@@ -569,7 +578,13 @@ export const AntigravityDriver: ProviderDriver<
           title: "Google Antigravity",
           version: executable.version ?? "unknown",
         },
-      };
+        runtime: {
+          source: executable.source === "override" ? "custom" : executable.source,
+          versionAdvisory: managed
+            ? antigravityManagedVersionAdvisory(yield* installation.state)
+            : undefined,
+        },
+      } satisfies AntigravityProbeResult;
     });
 
     const provider = yield* makeAntigravityProvider(settings, {

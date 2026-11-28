@@ -76,6 +76,7 @@ export const MuseDriver: ProviderDriver<
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -171,7 +172,13 @@ export const MuseDriver: ProviderDriver<
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         makePendingMuseProvider(settings.provider).pipe(Effect.map(stampIdentity)),
-      checkProvider: checkMuseProviderStatus(effectiveConfig, processEnvironment, cwd).pipe(
+      checkProvider: checkMuseProviderStatus(
+        effectiveConfig,
+        processEnvironment,
+        cwd,
+        undefined,
+        privacy,
+      ).pipe(
         Effect.map(stampIdentity),
         Effect.flatMap(withLatestUsage),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -208,6 +215,7 @@ export const MuseDriver: ProviderDriver<
       instanceId,
       settings: effectiveConfig,
       environment: processEnvironment,
+      privacy,
       modelCatalog,
       ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       continuationRequests,
@@ -223,6 +231,7 @@ export const MuseDriver: ProviderDriver<
     });
     const textGeneration = yield* makeMuseTextGeneration(effectiveConfig, {
       environment: processEnvironment,
+      privacy,
       modelCatalog,
     });
     return {

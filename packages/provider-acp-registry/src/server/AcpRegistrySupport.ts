@@ -10,6 +10,7 @@ import {
   type AcpRegistrySearchInput,
   type AcpRegistrySearchResult,
   type AcpRegistryDistribution as AcpRegistryDistributionKind,
+  type ProviderPrivacySource,
 } from "@t3tools/contracts";
 import type { AcpRegistryDistributionPreference } from "../settings.ts";
 import type { AcpRegistrySettings } from "../settings.ts";
@@ -48,6 +49,10 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
+import {
+  DO_NOT_TRACK_TABLE,
+  withProviderPrivacyEnvironment,
+} from "@t3tools/provider-core/server/privacy";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 
 const ACP_REGISTRY_URL = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
@@ -477,6 +482,8 @@ export function resolveAcpRegistryDistribution(input: {
   return undefined;
 }
 
+const ACP_REGISTRY_PRIVACY_ENVIRONMENT = DO_NOT_TRACK_TABLE;
+
 export interface ResolvedAcpRegistryAgent {
   readonly agent?: AcpRegistryAgent;
   readonly distribution: AcpRegistryDistributionKind | "local";
@@ -540,6 +547,7 @@ export class AcpRegistryCatalog extends Context.Service<
       settings: AcpRegistrySettings,
       cwd: string,
       environment?: NodeJS.ProcessEnv,
+      privacy?: ProviderPrivacySource,
     ) => Effect.Effect<ResolvedAcpRegistryAgent, AcpRegistryError, Scope.Scope>;
     readonly uninstallManagedBinary: (
       input: AcpRegistryManagedBinaryUninstallInput,
@@ -2249,7 +2257,13 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
 
   // A cached index can pin a version whose archive was since removed upstream.
   const resolve: AcpRegistryCatalog["Service"]["resolve"] = Effect.fn("AcpRegistryCatalog.resolve")(
-    function* (settings, cwd, environment) {
+    function* (settings, cwd, inputEnvironment, privacy) {
+      // Registry-declared agent env is spread after this, so it still wins.
+      const environment = withProviderPrivacyEnvironment(
+        inputEnvironment ?? hostEnvironment,
+        ACP_REGISTRY_PRIVACY_ENVIRONMENT,
+        privacy,
+      );
       if (settings.source === "local") {
         const executable = settings.commandPath.trim();
         if (!executable) {

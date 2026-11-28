@@ -4,9 +4,11 @@ import {
 } from "@t3tools/client-runtime/contract-labels";
 import type { ServerUpdateState } from "@t3tools/client-runtime/state/server";
 import {
+  PROVIDER_DISPLAY_NAMES,
   type DesktopUpdateChannel,
   type EnvironmentId,
   type ServerConfig,
+  type ServerProvider,
   type ServerSelfUpdateCapability,
 } from "@t3tools/contracts";
 import { cliReleaseChannelOf, desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
@@ -19,6 +21,13 @@ import {
   resolveVersionMismatch,
   supportsDesktopAppUpdate,
 } from "~/versionSkew";
+import {
+  canOneClickUpdateProviderCandidate,
+  collectProviderUpdateCandidates,
+  hasOneClickUpdateProviderCandidate,
+  isProviderUpdateActive,
+  type ProviderUpdateCandidate,
+} from "../ProviderUpdateLaunchNotification.logic";
 import type { ServerUpdateOutcome, ServerUpdateTarget } from "../ServerUpdateAction";
 
 export interface UpdateEverythingMachine {
@@ -765,6 +774,120 @@ export function getUpdateEverythingToastView(
   };
 }
 
+export interface ProviderUpdateMachine {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly connected: boolean;
+  readonly connectionError?: string | null;
+  readonly turnedOff?: boolean;
+  readonly canManageProviders: boolean;
+  /** True only when the host answered without `providers:manage` (or rejected the session). */
+  readonly providerAccessDenied: boolean;
+  readonly providers: ReadonlyArray<ServerProvider>;
+}
+
+export interface ProviderUpdateTargetMachine {
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+  readonly candidates: ReadonlyArray<ProviderUpdateCandidate>;
+}
+
+export function collectProviderUpdateTargets(
+  machines: ReadonlyArray<ProviderUpdateMachine>,
+  resolve: MessageResolver = m,
+): {
+  readonly targets: ProviderUpdateTargetMachine[];
+  readonly skipped: SkippedMachine[];
+} {
+  const targets: ProviderUpdateTargetMachine[] = [];
+  const skipped: SkippedMachine[] = [];
+  const providerNames = (candidates: ReadonlyArray<ProviderUpdateCandidate>) =>
+    candidates.map((candidate) => PROVIDER_DISPLAY_NAMES[candidate.driver] ?? candidate.driver);
+
+  for (const machine of machines) {
+    const outdated = collectProviderUpdateCandidates(machine.providers);
+    const skip = (reason: string) =>
+      skipped.push({ environmentId: machine.environmentId, label: machine.label, reason });
+
+    if (!machine.connected) {
+      if (outdated.length > 0) {
+        skip(
+          machine.turnedOff === true
+            ? resolve(
+                msg("turned off", {
+                  $context: "why a server update was skipped: its saved connection is off",
+                }),
+              )
+            : (machine.connectionError ?? resolve(msg("not connected"))),
+        );
+      }
+      continue;
+    }
+
+    if (!machine.canManageProviders) {
+      if (machine.providerAccessDenied) {
+        skip(
+          outdated.length > 0
+            ? resolve(
+                msg("no permission to update {providers} (grant Manage providers)", {
+                  providers: joinList(providerNames(outdated), resolve),
+                }),
+              )
+            : resolve(msg("no permission to update providers (grant Manage providers)")),
+        );
+      } else if (outdated.length > 0) {
+        skip(
+          resolve(
+            msg("still loading", {
+              $context: "why a server update was skipped: its settings have not arrived yet",
+            }),
+          ),
+        );
+      }
+      continue;
+    }
+
+    const updatable = outdated.filter((candidate) =>
+      canOneClickUpdateProviderCandidate(candidate, machine.providers),
+    );
+    const active = outdated.filter(isProviderUpdateActive);
+    const manual = outdated.filter(
+      (candidate) =>
+        !isProviderUpdateActive(candidate) &&
+        !hasOneClickUpdateProviderCandidate(candidate, machine.providers),
+    );
+
+    if (updatable.length > 0) {
+      targets.push({
+        environmentId: machine.environmentId,
+        label: machine.label,
+        candidates: updatable,
+      });
+    }
+    if (manual.length > 0) {
+      skip(
+        resolve(
+          msg(
+            "{count, plural, one {{providers} needs a manual update} other {{providers} need a manual update}}",
+            { count: manual.length, providers: joinList(providerNames(manual), resolve) },
+          ),
+        ),
+      );
+    } else if (active.length > 0 && updatable.length === 0) {
+      skip(
+        resolve(
+          msg(
+            "{count, plural, one {{providers} is already updating} other {{providers} are already updating}}",
+            { count: active.length, providers: joinList(providerNames(active), resolve) },
+          ),
+        ),
+      );
+    }
+  }
+
+  return { targets, skipped };
+}
+
 export interface UpdateEverythingPlan {
   readonly localVersion: string | null;
   /** Machines whose servers this app hosts; this app's update restarts them. */
@@ -781,6 +904,7 @@ export interface UpdateEverythingPlan {
     readonly providers: ReadonlyArray<string>;
   }>;
   readonly skipped: ReadonlyArray<SkippedMachine>;
+  readonly providerSkipped?: ReadonlyArray<SkippedMachine>;
 }
 
 export interface UpdateEverythingRow {
@@ -788,7 +912,19 @@ export interface UpdateEverythingRow {
   readonly label: string;
   readonly app: "this-app" | "server" | "desktop-app" | null;
   readonly skipped: string | null;
+  readonly providerSkipped?: string | null;
   readonly providers: ReadonlyArray<string>;
+}
+
+export function formatSkippedReason(
+  row: Pick<UpdateEverythingRow, "skipped" | "providerSkipped">,
+): string | null {
+  if (row.skipped !== null && row.providerSkipped != null) {
+    return row.skipped === row.providerSkipped
+      ? row.skipped
+      : `${row.skipped}; ${row.providerSkipped}`;
+  }
+  return row.skipped ?? row.providerSkipped ?? null;
 }
 
 /** "Update this app, 2 servers, and 3 providers" as one sentence per combination; null when nothing. */
@@ -937,6 +1073,7 @@ export function describeUpdateEverything(
       label,
       app: null,
       skipped: null,
+      providerSkipped: null,
       providers: [],
     };
     rows.set(environmentId, { ...row, ...change });
@@ -959,6 +1096,9 @@ export function describeUpdateEverything(
   }
   for (const machine of plan.skipped) {
     update(machine.environmentId, machine.label, { skipped: machine.reason });
+  }
+  for (const machine of plan.providerSkipped ?? []) {
+    update(machine.environmentId, machine.label, { providerSkipped: machine.reason });
   }
 
   return {

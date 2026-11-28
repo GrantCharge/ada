@@ -12,6 +12,7 @@ import {
   NonNegativeInt,
   ProviderDriverKind,
   type OrchestrationV2ProviderCapabilities,
+  type ProviderPrivacySource,
   type RuntimeMode,
   type ThreadTokenUsageSnapshot,
 } from "@t3tools/contracts";
@@ -165,6 +166,7 @@ export interface GrokAdapterV2Options {
   readonly instanceId: Parameters<typeof makeAcpAdapterV2>[0]["instanceId"];
   readonly settings: GrokSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly hostPlatform: NodeJS.Platform;
   readonly selfInvocation: SelfInvocation;
   readonly nativeLogging?: Parameters<typeof makeAcpAdapterV2>[0]["nativeLogging"];
@@ -424,6 +426,7 @@ export function makeGrokAcpAdapterFlavor(
           interruptPromptOnCancel: input.interruptPromptOnCancel ?? false,
           grokSettings: options.settings,
           environment: options.environment,
+          privacy: options.privacy,
           runtimeMode: grokLaunchRuntimeMode(runtimePolicy),
         })),
     // Auto prompts represent classifier refusals and must reach the user.
@@ -509,6 +512,7 @@ export const GrokAdapterV2Driver: ProviderAdapterDriver<GrokSettings, GrokAdapte
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
         environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        privacy: input.privacy,
         hostPlatform,
         selfInvocation,
         continuationRequests,

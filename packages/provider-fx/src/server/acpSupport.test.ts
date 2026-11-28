@@ -1,5 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ProviderInstanceId } from "@t3tools/contracts";
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -10,6 +14,7 @@ import { ProviderAdapterV2RuntimePolicy } from "@t3tools/provider-core/server/Pr
 
 import {
   applyFxModelSelection,
+  buildFxAcpSpawnInput,
   fxPermissionDisposition,
   fxSessionModeForPolicy,
   fxToolCallWasCancelled,
@@ -23,6 +28,18 @@ const editRequest = {
     { optionId: "reject", name: "Reject", kind: "reject_once" },
   ],
 } satisfies EffectAcpSchema.RequestPermissionRequest;
+
+describe("buildFxAcpSpawnInput privacy", () => {
+  const minimal = { ...DEFAULT_PROVIDER_PRIVACY_CHOICE, minimalNetwork: true };
+  it.each([
+    { choice: minimal, env: {}, expected: "0" },
+    { choice: minimal, env: { FX_AUTO_UPGRADE: "1" }, expected: "1" },
+    { choice: ALLOW_ALL_PROVIDER_PRIVACY_CHOICE, env: {}, expected: undefined },
+  ])("overlays the privacy choice on the agent env (%#)", ({ choice, env, expected }) => {
+    const spawn = buildFxAcpSpawnInput({ binaryPath: "fx" }, "/work", env, () => choice);
+    assert.equal(spawn.env?.FX_AUTO_UPGRADE, expected);
+  });
+});
 
 describe("fx permission prompts", () => {
   // In Auto, fx's own review asks only about what it refused itself; T3

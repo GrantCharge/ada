@@ -8,7 +8,12 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { type ClaudeSettings, TextGenerationError } from "@t3tools/contracts";
+import {
+  type ClaudeSettings,
+  type ProviderPrivacySource,
+  TextGenerationError,
+} from "@t3tools/contracts";
+import { withProviderPrivacyEnvironment } from "@t3tools/provider-core/server/privacy";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { deepMerge } from "@t3tools/shared/Struct";
 
@@ -35,6 +40,7 @@ import {
 import {
   hasClaudeManagedMcpConfig,
   makeClaudeEnvironment,
+  CLAUDE_PRIVACY_ENVIRONMENT,
 } from "../provider/Drivers/ClaudeHome.ts";
 import { readClaudeUserSettings } from "../provider/Drivers/ClaudeSkills.ts";
 import { readClaudeLaunchArgSettings } from "../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
@@ -132,6 +138,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     catalog: ClaudeModelCatalog,
     cwd: string,
   ) => Effect.Effect<ClaudeModelCatalog> = Effect.succeed,
+  privacy?: ProviderPrivacySource,
 ) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -365,7 +372,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         { env: claudeEnvironment },
       );
       const command = ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        env: claudeEnvironment,
+        env: withProviderPrivacyEnvironment(claudeEnvironment, CLAUDE_PRIVACY_ENVIRONMENT, privacy),
         cwd: workingDirectory,
         shell: spawnCommand.shell,
         stdin: {

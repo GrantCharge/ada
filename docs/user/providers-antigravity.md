@@ -10,7 +10,8 @@ Ada runs Google's official Antigravity ACP agent on your selected environment, w
 
 - **Remote sign-in**: Paste the temporary code (or full URL) from Google's completion page into Ada's code field.
 - **Manual binary**: Install [Antigravity CLI](https://antigravity.google/docs/getting-started) and set **Binary path** to `agy`. Leave blank to use the managed runtime (or `PATH`).
-- **Updates**: Click **Update Antigravity** in provider settings. Ada requires Antigravity **1.5.1+** (1.5.12+ recommended); running threads finish on their original runtime.
+- **Updates**: When a newer managed runtime is out, the provider shows **Update available**; click **Update Antigravity** in provider settings to install it. A **Custom path** or **System PATH** runtime is never updated by Ada, so update it yourself. Ada requires Antigravity **1.5.1+** (1.5.12+ recommended); running threads finish on their original runtime.
+- **Status before first use**: Until a session starts, the provider reads **Installed · Sign-in not checked** (or **Installed · Gemini API key not checked**). That is normal, not an error.
 
 ### Sign-in methods
 

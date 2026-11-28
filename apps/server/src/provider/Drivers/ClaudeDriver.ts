@@ -19,6 +19,7 @@ import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderL
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as ServerConfig from "../../config.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
+import { withProviderPrivacyEnvironment } from "@t3tools/provider-core/server/privacy";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import {
   createClaudeAdapterV2,
@@ -63,6 +64,7 @@ import {
   makeClaudeCapabilitiesCacheKey,
   makeClaudeContinuationGroupKey,
   mergeClaudeProcessEnvironment,
+  CLAUDE_PRIVACY_ENVIRONMENT,
   resolveClaudeHomePath,
 } from "./ClaudeHome.ts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -108,6 +110,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -188,6 +191,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
         environment,
         enabled,
         config,
+        privacy,
       },
       {
         scopedLimitNames,
@@ -212,6 +216,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
       processEnv,
       modelCatalog,
       modelRoutes.route,
+      privacy,
     );
 
     // Per-instance capabilities cache: keyed on binary + resolved HOME so
@@ -220,7 +225,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const lastGoodCapabilities = yield* Ref.make<ClaudeCapabilitiesProbe | undefined>(undefined);
     const capabilitiesProbeCache = yield* Cache.makeWith(
       () =>
-        probeClaudeCapabilities(effectiveConfig, processEnv, stateDir).pipe(
+        Effect.suspend(() =>
+          probeClaudeCapabilities(
+            effectiveConfig,
+            withProviderPrivacyEnvironment(processEnv, CLAUDE_PRIVACY_ENVIRONMENT, privacy),
+            stateDir,
+          ),
+        ).pipe(
           Effect.flatMap((capabilities) =>
             ClaudeResetCredits.readClaudeOrganizationId(accountConfigPath).pipe(
               Effect.map((workspaceId) => ({

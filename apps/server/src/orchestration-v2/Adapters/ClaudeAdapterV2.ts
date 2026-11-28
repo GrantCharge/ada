@@ -131,6 +131,7 @@ import {
   type ProviderApprovalPushHooks,
   ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderPrivacySource,
   type ProviderRuntimeModeLimitReason,
   type ProviderRequestKind,
   type ProviderUserInputAnswers,
@@ -201,7 +202,9 @@ import * as ServerSettings from "../../serverSettings.ts";
 import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { spawnAndCollect } from "@t3tools/provider-core/server/snapshotProbe";
 import { signalProcessGroup } from "@t3tools/provider-core/server/processGroup";
+import { withProviderPrivacyEnvironment } from "@t3tools/provider-core/server/privacy";
 import {
+  CLAUDE_PRIVACY_ENVIRONMENT,
   claudeLocalSettingsDirectory,
   claudeSignedOutMessage,
   makeClaudeEnvironment,
@@ -6232,6 +6235,7 @@ export interface ClaudeAdapterV2Options {
   readonly settings: ClaudeSettings;
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
@@ -14250,14 +14254,18 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             resumeSessionAt !== undefined ||
             ((openedWithResume || hasPersistedProviderTurn) &&
               !(yield* isNativeSessionMissing(nativeThreadId)));
-          const turnEnvironment = {
-            ...adapterOptions.environment,
-            // Recreated per turn: settling the thread deleted it.
-            ...(yield* agentTempDir.environment({
-              threadId: input.threadId,
-              cwd: turnInput.runtimePolicy.cwd ?? undefined,
-            })),
-          };
+          const turnEnvironment = withProviderPrivacyEnvironment(
+            {
+              ...adapterOptions.environment,
+              // Recreated per turn: settling the thread deleted it.
+              ...(yield* agentTempDir.environment({
+                threadId: input.threadId,
+                cwd: turnInput.runtimePolicy.cwd ?? undefined,
+              })),
+            },
+            CLAUDE_PRIVACY_ENVIRONMENT,
+            adapterOptions.privacy,
+          );
           const queryOptions = makeClaudeQueryOptions({
             modelSelection: turnInput.modelSelection,
             modelCatalog: catalog,
@@ -16235,6 +16243,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       instanceId,
       settings: { ...config, enabled, binaryPath },
       environment: claudeEnvironment,
+      privacy: input.privacy,
       attachmentsDir: serverConfig.attachmentsDir,
       fileSystem,
       path,

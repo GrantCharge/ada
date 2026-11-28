@@ -3,6 +3,7 @@ import {
   type ModelCapabilities,
   ProviderDriverKind,
   type ProviderOptionDescriptor,
+  type ProviderPrivacySource,
   type ServerProviderAuth,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -20,6 +21,7 @@ import { ChildProcess, type ChildProcessSpawner } from "effect/process";
 
 import {
   KIRO_AGENT_CONFIG_ID,
+  KIRO_PRIVACY_ENVIRONMENT,
   KIRO_SUPPORTED_RUNTIME_MODES,
   makeKiroAcpRuntime,
 } from "./acpSupport.ts";
@@ -37,6 +39,7 @@ import {
   spawnAndCollect,
 } from "@t3tools/provider-core/server/snapshotProbe";
 import { APP_NAME } from "@t3tools/shared/branding";
+import { withProviderPrivacyEnvironment } from "@t3tools/provider-core/server/privacy";
 
 const KIRO_DRIVER_KIND = ProviderDriverKind.make("kiro");
 const KIRO_PRESENTATION = {
@@ -360,6 +363,7 @@ const probeKiroAgents = Effect.fn("KiroProvider.probeKiroAgents")(function* (
 export const checkKiroProviderStatus = Effect.fn("checkKiroProviderStatus")(function* (
   settings: KiroSettings,
   environment: NodeJS.ProcessEnv,
+  privacy?: ProviderPrivacySource,
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -376,7 +380,11 @@ export const checkKiroProviderStatus = Effect.fn("checkKiroProviderStatus")(func
     });
   }
 
-  const probeEnvironment = providerProbeEnvironment(environment);
+  const probeEnvironment = withProviderPrivacyEnvironment(
+    providerProbeEnvironment(environment),
+    KIRO_PRIVACY_ENVIRONMENT,
+    privacy,
+  );
   const versionResult = yield* runKiroCli(settings, ["--version"], probeEnvironment).pipe(
     Effect.timeoutOption(
       resolveProviderProbeTimeoutMs("kiro", VERSION_PROBE_TIMEOUT_MS, environment),

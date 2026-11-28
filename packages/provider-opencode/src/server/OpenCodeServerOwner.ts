@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
+import type { ProviderPrivacySource } from "@t3tools/contracts";
 
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 
@@ -31,6 +32,7 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
   readonly directory: string;
   readonly serverPassword?: string;
   readonly environment?: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly verify?: (url: string) => Effect.Effect<string, OpenCodeRuntime.OpenCodeRuntimeError>;
 }) {
   const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
@@ -106,6 +108,7 @@ export const make = Effect.fn("OpenCodeServerOwner.make")(function* (input: {
                     ? { serverPassword: input.serverPassword }
                     : {}),
                   ...(input.environment ? { environment: input.environment } : {}),
+                  ...(input.privacy ? { privacy: input.privacy } : {}),
                   ...(input.verify ? { verify: input.verify } : {}),
                 })
                 .pipe(Effect.provideService(Scope.Scope, serverScope)),

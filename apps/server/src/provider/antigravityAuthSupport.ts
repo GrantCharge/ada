@@ -1,7 +1,11 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Effect's symlink has no type argument, and Windows needs a junction to link without elevation.
 import * as NodeFSP from "node:fs/promises";
 
-import type { AntigravityAuthMethod, ProviderInstanceId } from "@t3tools/contracts";
+import type {
+  AntigravityAuthMethod,
+  ProviderInstanceId,
+  ProviderPrivacySource,
+} from "@t3tools/contracts";
 import { APP_NAME } from "@t3tools/shared/branding";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { resolveNodeExecutable, nodeRuntimeUnavailableMessage } from "@t3tools/shared/nodeRuntime";
@@ -19,6 +23,10 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as AcpErrors from "effect-acp/errors";
 
 import { collectUint8StreamText } from "@t3tools/provider-core/server/collectStreamText";
+import {
+  DO_NOT_TRACK_TABLE,
+  withProviderPrivacyEnvironment,
+} from "@t3tools/provider-core/server/privacy";
 import type * as AcpSessionRuntime from "@t3tools/provider-acp/server/AcpSessionRuntime";
 import {
   antigravityUserSkillDirectories,
@@ -545,6 +553,8 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
   return profile;
 });
 
+const ANTIGRAVITY_PRIVACY_ENVIRONMENT = DO_NOT_TRACK_TABLE;
+
 export function buildAntigravityAcpSpawnInput(input: {
   readonly installation: { readonly executablePath: string };
   readonly profile: AntigravityProfile;
@@ -552,7 +562,9 @@ export function buildAntigravityAcpSpawnInput(input: {
   readonly baseEnv?: NodeJS.ProcessEnv;
   readonly auth?: AntigravityAuthConfig;
   readonly runtimeTempDirectory?: string;
+  readonly privacy?: ProviderPrivacySource | undefined;
 }): AcpSessionRuntime.AcpSpawnInput {
+  const choice = input.privacy?.();
   return {
     command: input.installation.executablePath,
     args: [
@@ -562,13 +574,18 @@ export function buildAntigravityAcpSpawnInput(input: {
       "--app-data-dir",
       // The CLI joins this beneath gemini-dir, including when the value is absolute.
       "antigravity-acp",
+      ...(choice?.usageAnalytics ? ["--disable-telemetry"] : []),
     ],
     cwd: input.cwd,
-    env: antigravityEnvironment(
-      input.profile,
-      input.baseEnv ?? process.env,
-      input.auth ?? ANTIGRAVITY_PERSONAL_AUTH,
-      input.runtimeTempDirectory,
+    env: withProviderPrivacyEnvironment(
+      antigravityEnvironment(
+        input.profile,
+        input.baseEnv ?? process.env,
+        input.auth ?? ANTIGRAVITY_PERSONAL_AUTH,
+        input.runtimeTempDirectory,
+      ),
+      ANTIGRAVITY_PRIVACY_ENVIRONMENT,
+      choice === undefined ? undefined : () => choice,
     ),
     extendEnv: false,
   };

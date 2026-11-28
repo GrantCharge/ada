@@ -90,6 +90,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fileSystem = yield* FileSystem.FileSystem;
@@ -130,6 +131,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
       environment,
       enabled,
       config,
+      privacy,
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -145,6 +147,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
       effectiveConfig,
       processEnv,
       host.compatibility,
+      privacy,
     );
 
     const checkProvider = fileSystem
@@ -152,7 +155,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
       .pipe(
         Effect.ignore,
         Effect.andThen(
-          checkPiProviderStatus(effectiveConfig, processEnv, probeCwd, host.compatibility),
+          checkPiProviderStatus(effectiveConfig, processEnv, probeCwd, host.compatibility, privacy),
         ),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -205,7 +208,7 @@ export const PiDriver: ProviderDriver<PiSettings, PiDriverEnv, Path.Path> = {
           ? snapshot.getSnapshot
           : Effect.all([
               snapshot.getSnapshot,
-              discoverPiCommandsForCwd(effectiveConfig, processEnv, workspaceCwd).pipe(
+              discoverPiCommandsForCwd(effectiveConfig, processEnv, workspaceCwd, privacy).pipe(
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
                 Effect.mapError(
                   (cause) =>

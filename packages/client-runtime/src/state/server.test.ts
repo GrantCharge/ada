@@ -1,5 +1,6 @@
 import {
   AuthOrchestrationReadScope,
+  AuthProvidersManageScope,
   EnvironmentId,
   ProviderDriverKind,
   ServerSelfUpdateError,
@@ -1858,8 +1859,30 @@ describe("provider setup commands", () => {
       const atoms = createServerEnvironmentAtoms(runtime, {
         initialConfigValueAtom: () => Atom.make(CONFIG),
       });
-      const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
-        Effect.sync(() => registry.dispose()),
+      const sessionState = createEnvironmentSessionAtoms(runtime).sessionStateAtom(
+        TARGET.environmentId,
+      );
+      const registry = yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          AtomRegistry.make({
+            initialValues: [
+              [
+                sessionState,
+                AsyncResult.success({
+                  authenticated: true,
+                  auth: {
+                    policy: "remote-reachable",
+                    bootstrapMethods: [],
+                    sessionMethods: [],
+                    sessionCookieName: "test",
+                  },
+                  scopes: [AuthProvidersManageScope],
+                }),
+              ],
+            ],
+          }),
+        ),
+        (registry) => Effect.sync(() => registry.dispose()),
       );
 
       yield* Effect.forkChild(

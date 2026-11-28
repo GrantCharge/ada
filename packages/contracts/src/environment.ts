@@ -140,6 +140,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   fastWorktreeCheckout: Schema.optionalKey(Schema.Boolean),
   threadAutoSettlementScope: Schema.optionalKey(Schema.Boolean),
   threadRestartContinuation: Schema.optionalKey(Schema.Boolean),
+  /** Applies the synced provider privacy setting at provider spawn; older servers drop it. */
+  providerPrivacy: Schema.optionalKey(Schema.Boolean),
   projectSettingsOverrides: Schema.optionalKey(Schema.Boolean),
   /** Hide the switch when absent; older servers silently drop per-project provider patches. */
   projectProviderInstanceOverrides: Schema.optionalKey(Schema.Boolean),

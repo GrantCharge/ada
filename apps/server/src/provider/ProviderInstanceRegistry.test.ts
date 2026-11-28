@@ -8,12 +8,16 @@ import { vi } from "vite-plus/test";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
   AntigravitySettings,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
   EnvironmentId,
   type ClaudeSettings,
   type CodexSettings,
   ProviderDriverKind,
   type ProviderInstanceConfigMap,
+  type ProviderPrivacyChoice,
+  type ProviderPrivacySource,
   type ResolvedProviderInstanceEnvironment,
   ProviderInstanceId,
   SecretProviderId,
@@ -205,7 +209,15 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         ProviderEventLoggers.NoOpProviderEventLoggers,
       ),
     ),
-    Layer.provideMerge(ProviderLatestVersions.layer),
+    // A real lookup runs `npm view` with its cache in the temp state dir, still writing there
+    // when the scope removes that dir.
+    Layer.provideMerge(
+      Layer.mock(ProviderLatestVersions.ProviderLatestVersions)({
+        cached: () => Effect.succeed(null),
+        invalidate: () => Effect.void,
+        invalidateAll: Effect.void,
+      }),
+    ),
     Layer.provideMerge(McpProviderSessions.layer),
     Layer.provideMerge(ProviderInstallationGate.layer),
     Layer.provideMerge(ModelManifest.layerTest),
@@ -1177,5 +1189,48 @@ describe("ProviderInstanceRegistry secret environment", () => {
       expect(yield* registry.getInstance(instanceId)).toBeDefined();
       expect(yield* registry.listUnavailable).toEqual([]);
     });
+  });
+});
+
+describe("ProviderInstanceRegistry provider privacy", () => {
+  it.effect("gives drivers the live choice without restarting their instance", () => {
+    const driverKind = ProviderDriverKind.make("fake");
+    const instanceId = ProviderInstanceId.make("fake_main");
+    const privacySources: Array<ProviderPrivacySource | undefined> = [];
+    const driver: AnyProviderDriver = {
+      driverKind,
+      metadata: { displayName: "Fake" },
+      configSchema: Schema.Unknown,
+      defaultConfig: () => ({}),
+      create: (input) =>
+        Effect.sync(() => {
+          privacySources.push(input.privacy);
+          return { instanceId: input.instanceId, enabled: input.enabled } as ProviderInstance;
+        }),
+    };
+    let current: ProviderPrivacyChoice = DEFAULT_PROVIDER_PRIVACY_CHOICE;
+    const lookedUp: Array<ProviderDriverKind> = [];
+    const configMap: ProviderInstanceConfigMap = {
+      [instanceId]: { driver: driverKind, config: {} },
+    };
+    return Effect.gen(function* () {
+      const { mutator } = yield* makeProviderInstanceRegistry({
+        drivers: [driver],
+        configMap,
+        privacy: (kind) => {
+          lookedUp.push(kind);
+          return current;
+        },
+      });
+      const [privacy] = privacySources;
+      expect(privacy?.()).toEqual(DEFAULT_PROVIDER_PRIVACY_CHOICE);
+
+      current = ALLOW_ALL_PROVIDER_PRIVACY_CHOICE;
+      yield* mutator.reconcile({ ...configMap });
+
+      expect(privacySources).toHaveLength(1);
+      expect(privacy?.()).toEqual(ALLOW_ALL_PROVIDER_PRIVACY_CHOICE);
+      expect(lookedUp).toEqual([driverKind, driverKind]);
+    }).pipe(Effect.provide(Layer.mock(SecretResolver.SecretResolver)({})));
   });
 });

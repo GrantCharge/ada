@@ -31,7 +31,12 @@ import type {
   ServerProviderModel,
   ServerProviderSkill,
 } from "@t3tools/contracts";
-import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@t3tools/contracts";
+import {
+  PREFERRED_DEFAULT_CODEX_MODELS,
+  type ProviderPrivacyChoice,
+  type ProviderPrivacySource,
+  ServerSettingsError,
+} from "@t3tools/contracts";
 
 import {
   codexModelFamily,
@@ -645,12 +650,13 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
   readonly launchArgs?: string | undefined;
   readonly cwd: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;
+  readonly privacy?: ProviderPrivacyChoice | undefined;
 }) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const environment = yield* codexProcessEnvironment(input);
   const spawnCommand = yield* resolveSpawnCommand(
     input.binaryPath,
-    codexAppServerArgs(input.launchArgs),
+    codexAppServerArgs(input.launchArgs, input.privacy),
     { env: environment, extendEnv: true },
   );
   const child = yield* spawner
@@ -735,6 +741,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   readonly cwd: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly skipNativeUsage?: boolean;
+  readonly privacy?: ProviderPrivacyChoice | undefined;
 }) {
   const spawnedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -892,6 +899,7 @@ export const makeCodexSkillsProbe = Effect.fn("makeCodexSkillsProbe")(function* 
       readonly homePath?: string;
       readonly launchArgs?: string;
       readonly environment: NodeJS.ProcessEnv;
+      readonly privacy?: ProviderPrivacyChoice | undefined;
     }) =>
       withCodexAppServerClient({ ...launch, cwd: process.cwd() }).pipe(
         Effect.map(({ client }) => client),
@@ -904,6 +912,7 @@ export const makeCodexSkillsProbe = Effect.fn("makeCodexSkillsProbe")(function* 
     readonly launchArgs?: string;
     readonly cwd: string;
     readonly environment?: NodeJS.ProcessEnv;
+    readonly privacy?: ProviderPrivacyChoice | undefined;
   }) {
     const { cwd, ...rest } = input;
     const launch = {
@@ -1020,6 +1029,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     readonly cwd: string;
     readonly environment?: NodeJS.ProcessEnv;
     readonly skipNativeUsage?: boolean;
+    readonly privacy?: ProviderPrivacyChoice | undefined;
   }) => Effect.Effect<
     CodexAppServerProviderSnapshot,
     CodexErrors.CodexAppServerError,
@@ -1027,6 +1037,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   > = probeCodexAppServerProvider,
   environment?: NodeJS.ProcessEnv,
   managedAuth?: ServerProvider["auth"],
+  privacy?: ProviderPrivacySource,
 ): Effect.fn.Return<
   ServerProviderDraft,
   ServerSettingsError,
@@ -1065,6 +1076,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
     cwd: process.cwd(),
     environment: resolvedEnvironment,
+    privacy: privacy?.(),
     ...(managedAuth ? { skipNativeUsage: true } : {}),
   }).pipe(
     // Process teardown can outlast the work budget without discarding a completed snapshot.

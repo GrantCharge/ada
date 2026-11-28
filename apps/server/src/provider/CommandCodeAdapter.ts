@@ -2,6 +2,7 @@ import {
   type CommandCodeSettings,
   ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderPrivacySource,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
@@ -163,6 +164,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
   options: {
     instanceId: ProviderInstanceId;
     environment: NodeJS.ProcessEnv;
+    privacy?: ProviderPrivacySource | undefined;
     cwd: string;
     attachmentsDir: string;
   },
@@ -350,6 +352,7 @@ export const makeCommandCodeAdapter = Effect.fn("makeCommandCodeAdapter")(functi
                 McpProviderSession.mcpHttpServers(mcpSession),
               ),
             },
+            privacy: options.privacy,
             prompt: `${buildRuntimeInstructions({ harness: "Command Code", model: turn.modelSelection.model, reasoningEffort: effort, threadMcpTools: mcpSession !== undefined })}\n\n${turn.message.text}${paths.length ? `\n\nAttached files on this environment (use read_file to inspect):\n${yield* encodeAttachmentPaths(paths)}` : ""}`,
           });
           yield* emit({ type: "provider_turn.updated", driver: DRIVER, providerTurn });

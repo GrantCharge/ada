@@ -2,6 +2,7 @@ import {
   ProviderSetupError,
   type ProviderAuthMethod,
   type ProviderInstanceId,
+  type ProviderPrivacySource,
 } from "@t3tools/contracts";
 import type { AcpRegistrySettings } from "../settings.ts";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -72,6 +73,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
   readonly settings: AcpRegistrySettings;
   readonly cwd: string;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly onChanged: (authenticated: boolean) => Effect.Effect<void>;
   readonly makeRuntime?: (
     spawn: AcpSessionRuntime.AcpSpawnInput,
@@ -94,7 +96,7 @@ export const makeAcpRegistryAuth = Effect.fn("makeAcpRegistryAuth")(function* (o
       cause,
     });
   const resolve = catalog
-    .resolve(options.settings, options.cwd, options.environment)
+    .resolve(options.settings, options.cwd, options.environment, options.privacy)
     .pipe(
       Effect.mapError((cause) =>
         failure("start", "Could not prepare the selected ACP agent.", cause),

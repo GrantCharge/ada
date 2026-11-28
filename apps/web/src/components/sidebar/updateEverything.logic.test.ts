@@ -1,13 +1,21 @@
-import { EnvironmentId, type ServerSelfUpdateCapability } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+  type ServerSelfUpdateCapability,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   collectChannelSwitchTargets,
+  collectProviderUpdateTargets,
   collectRestartingMachines,
   localSwitchBlockReason,
   collectServerUpdateTargets,
   describeUpdateCapsule,
   describeUpdateEverything,
+  formatSkippedReason,
   resolveRestoredRetry,
   runUpdateEverything,
   type UpdateEverythingMachine,
@@ -479,6 +487,195 @@ describe("describeUpdateEverything", () => {
       ["bb-1", "server", null, ["Codex", "Claude"]],
       ["alvin", null, "needs a manual update", ["Claude"]],
       ["TheoRoom", null, "not connected", []],
+    ]);
+  });
+
+  it("keeps provider skips separate from server skips and deduplicates shared reasons", () => {
+    const id = EnvironmentId.make;
+    const { rows } = describeUpdateEverything({
+      localVersion: null,
+      localMachines: [],
+      servers: [],
+      providerMachines: [{ environmentId: id("studio"), label: "Studio-01", providers: ["Codex"] }],
+      skipped: [{ environmentId: id("offline"), label: "grok-vm", reason: "not connected" }],
+      providerSkipped: [
+        {
+          environmentId: id("studio"),
+          label: "Studio-01",
+          reason: "Antigravity needs a manual update",
+        },
+        {
+          environmentId: id("dev-box"),
+          label: "dev-box",
+          reason: "no permission to update Codex (grant Manage providers)",
+        },
+        { environmentId: id("offline"), label: "grok-vm", reason: "not connected" },
+      ],
+    });
+
+    expect(
+      rows.map((row) => [
+        row.label,
+        row.app,
+        row.skipped,
+        row.providerSkipped,
+        formatSkippedReason(row),
+      ]),
+    ).toEqual([
+      [
+        "Studio-01",
+        null,
+        null,
+        "Antigravity needs a manual update",
+        "Antigravity needs a manual update",
+      ],
+      ["grok-vm", null, "not connected", "not connected", "not connected"],
+      [
+        "dev-box",
+        null,
+        null,
+        "no permission to update Codex (grant Manage providers)",
+        "no permission to update Codex (grant Manage providers)",
+      ],
+    ]);
+  });
+});
+
+describe("collectProviderUpdateTargets", () => {
+  const provider = (
+    driver: string,
+    overrides: {
+      readonly canUpdate?: boolean;
+      readonly updateCommand?: string | null;
+      readonly status?: "behind_latest" | "current";
+      readonly updateState?: ServerProvider["updateState"];
+    } = {},
+  ): ServerProvider => ({
+    instanceId: ProviderInstanceId.make(driver),
+    driver: ProviderDriverKind.make(driver),
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-11-27T00:00:00.000Z",
+    models: [],
+    slashCommands: [],
+    skills: [],
+    versionAdvisory: {
+      status: overrides.status ?? "behind_latest",
+      currentVersion: "1.0.0",
+      latestVersion: overrides.status === "current" ? "1.0.0" : "1.1.0",
+      updateCommand:
+        "updateCommand" in overrides
+          ? (overrides.updateCommand ?? null)
+          : overrides.canUpdate === false
+            ? null
+            : `npm install -g ${driver}`,
+      canUpdate: overrides.canUpdate ?? true,
+      checkedAt: "2026-11-27T00:00:00.000Z",
+      message: null,
+    },
+    ...(overrides.updateState ? { updateState: overrides.updateState } : {}),
+  });
+
+  it("collects one-click providers across machines and explains every skipped machine", () => {
+    const { targets, skipped } = collectProviderUpdateTargets([
+      {
+        environmentId: EnvironmentId.make("studio"),
+        label: "Studio-01",
+        connected: true,
+        canManageProviders: true,
+        providerAccessDenied: false,
+        // Manual-only Antigravity must not block Codex from updating on the same machine.
+        providers: [provider("codex"), provider("antigravity", { canUpdate: false })],
+      },
+      {
+        environmentId: EnvironmentId.make("dev-box"),
+        label: "dev-box",
+        connected: true,
+        canManageProviders: false,
+        providerAccessDenied: true,
+        providers: [provider("codex"), provider("claudeAgent")],
+      },
+      {
+        environmentId: EnvironmentId.make("macbook"),
+        label: "MacBook Pro",
+        connected: true,
+        canManageProviders: false,
+        providerAccessDenied: true,
+        providers: [provider("codex", { status: "current" })],
+      },
+      {
+        environmentId: EnvironmentId.make("loading"),
+        label: "Loading",
+        connected: true,
+        canManageProviders: false,
+        providerAccessDenied: false,
+        providers: [provider("codex")],
+      },
+      {
+        environmentId: EnvironmentId.make("offline"),
+        label: "grok-vm",
+        connected: false,
+        canManageProviders: true,
+        providerAccessDenied: false,
+        providers: [provider("grok")],
+      },
+      {
+        environmentId: EnvironmentId.make("manual-only"),
+        label: "Manual",
+        connected: true,
+        canManageProviders: true,
+        providerAccessDenied: false,
+        providers: [
+          provider("claudeAgent", { canUpdate: false }),
+          provider("opencode", { canUpdate: false }),
+        ],
+      },
+      {
+        environmentId: EnvironmentId.make("busy"),
+        label: "Busy",
+        connected: true,
+        canManageProviders: true,
+        providerAccessDenied: false,
+        providers: [
+          provider("codex", {
+            updateState: {
+              status: "running",
+              startedAt: "2026-11-27T00:00:00.000Z",
+              finishedAt: null,
+              message: "Updating",
+              output: null,
+            },
+          }),
+        ],
+      },
+      {
+        environmentId: EnvironmentId.make("current"),
+        label: "Current",
+        connected: true,
+        canManageProviders: true,
+        providerAccessDenied: false,
+        providers: [provider("codex", { status: "current" })],
+      },
+    ]);
+
+    expect(
+      targets.map((target) => [
+        target.label,
+        target.candidates.map((candidate) => candidate.driver),
+      ]),
+    ).toEqual([["Studio-01", ["codex"]]]);
+
+    expect(skipped.map((entry) => [entry.label, entry.reason])).toEqual([
+      ["Studio-01", "Antigravity needs a manual update"],
+      ["dev-box", "no permission to update Codex and Claude (grant Manage providers)"],
+      ["MacBook Pro", "no permission to update providers (grant Manage providers)"],
+      ["Loading", "still loading"],
+      ["grok-vm", "not connected"],
+      ["Manual", "Claude and OpenCode need a manual update"],
+      ["Busy", "Codex is already updating"],
     ]);
   });
 });

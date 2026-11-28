@@ -132,6 +132,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
             undefined,
             effective.environment,
             managedAuth,
+            input.privacy,
           );
           const credentials = yield* runtime.auth.access;
           // Another server can replace the saved profile while the native probe runs.
@@ -263,6 +264,7 @@ export const makeManagedCodexProvider = Effect.fn("makeManagedCodexProvider")(fu
     undefined,
     models,
     resolveRuntime,
+    input.privacy,
   );
   const protect = <A>(operation: string, effect: Effect.Effect<A, TextGenerationError>) =>
     runtime.auth.controller.withAccess!(effect).pipe(

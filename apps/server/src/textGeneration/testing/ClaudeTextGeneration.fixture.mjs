@@ -44,6 +44,9 @@ const settingsText = settingsValue.startsWith("{")
 if (JSON.parse(settingsText).disableAllHooks !== true) {
   fail("text generation must disable hooks", 10);
 }
+if (process.env.T3_FAKE_CLAUDE_ENV_LOG) {
+  NodeFS.writeFileSync(process.env.T3_FAKE_CLAUDE_ENV_LOG, JSON.stringify(process.env));
+}
 if (process.env.T3_FAKE_CLAUDE_SETTINGS_LOG) {
   NodeFS.writeFileSync(process.env.T3_FAKE_CLAUDE_SETTINGS_LOG, settingsText);
 }

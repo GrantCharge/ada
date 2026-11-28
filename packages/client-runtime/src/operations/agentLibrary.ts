@@ -382,7 +382,7 @@ const libraryFingerprint = (library: AgentLibraryInput | undefined) =>
  * Sends each target's write once until it fails or its key changes. An older server that drops
  * part of a patch (an exact-name repeat) would otherwise get it on every pass.
  */
-function createSyncGate<T extends { readonly environmentId: EnvironmentId }>() {
+export function createSyncGate<T extends { readonly environmentId: EnvironmentId }>() {
   const inFlight = new Set<string>();
   const delivered = new Map<string, string>();
   return {

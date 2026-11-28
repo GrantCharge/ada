@@ -2,6 +2,7 @@ import {
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   MUSE_DEFAULT_MODEL,
   type ModelSelection,
+  type ProviderPrivacySource,
   type ServerProviderModel,
   TextGenerationError,
 } from "@t3tools/contracts";
@@ -241,11 +242,12 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
   settings: MuseSettings,
   options: {
     readonly environment?: NodeJS.ProcessEnv;
+    readonly privacy?: ProviderPrivacySource | undefined;
     readonly modelCatalog?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
     readonly createHost?: typeof createMuseSdkHost;
   } = {},
 ) {
-  const { environment, modelCatalog = Effect.succeed([]), createHost } = options;
+  const { environment, privacy, modelCatalog = Effect.succeed([]), createHost } = options;
   const fileSystem = yield* FileSystem.FileSystem;
   const runMuseJson = Effect.fn("runMuseJson")(function* <S extends Schema.Top>(input: {
     operation: Operation;
@@ -284,6 +286,7 @@ export const makeMuseTextGeneration = Effect.fn("makeMuseTextGeneration")(functi
             binaryPath: settings.binaryPath,
             cwd,
             ...(environment ? { environment } : {}),
+            privacy,
             readOnly: true,
             // Muse derives SDK turn events from its session log, including completion.
             sessionLogging: true,

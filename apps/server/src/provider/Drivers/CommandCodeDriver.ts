@@ -107,6 +107,7 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
         args: [...args, "--no-auto-update"],
         cwd: host.paths.cwd,
         environment,
+        privacy: input.privacy,
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.scoped,
@@ -193,10 +194,11 @@ export const CommandCodeDriver: ProviderDriver<CommandCodeSettings, CommandCodeD
     const adapter = yield* makeCommandCodeAdapter(config, {
       instanceId: input.instanceId,
       environment,
+      privacy: input.privacy,
       cwd: host.paths.cwd,
       attachmentsDir: host.paths.attachmentsDir,
     });
-    const textGeneration = yield* makeCommandCodeTextGeneration(config, environment);
+    const textGeneration = yield* makeCommandCodeTextGeneration(config, environment, input.privacy);
     return {
       instanceId: input.instanceId,
       driverKind: DRIVER,

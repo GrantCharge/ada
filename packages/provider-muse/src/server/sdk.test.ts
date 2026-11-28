@@ -5,6 +5,10 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { spawnMspConnection, type MspHandshake, type SpawnedMspConnection } from "@muse-code/sdk";
 import { it } from "@effect/vitest";
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+} from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { SpawnExecutableResolution } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
@@ -216,6 +220,25 @@ describe("Muse SDK host", () => {
           }
         });
       }),
+  );
+
+  it.effect.each([
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, env: {}, expected: "1" },
+    { choice: DEFAULT_PROVIDER_PRIVACY_CHOICE, env: { DO_NOT_TRACK: "0" }, expected: "0" },
+    { choice: ALLOW_ALL_PROVIDER_PRIVACY_CHOICE, env: {}, expected: undefined },
+  ])("overlays the privacy choice on the host env (%#)", ({ choice, env, expected }) =>
+    Effect.gen(function* () {
+      const createHost = vi.fn(
+        async (_options: Parameters<typeof createMuseSdkHost>[0]) => ({}) as MuseSdkHost,
+      );
+      yield* createMuseSdkHostEffect(
+        { binaryPath: "muse", environment: env, privacy: () => choice },
+        createHost,
+      );
+      const options = createHost.mock.calls[0]?.[0];
+      expect(options?.environment?.DO_NOT_TRACK).toBe(expected);
+      expect(options).not.toHaveProperty("privacy");
+    }),
   );
 
   it.effect("closes a fulfilled host when interruption wins before acquisition is delivered", () =>

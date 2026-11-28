@@ -164,7 +164,10 @@ describe("layerSettingsWatcher", () => {
     },
   });
 
-  const watch = (initial: ServerSettings | undefined) =>
+  const watch = (
+    initial: ServerSettings | undefined,
+    onSettings?: (settings: ServerSettings) => void,
+  ) =>
     Effect.gen(function* () {
       const changes = yield* Queue.unbounded<ServerSettings>();
       const reconciled = yield* Queue.unbounded<void>();
@@ -176,7 +179,9 @@ describe("layerSettingsWatcher", () => {
         applySecret: () => Effect.succeed([]),
       });
       yield* Layer.build(
-        layerSettingsWatcher(Stream.fromQueue(changes), initial).pipe(Layer.provide(mutator)),
+        layerSettingsWatcher(Stream.fromQueue(changes), initial, onSettings).pipe(
+          Layer.provide(mutator),
+        ),
       );
       return {
         reloads: () => reloads,
@@ -218,6 +223,31 @@ describe("layerSettingsWatcher", () => {
 
         expect(reloads()).toBe(1);
       }).pipe(Effect.scoped, Effect.provide(ServerSettingsService.layerTest())),
+  );
+
+  effectIt.effect("hands each saved provider privacy choice to the live lookup", () =>
+    Effect.gen(function* () {
+      const settings = yield* ServerSettingsService;
+      const seen: Array<ServerSettings["providerPrivacy"]> = [];
+      const { change } = yield* watch(yield* settings.getSettings, (current) =>
+        seen.push(current.providerPrivacy),
+      );
+      const providerPrivacy = {
+        drivers: {
+          codex: {
+            usageAnalytics: false,
+            errorReports: true,
+            feedback: true,
+            minimalNetwork: false,
+          },
+        },
+        updatedAt: "2026-11-27T00:00:00.000Z",
+      };
+
+      yield* change(yield* settings.updateSettings({ providerPrivacy }));
+
+      expect(seen.at(-1)).toEqual(providerPrivacy);
+    }).pipe(Effect.scoped, Effect.provide(ServerSettingsService.layerTest())),
   );
 });
 

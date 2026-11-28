@@ -79,6 +79,7 @@ export const KiroDriver: ProviderDriver<KiroSettings, KiroDriverEnv> = {
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const crypto = yield* SecureRandom.SecureRandom;
@@ -110,7 +111,7 @@ export const KiroDriver: ProviderDriver<KiroSettings, KiroDriverEnv> = {
       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
       initialSnapshot: (settings) =>
         buildInitialKiroProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
-      checkProvider: checkKiroProviderStatus(effectiveConfig, processEnv).pipe(
+      checkProvider: checkKiroProviderStatus(effectiveConfig, processEnv, privacy).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(SecureRandom.SecureRandom, crypto),
@@ -139,6 +140,7 @@ export const KiroDriver: ProviderDriver<KiroSettings, KiroDriverEnv> = {
         environment,
         enabled,
         config: effectiveConfig,
+        privacy,
       })
       .pipe(
         Effect.mapError(

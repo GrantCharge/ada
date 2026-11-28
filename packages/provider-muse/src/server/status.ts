@@ -1,5 +1,6 @@
 import { resolveProviderProbeTimeoutMs } from "@t3tools/provider-core/server/snapshotProbe";
-import { ServerProviderModel } from "@t3tools/contracts";
+import { type ProviderPrivacySource, ServerProviderModel } from "@t3tools/contracts";
+import { withProviderPrivacyEnvironment } from "@t3tools/provider-core/server/privacy";
 import { MuseSettings } from "../settings.ts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as DateTime from "effect/DateTime";
@@ -8,7 +9,7 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as ChildProcess from "effect/process/ChildProcess";
 
-import { createMuseSdkHost, makeMuseEnvironment } from "./sdk.ts";
+import { createMuseSdkHost, makeMuseEnvironment, MUSE_PRIVACY_ENVIRONMENT } from "./sdk.ts";
 import { parseMuseVersion } from "./maintenance.ts";
 import {
   discoverMuseModels,
@@ -64,10 +65,15 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
   createHost: typeof createMuseSdkHost = createMuseSdkHost,
+  privacy?: ProviderPrivacySource,
 ) {
   if (!settings.enabled) return yield* makePendingMuseProvider(settings);
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const museEnvironment = providerProbeEnvironment(environment ?? makeMuseEnvironment());
+  const museEnvironment = withProviderPrivacyEnvironment(
+    providerProbeEnvironment(environment ?? makeMuseEnvironment()),
+    MUSE_PRIVACY_ENVIRONMENT,
+    privacy,
+  );
   const snapshot = (probe: ProviderProbeResult, models: ReadonlyArray<ServerProviderModel> = []) =>
     buildServerProvider({
       presentation: MUSE_PRESENTATION,

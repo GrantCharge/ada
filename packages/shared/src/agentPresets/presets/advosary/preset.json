@@ -12,18 +12,21 @@
   "runtimeMode": "full-access",
   "interactionMode": "default",
   "skills": [
-    "agentic-harness-design",
+    "principle-prove-it-works",
     "diagnose",
     "improve-codebase-architecture",
-    "new-pattern-project",
+    "davit",
+    "github-git",
+    "native-first-tools",
     "playwright-cli",
-    "principle-prove-it-works",
-    "t3-agents"
+    "new-pattern-project",
+    "agentic-harness-design"
   ],
   "setupNotes": [
     "Requires Claude Code with access to claude-fable-5-2.",
     "Project bootstrapping requires Git and Node.js; Go, Make and Docker are needed for generated project checks.",
     "GitHub publication requires an authenticated GitHub CLI and explicit authorization.",
-    "Browser CLI workflows require playwright-cli and its browser dependencies."
+    "Browser CLI workflows require playwright-cli and its browser dependencies.",
+    "Heavy builds and tests can run in a Davit box when the davit client and a host are configured; otherwise they run locally."
   ]
 }

@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "react";
-import { mergeAgentLibraries, type AgentSkill } from "@t3tools/contracts";
+import {
+  mergeAgentLibraries,
+  type AgentSkill,
+  type EnvironmentId,
+  type ServerSettingsPatch,
+} from "@t3tools/contracts";
 import {
   agentLibrarySources,
   loadAgentSkills,
@@ -13,6 +18,12 @@ import {
   type AgentLibrarySyncIo,
   type ComputerGrounderSyncIo,
 } from "@t3tools/client-runtime/operations/agentLibrary";
+import {
+  createProviderPrivacySyncGate,
+  planProviderPrivacySync,
+  providerPrivacySources,
+  runProviderPrivacySync,
+} from "@t3tools/client-runtime/operations/providerPrivacy";
 import { useEnvironments } from "./environments";
 import { serverEnvironment } from "./server";
 import { useAtomCommand } from "./use-atom-command";
@@ -29,6 +40,12 @@ function useAgentLibraryIo(label: string): AgentLibrarySyncIo {
       (await replicate({ environmentId, input: { patch, replicateProfiles: true } }))._tag ===
       "Success",
   };
+}
+
+function useProviderPrivacyReplicate() {
+  const replicate = useAtomCommand(serverEnvironment.updateSettings, "provider privacy sync");
+  return async (environmentId: EnvironmentId, patch: ServerSettingsPatch) =>
+    (await replicate({ environmentId, input: { patch } }))._tag === "Success";
 }
 
 function useComputerGrounderIo(): ComputerGrounderSyncIo {
@@ -72,6 +89,8 @@ export function AgentLibrarySync() {
   const gate = useRef(createAgentLibrarySyncGate());
   const grounderIo = useComputerGrounderIo();
   const grounderGate = useRef(createComputerGrounderSyncGate());
+  const privacyReplicate = useProviderPrivacyReplicate();
+  const privacyGate = useRef(createProviderPrivacySyncGate());
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- replicates the merged agent library to connected environment servers through RPC
   useEffect(() => {
     const sources = agentLibrarySources(environments);
@@ -93,5 +112,15 @@ export function AgentLibrarySync() {
       () => batch.settle(false),
     );
   }, [environments, grounderIo]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- replicates the latest provider privacy save to connected servers when their streamed settings change
+  useEffect(() => {
+    const plan = planProviderPrivacySync(providerPrivacySources(environments));
+    const batch = privacyGate.current.take(plan);
+    if (batch.targets.length === 0) return;
+    void runProviderPrivacySync({ ...plan, targets: batch.targets }, privacyReplicate).then(
+      (accepted) => batch.settle(accepted),
+      () => batch.settle(false),
+    );
+  }, [environments, privacyReplicate]);
   return null;
 }

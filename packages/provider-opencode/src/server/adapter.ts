@@ -33,6 +33,7 @@ import {
   ProviderDriverKind,
   ProviderSetupError,
   type ProviderInstanceId,
+  type ProviderPrivacySource,
   type ProviderRequestKind,
   type ProviderSessionId,
   type RuntimeRequestId,
@@ -474,6 +475,7 @@ export interface OpenCodeAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: OpenCodeSettings;
   readonly environment: NodeJS.ProcessEnv;
+  readonly privacy?: ProviderPrivacySource | undefined;
   readonly nativeEventLogger?: ProviderEventLoggers.EventNdjsonLogger;
 }
 
@@ -1078,6 +1080,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             ...options.environment,
             ...(yield* agentTempDir.environment({ threadId: input.threadId, cwd })),
           },
+          privacy: options.privacy,
         });
         const broken = brokenVersionDetail({
           name: "OpenCode",
@@ -4534,6 +4537,7 @@ export const OpenCodeAdapterV2Driver: ProviderAdapterDriver<
         instanceId: input.instanceId,
         settings: { ...input.config, enabled: input.enabled },
         environment: yield* mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
+        privacy: input.privacy,
         ...(providerEventLoggers.native === undefined
           ? {}
           : { nativeEventLogger: providerEventLoggers.native }),

@@ -83,6 +83,7 @@ import {
   getProviderStatusKey,
   getProviderSummary,
   getProviderVersionLabel,
+  getProviderRuntimeSourcePresentation,
   providerAuthLabel,
 } from "./providerStatus";
 import { SharedTooltipTrigger } from "../ui/shared-tooltip";
@@ -816,6 +817,10 @@ export function ProviderInstanceCard({
       ? (providerAuthLabel(liveProvider.auth, m) ?? null)
       : null;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
+  const runtimeSource =
+    enabled && liveProvider?.installed
+      ? getProviderRuntimeSourcePresentation(liveProvider.runtimeSource, m)
+      : null;
   const versionAdvisory = getProviderVersionAdvisoryPresentation(
     liveProvider?.versionAdvisory,
     liveProvider?.compatibilityAdvisory,
@@ -1003,6 +1008,16 @@ export function ProviderInstanceCard({
   const versionCodeNode = versionLabel ? (
     <code className="text-xs text-muted-foreground">{versionLabel}</code>
   ) : null;
+  // Only runtimes the server never updates are flagged, so users know updates are theirs to run.
+  const runtimeSourceNode =
+    runtimeSource && !runtimeSource.managed ? (
+      <SharedTooltipTrigger
+        render={<Badge variant="outline" size="sm" tabIndex={0} className="pointer-events-auto" />}
+        label={runtimeSource.detail}
+      >
+        {runtimeSource.label}
+      </SharedTooltipTrigger>
+    ) : null;
 
   const statusDotNode =
     statusKey === "warning" || statusKey === "error" ? (
@@ -1188,6 +1203,7 @@ export function ProviderInstanceCard({
                   {versionLabel}
                 </code>
               ) : null}
+              {runtimeSourceNode}
               {versionAdvisoryNode}
             </span>
             <span className="mt-0.5 flex items-start gap-1.5 text-xs leading-normal text-muted-foreground/80">
@@ -1250,6 +1266,7 @@ export function ProviderInstanceCard({
         </Badge>
       ) : null}
       {versionCodeNode}
+      {runtimeSourceNode}
       {versionAdvisoryNode}
       <span
         inert={readOnly}

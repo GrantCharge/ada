@@ -5,6 +5,7 @@ import {
   type AcpRegistryOperationError,
   type AcpRegistryProbeModel,
   type CustomModelSetting,
+  type ProviderPrivacySource,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -510,6 +511,7 @@ export const checkAcpRegistryProviderStatus = Effect.fn("AcpRegistryDriver.check
       readonly settings: AcpRegistrySettings;
       readonly cwd: string;
       readonly environment: NodeJS.ProcessEnv;
+      readonly privacy?: ProviderPrivacySource | undefined;
       readonly modelDiscovery?: Omit<AcpRegistryModelDiscovery, "onProbed"> & {
         readonly onProbed: (provider: ServerProvider) => Effect.Effect<ReadonlyArray<string>>;
       };
@@ -547,6 +549,7 @@ export const checkAcpRegistryProviderStatus = Effect.fn("AcpRegistryDriver.check
         settings: input.settings,
         cwd: input.cwd,
         environment: providerProbeEnvironment(input.environment),
+        privacy: input.privacy,
         ...(modelDiscovery === undefined
           ? {}
           : {
@@ -630,6 +633,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     environment,
     enabled,
     config,
+    privacy,
   }) {
     const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
     const runtimeCoordinator = yield* Effect.serviceOption(
@@ -672,6 +676,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       environment,
       enabled,
       config,
+      privacy,
     }).pipe(
       Effect.mapError(
         (cause) =>
@@ -818,6 +823,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         {
           ...readinessInput,
           cwd: host.paths.cwd,
+          privacy,
           modelDiscovery: {
             // Publish what the probe found first; discovery only adds options to it.
             onProbed: (provider) =>
@@ -1202,6 +1208,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       settings: effectiveConfig,
       cwd: host.paths.cwd,
       environment: processEnvironment,
+      privacy,
       onChanged: (authenticated) =>
         confirmedAuthentication
           .set(authenticated)
@@ -1256,6 +1263,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         instanceId,
         settings: effectiveConfig,
         environment: processEnvironment,
+        privacy,
       }),
       acpSessionManagement: {
         listSessions: ({ cwd, cursor }) =>
@@ -1265,6 +1273,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               settings: effectiveConfig,
               cwd,
               environment: processEnvironment,
+              privacy,
               ...(cursor === undefined ? {} : { cursor }),
             }),
           ),
@@ -1275,6 +1284,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               settings: effectiveConfig,
               cwd,
               environment: processEnvironment,
+              privacy,
               sessionId,
             }),
           ),
@@ -1285,6 +1295,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               settings: effectiveConfig,
               cwd,
               environment: processEnvironment,
+              privacy,
             }),
           ),
         setProvider: ({ cwd, providerId, apiType, baseUrl, headers }) =>
@@ -1294,6 +1305,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               settings: effectiveConfig,
               cwd,
               environment: processEnvironment,
+              privacy,
               providerId,
               apiType,
               baseUrl,
@@ -1319,6 +1331,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
               settings: effectiveConfig,
               cwd,
               environment: processEnvironment,
+              privacy,
               providerId,
             }),
           ).pipe(
@@ -1340,6 +1353,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
             settings: effectiveConfig,
             cwd,
             environment: processEnvironment,
+            privacy,
           }).pipe(
             Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

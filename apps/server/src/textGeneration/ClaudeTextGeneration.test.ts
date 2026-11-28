@@ -1,6 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { ClaudeSettings, ProviderInstanceId } from "@t3tools/contracts";
+import {
+  ALLOW_ALL_PROVIDER_PRIVACY_CHOICE,
+  ClaudeSettings,
+  DEFAULT_PROVIDER_PRIVACY_CHOICE,
+  ProviderInstanceId,
+  type ProviderPrivacySource,
+} from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
@@ -21,8 +27,13 @@ import {
 import * as TextGeneration from "./TextGeneration.ts";
 import { sanitizeThreadTitle } from "@t3tools/provider-core/server/textGenerationUtils";
 import { makeClaudeTextGeneration } from "./ClaudeTextGeneration.ts";
+import { CLAUDE_PRIVACY_ENVIRONMENT } from "../provider/Drivers/ClaudeHome.ts";
 import { writeFakeCli } from "@t3tools/provider-testing/fakeCli";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
+// The host running the tests may set these itself.
+const PRIVACY_VARIABLES = new Set(
+  Object.values(CLAUDE_PRIVACY_ENVIRONMENT).flatMap((variables) => Object.keys(variables ?? {})),
+);
 
 const layerClaudeTextGenerationTest = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3code-claude-text-generation-test-",
@@ -70,7 +81,9 @@ function withFakeClaudeEnv<A, E, R>(
     configDirMustBe?: string;
     cwdMustNotBe?: string;
     settingsLog?: string;
+    envLog?: string;
     claudeConfig?: Partial<ClaudeSettings>;
+    privacy?: ProviderPrivacySource;
   },
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
 ) {
@@ -95,11 +108,14 @@ function withFakeClaudeEnv<A, E, R>(
       T3_FAKE_CLAUDE_IMAGE_ATTEMPT_LOG: input.imageAttemptLog,
       T3_FAKE_CLAUDE_CWD_MUST_NOT_BE: input.cwdMustNotBe,
       T3_FAKE_CLAUDE_SETTINGS_LOG: input.settingsLog,
+      T3_FAKE_CLAUDE_ENV_LOG: input.envLog,
       T3_FAKE_CLAUDE_CONFIG_DIR_MUST_BE: input.configDirMustBe,
     };
     const environment: NodeJS.ProcessEnv = {
       ...Object.fromEntries(
-        Object.entries(hostEnv).filter(([name]) => !name.startsWith("T3_FAKE_CLAUDE_")),
+        Object.entries(hostEnv).filter(
+          ([name]) => !name.startsWith("T3_FAKE_CLAUDE_") && !PRIVACY_VARIABLES.has(name),
+        ),
       ),
       ...Object.fromEntries(
         Object.entries(fakeClaudeEnv).filter(([, value]) => value !== undefined),
@@ -112,6 +128,8 @@ function withFakeClaudeEnv<A, E, R>(
       config,
       environment,
       Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
+      undefined,
+      input.privacy,
     );
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
@@ -286,6 +304,50 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
             );
           }),
       ),
+  );
+
+  it.effect("starts Claude with the privacy switches chosen at the time of each call", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-claude-privacy-" });
+      const envLog = path.join(root, "env.json");
+      let choice = DEFAULT_PROVIDER_PRIVACY_CHOICE;
+      const spawnedEnvironment = () =>
+        fs.readFileString(envLog).pipe(Effect.map((text) => JSON.parse(text)));
+      yield* withFakeClaudeEnv(
+        {
+          output: JSON.stringify({ structured_output: { title: "Reconnect failures" } }),
+          envLog,
+          privacy: () => choice,
+        },
+        (textGeneration) => {
+          const generate = textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Investigate reconnect failures",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
+            },
+          });
+          return Effect.gen(function* () {
+            yield* generate;
+            expect(yield* spawnedEnvironment()).toMatchObject({
+              DISABLE_TELEMETRY: "1",
+              DISABLE_ERROR_REPORTING: "1",
+              CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: "1",
+            });
+            expect(yield* spawnedEnvironment()).not.toHaveProperty(
+              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+            );
+
+            choice = ALLOW_ALL_PROVIDER_PRIVACY_CHOICE;
+            yield* generate;
+            expect(yield* spawnedEnvironment()).not.toHaveProperty("DISABLE_TELEMETRY");
+          });
+        },
+      );
+    }),
   );
 
   it.effect("sends thread title instructions to the provider prompt", () =>
