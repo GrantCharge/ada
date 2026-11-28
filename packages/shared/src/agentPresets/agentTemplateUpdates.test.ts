@@ -7,6 +7,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   addPresetSkills,
+  agentTemplateDigest,
   decodeAgentPresets,
   defaultAgentSkills,
   withAgentTemplates,
@@ -15,7 +16,9 @@ import { readAgentPresetSkillFiles } from "./agentPresetSkillFiles.ts";
 import { AGENT_TEMPLATES_SHIPPED_AT } from "./agentTemplateDates.ts";
 import {
   agentTemplateUpdates,
+  agentTemplateUpdateStubs,
   applyAgentTemplateUpdate,
+  keepAgentTemplateCopy,
   markAgentTemplateMerged,
 } from "./agentTemplateUpdates.ts";
 
@@ -132,6 +135,72 @@ describe("agentTemplateUpdates", () => {
     expect(done.mcpGatewayProfiles[0]!.template).toMatchObject({ syncedAt: LATER });
     expect(statuses(done)).toEqual([]);
     expect(statuses(done, older)).toEqual([]);
+  });
+
+  it("drops a copy that already holds every template line, even with blank lines and its own additions", () => {
+    const template = current[0]!;
+    const library = saved(installed(older), AFTER_LATER);
+    const content = `${template.skills[0]!.content.replaceAll("\n", "\n\n")}\n- My own rule.`;
+    const holding: Library = {
+      agentSkills: library.agentSkills,
+      mcpGatewayProfiles: library.mcpGatewayProfiles.map((profile) => ({
+        ...profile,
+        systemPrompt: `My preamble.\n\n${template.systemPrompt}\n`,
+      })),
+    };
+    const full = {
+      ...installed(older).agentSkills[0]!,
+      content,
+      resources: template.skills[0]!.resources,
+    };
+    const stub = toAgentSkillStub(full, agentSkillDigest(full));
+    const withStub = { ...holding, agentSkills: [stub] };
+    const updates = agentTemplateUpdates(withStub, current);
+    expect(updates.map((update) => update.kind)).toEqual(["skill"]);
+    expect(agentTemplateUpdateStubs(updates, [])).toEqual([stub]);
+    expect(agentTemplateUpdates(withStub, current, [full])).toEqual([]);
+    expect(agentTemplateUpdateStubs(updates, [full])).toEqual([]);
+    expect(statuses({ ...holding, agentSkills: [full] })).toEqual([]);
+  });
+
+  it("clears a merge whose chat found the copy already current", () => {
+    const edited = saved(installed(older), AFTER_LATER);
+    const [agent] = agentTemplateUpdates(edited, current);
+    const merged = markAgentTemplateMerged(edited, agent!, AFTER_LATER);
+    const profile = merged.mcpGatewayProfiles[0]!;
+    expect(statuses(merged)).toContainEqual(["agent", true]);
+    const systemPrompt = `${current[0]!.systemPrompt}\nBe terse.`;
+    const unsaved: Library = {
+      ...merged,
+      mcpGatewayProfiles: [
+        {
+          ...profile,
+          systemPrompt,
+          template: {
+            ...profile.template!,
+            mergingFrom: agentTemplateDigest(systemPrompt, ["review-checklist"]),
+          },
+        },
+      ],
+    };
+    expect(statuses(unsaved)).toEqual([["skill", true]]);
+  });
+
+  it("keeps an edited copy as it is until the template changes again", () => {
+    const edited = saved(installed(older), AFTER_LATER);
+    let kept: Library = edited;
+    for (const update of agentTemplateUpdates(edited, current)) {
+      kept = keepAgentTemplateCopy(kept, update, AFTER_LATER);
+    }
+    expect(kept.agentSkills[0]!.content).toBe(edited.agentSkills[0]!.content);
+    expect(kept.mcpGatewayProfiles[0]!.systemPrompt).toBe(
+      edited.mcpGatewayProfiles[0]!.systemPrompt,
+    );
+    expect(statuses(kept)).toEqual([]);
+    expect(statuses(kept, builtIns("2026-12-10T00:00:00.000Z"))).toEqual([
+      ["agent", true],
+      ["skill", true],
+    ]);
   });
 
   it("counts a skill added to an agent as an edit", () => {
