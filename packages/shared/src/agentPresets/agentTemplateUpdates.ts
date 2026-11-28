@@ -1,5 +1,6 @@
 import {
   agentSkillDigestOf,
+  isAgentSkillStub,
   withoutAgentSkillTransportFields,
   type AgentSkill,
   type AgentTemplateRecord,
@@ -45,34 +46,100 @@ const skillNames = (profile: McpGatewayProfile, skills: ReadonlyArray<AgentSkill
 const profileTemplateDigest = (profile: McpGatewayProfile, skills: ReadonlyArray<AgentSkill>) =>
   agentTemplateDigest(profile.systemPrompt ?? "", skillNames(profile, skills));
 
+const loadedBody = (stub: AgentSkill, fullSkills: ReadonlyArray<AgentSkill>) =>
+  fullSkills.find(
+    (full) =>
+      full.skillId === stub.skillId &&
+      !isAgentSkillStub(full) &&
+      agentSkillDigestOf(full) === agentSkillDigestOf(stub),
+  );
+
+/** Listed skill stubs whose bodies `agentTemplateUpdates` needs to tell whether they are current. */
+export const agentTemplateUpdateStubs = (
+  updates: ReadonlyArray<AgentTemplateUpdate>,
+  fullSkills: ReadonlyArray<AgentSkill>,
+) =>
+  updates.flatMap((update) =>
+    update.kind === "skill" &&
+    isAgentSkillStub(update.skill) &&
+    loadedBody(update.skill, fullSkills) === undefined
+      ? [update.skill]
+      : [],
+  );
+
 // Seeded with a fixed id at revision 1; any save bumps the revision.
 const isUneditedSeededSkill = (skill: AgentSkill) =>
   skill.skillId.startsWith("t3-default-") && skill.revision === 1;
+
+// The repo formatter rewrites template markdown (blank lines, table padding, `*x*` to `_x_`).
+const meaningfulLines = (text: string) =>
+  text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, "").replaceAll("_", "*").replace(/-{3,}/g, "---"))
+    .filter(Boolean);
+
+/** Whether `copy` has every line of `template`, ignoring formatting the repo formatter changes. */
+const includesLines = (copy: string, template: string) => {
+  const lines = new Set(meaningfulLines(copy));
+  return meaningfulLines(template).every((line) => lines.has(line));
+};
+
+const skillIncludesTemplate = (skill: AgentSkill, template: AgentPresetSkill) => {
+  if (!includesLines(skill.content, template.content)) return false;
+  const files = new Map((skill.resources ?? []).map((file) => [file.path, file.contentBase64]));
+  return template.resources.every((file) => {
+    const copy = files.get(file.path);
+    if (copy === undefined) return false;
+    if (copy === file.contentBase64) return true;
+    const [copyText, templateText] = [decodeText(copy), decodeText(file.contentBase64)];
+    return copyText !== null && templateText !== null && includesLines(copyText, templateText);
+  });
+};
+
+const profileIncludesTemplate = (
+  profile: McpGatewayProfile,
+  skills: ReadonlyArray<AgentSkill>,
+  template: AgentPreset,
+) => {
+  const names = new Set(skillNames(profile, skills).map(nameKey));
+  return (
+    includesLines(profile.systemPrompt ?? "", template.systemPrompt) &&
+    template.skills.every((skill) => names.has(nameKey(skill.name)))
+  );
+};
 
 /**
  * Whether a copy is behind its template, and whether its user edited it. Only the template's date
  * in the repo counts: a copy is behind once the template changed after the date the copy last
  * took, however recently its user edited it. A copy from before records took the shipping date.
+ * A copy that already holds every line of the template is current, however it got them.
  */
 function templateState(
   record: AgentTemplateRecord | undefined,
   template: AgentTemplate,
   contentDigest: () => string,
+  includesTemplate: () => boolean,
   unedited = false,
 ): { readonly modified: boolean } | null {
   const templateTime = Date.parse(template.updatedAt);
   const syncedTime = Date.parse(record?.syncedAt ?? AGENT_TEMPLATES_SHIPPED_AT);
   if (templateTime < syncedTime) return null;
   const digest = contentDigest();
-  if (record?.mergingFrom !== undefined && record.mergingFrom === digest) return { modified: true };
-  if (templateTime === syncedTime || digest === template.digest) return null;
+  const merging = record?.mergingFrom !== undefined && record.mergingFrom === digest;
+  if (!merging && (templateTime === syncedTime || digest === template.digest)) return null;
+  if (includesTemplate()) return null;
+  if (merging) return { modified: true };
   return { modified: record ? digest !== record.digest : !unedited };
 }
 
-/** `presets` are the built-ins, marked by `withAgentTemplates`. */
+/**
+ * `presets` are the built-ins, marked by `withAgentTemplates`. `fullSkills` are loaded bodies of
+ * stubs in the library; a stub without one cannot be checked for the template's lines.
+ */
 export function agentTemplateUpdates(
   library: AgentLibrary,
   presets: ReadonlyArray<AgentPreset>,
+  fullSkills: ReadonlyArray<AgentSkill> = [],
 ): ReadonlyArray<AgentTemplateUpdate> {
   const skillTemplates = new Map(
     presets
@@ -86,8 +153,11 @@ export function agentTemplateUpdates(
         : nameKey(item.name) === nameKey(profile.name),
     );
     if (!preset?.template) return [];
-    const state = templateState(profile.template, preset.template, () =>
-      profileTemplateDigest(profile, library.agentSkills),
+    const state = templateState(
+      profile.template,
+      preset.template,
+      () => profileTemplateDigest(profile, library.agentSkills),
+      () => profileIncludesTemplate(profile, library.agentSkills, preset),
     );
     return state
       ? [{ kind: "agent", ...state, profile, template: { ...preset, template: preset.template } }]
@@ -100,6 +170,10 @@ export function agentTemplateUpdates(
       skill.template,
       template.template,
       () => agentSkillDigestOf(skill),
+      () => {
+        const full = isAgentSkillStub(skill) ? loadedBody(skill, fullSkills) : skill;
+        return full !== undefined && skillIncludesTemplate(full, template);
+      },
       isUneditedSeededSkill(skill),
     );
     return state
@@ -151,22 +225,12 @@ export function applyAgentTemplateUpdate(
   };
 }
 
-/**
- * Points an edited copy at the current template once a chat to merge it has started. The copy's
- * digest is kept too, so the update stays listed until that chat saves a changed copy.
- */
-export function markAgentTemplateMerged(
+function withTemplateRecord(
   library: AgentLibrary,
   update: AgentTemplateUpdate,
+  template: AgentTemplateRecord,
   now: string,
 ): AgentLibrary {
-  const template = {
-    ...agentTemplateRecord(update.template.template),
-    mergingFrom:
-      update.kind === "agent"
-        ? profileTemplateDigest(update.profile, library.agentSkills)
-        : agentSkillDigestOf(update.skill),
-  };
   return update.kind === "agent"
     ? {
         agentSkills: library.agentSkills,
@@ -183,6 +247,35 @@ export function markAgentTemplateMerged(
         ),
       };
 }
+
+/** Keeps a copy as it is and records the current template as taken, so it stops being listed. */
+export const keepAgentTemplateCopy = (
+  library: AgentLibrary,
+  update: AgentTemplateUpdate,
+  now: string,
+) => withTemplateRecord(library, update, agentTemplateRecord(update.template.template), now);
+
+/**
+ * Points an edited copy at the current template once a chat to merge it has started. The copy's
+ * digest is kept too, so the update stays listed until that chat saves a changed copy.
+ */
+export const markAgentTemplateMerged = (
+  library: AgentLibrary,
+  update: AgentTemplateUpdate,
+  now: string,
+) =>
+  withTemplateRecord(
+    library,
+    update,
+    {
+      ...agentTemplateRecord(update.template.template),
+      mergingFrom:
+        update.kind === "agent"
+          ? profileTemplateDigest(update.profile, library.agentSkills)
+          : agentSkillDigestOf(update.skill),
+    },
+    now,
+  );
 
 const decodeText = (contentBase64: string) => {
   try {
